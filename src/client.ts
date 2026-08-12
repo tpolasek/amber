@@ -3,14 +3,15 @@ interface Message { id: string; role: "user" | "assistant"; content: string; cre
 interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[] }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface Config { provider: string; model: string; mode: "live" }
-interface CommandDefinition { name: "/context" | "/clear" | "/fork"; description: string }
+interface CommandDefinition { name: "/context" | "/clear" | "/fork" | "/name"; description: string }
 interface MarkdownRenderer { render(source: string): string }
 declare const markdownit: (options: { html: boolean; linkify: boolean; breaks: boolean; typographer: boolean }) => MarkdownRenderer;
 
 const commands: CommandDefinition[] = [
   { name: "/context", description: "Show token usage for the current model context" },
-  { name: "/clear", description: "Clear context and create a numbered session revision" },
+  { name: "/clear", description: "Erase this session's conversation and model context" },
   { name: "/fork", description: "Fork this session with its complete history" },
+  { name: "/name", description: "Generate a session name, or pass a title" },
 ];
 const markdown = markdownit({ html: false, linkify: true, breaks: false, typographer: false });
 const SESSION_ROUTE = /^\/s\/([a-z0-9.-]+)$/;
@@ -189,8 +190,9 @@ async function sendMessage(): Promise<void> {
   const content = elements.prompt.value.trim();
   if (!session || !content || state.streaming) return;
 
-  if (commands.some((command) => command.name === content.toLowerCase())) {
-    return runCommand(content.toLowerCase() as CommandDefinition["name"]);
+  const commandName = content.split(/\s+/, 1)[0]?.toLowerCase();
+  if (commands.some((command) => command.name === commandName)) {
+    return runCommand(content);
   }
 
   elements.prompt.value = "";
@@ -247,7 +249,7 @@ async function sendMessage(): Promise<void> {
   }
 }
 
-async function runCommand(command: CommandDefinition["name"]): Promise<void> {
+async function runCommand(command: string): Promise<void> {
   const session = state.session;
   if (!session || state.streaming) return;
   elements.prompt.value = "";
@@ -257,17 +259,18 @@ async function runCommand(command: CommandDefinition["name"]): Promise<void> {
   setBusy(true);
   scrollToBottom(false);
   try {
-    const result = await api<{ command: "context" | "clear" | "fork"; session: Session; previousSessionId?: string }>(
+    const result = await api<{ command: "context" | "clear" | "fork" | "name"; session: Session; previousSessionId?: string }>(
       `/api/sessions/${session.id}/commands`,
       { method: "POST", body: JSON.stringify({ command }) },
     );
     state.session = result.session;
     if (result.command === "clear") {
-      history.pushState({}, "", `/s/${result.session.id}`);
-      notify(`Context cleared · ${result.session.id}`);
+      notify("Session cleared");
     } else if (result.command === "fork") {
       history.pushState({}, "", `/s/${result.session.id}`);
       notify(`Session forked · ${result.session.id}`);
+    } else if (result.command === "name") {
+      notify(`Session named · ${result.session.title}`);
     }
     renderSession();
     scrollToBottom(false);
@@ -309,20 +312,52 @@ function renderHeader(): void {
 function renderSessionList(): void {
   elements.sessionList.replaceChildren();
   for (const summary of summaries) {
-    const button = document.createElement("button");
-    button.className = "session-item";
-    button.classList.toggle("active", summary.id === state.session?.id);
-    button.innerHTML = `<span class="session-item-title"></span><span class="session-item-meta"><span></span><span></span></span>`;
-    requiredWithin(button, ".session-item-title").textContent = summary.title;
-    const meta = button.querySelectorAll(".session-item-meta span");
+    const item = document.createElement("div");
+    item.className = "session-item";
+    item.classList.toggle("active", summary.id === state.session?.id);
+    const openButton = document.createElement("button");
+    openButton.type = "button";
+    openButton.className = "session-item-open";
+    openButton.innerHTML = `<span class="session-item-title"></span><span class="session-item-meta"><span></span><span></span></span>`;
+    requiredWithin(openButton, ".session-item-title").textContent = summary.title;
+    const meta = openButton.querySelectorAll(".session-item-meta span");
     if (meta[0]) meta[0].textContent = `${summary.messageCount} msg`;
     if (meta[1]) meta[1].textContent = relativeTime(summary.updatedAt);
-    button.addEventListener("click", () => {
+    openButton.addEventListener("click", () => {
       if (summary.id === state.session?.id) return document.body.classList.remove("sidebar-open");
       history.pushState({}, "", `/s/${summary.id}`);
       void loadSession(summary.id);
     });
-    elements.sessionList.append(button);
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "session-delete";
+    deleteButton.textContent = "DEL";
+    deleteButton.setAttribute("aria-label", `Delete session ${summary.title}`);
+    deleteButton.addEventListener("click", () => void deleteSession(summary));
+    item.append(openButton, deleteButton);
+    elements.sessionList.append(item);
+  }
+}
+
+async function deleteSession(summary: Summary): Promise<void> {
+  if (state.streaming) return notify("Wait for the current response to finish");
+  if (!window.confirm(`Delete session “${summary.title}”? This cannot be undone.`)) return;
+  const deletingCurrentSession = summary.id === state.session?.id;
+  try {
+    await api<{ deletedSessionId: string }>(`/api/sessions/${summary.id}`, { method: "DELETE" });
+    await loadSessionList();
+    if (deletingCurrentSession) {
+      const nextSession = summaries[0];
+      if (nextSession) {
+        history.replaceState({}, "", `/s/${nextSession.id}`);
+        await loadSession(nextSession.id);
+      } else {
+        await createSession(true);
+      }
+    }
+    notify(`Session deleted · ${summary.title}`);
+  } catch (error) {
+    notify(messageFrom(error));
   }
 }
 
@@ -475,6 +510,7 @@ function selectCommand(command: CommandDefinition, execute: boolean): void {
   hideCommandMenu();
   resizePrompt();
   if (execute) elements.composer.requestSubmit();
+  else elements.prompt.focus();
 }
 
 function hideCommandMenu(): void {

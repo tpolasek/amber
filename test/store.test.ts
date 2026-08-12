@@ -4,6 +4,7 @@ import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionStore } from "../src/store.js";
+import { BASIC_ENGLISH_2000 } from "../src/basic-english-2000.js";
 
 test("creates, persists, and lists sessions newest first", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-store-"));
@@ -12,6 +13,8 @@ test("creates, persists, and lists sessions newest first", async () => {
 
   const first = await store.create();
   assert.match(first.id, /^[a-z]+\.[a-z]+\.[a-z]+$/);
+  const sourceWords = new Set(BASIC_ENGLISH_2000.map((word) => word.toLowerCase().replace(/[^a-z]/g, "")));
+  assert.ok(first.id.split(".").every((word) => sourceWords.has(word)));
   first.title = "First session";
   first.messages.push({
     id: "message-1",
@@ -38,22 +41,35 @@ test("creates, persists, and lists sessions newest first", async () => {
   });
 });
 
-test("creates durable numbered revisions without changing the original", async () => {
+test("clears a session in place", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-store-"));
   const store = new SessionStore(directory);
   await store.initialize();
-  const original = await store.create();
-  original.messages.push({
+  const session = await store.create();
+  session.messages.push({
     id: "message-1", role: "user", content: "Keep me", createdAt: new Date().toISOString(), status: "complete",
   });
-  await store.save(original);
+  await store.save(session);
 
-  const second = await store.createRevision(original);
-  const third = await store.createRevision(second);
-  assert.equal(second.id, `${original.id}.2`);
-  assert.equal(third.id, `${original.id}.3`);
-  assert.deepEqual(second.messages, []);
-  assert.equal((await store.get(original.id))?.messages[0]?.content, "Keep me");
+  const cleared = await store.clear(session);
+  assert.equal(cleared.id, session.id);
+  assert.deepEqual(cleared.messages, []);
+  assert.deepEqual((await store.get(session.id))?.messages, []);
+});
+
+test("renames and deletes a session", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const session = await store.create();
+
+  const renamed = await store.rename(session, "Launch checklist");
+  assert.equal(renamed.title, "Launch checklist");
+  assert.equal((await store.get(session.id))?.title, "Launch checklist");
+  assert.equal(await store.remove(session.id), true);
+  assert.equal(await store.get(session.id), null);
+  assert.equal(await store.remove(session.id), false);
+  assert.equal(await store.remove("../../secret"), false);
 });
 
 test("forks a session with independent history and a provenance banner", async () => {

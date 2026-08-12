@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { SessionStore } from "./store.js";
 import { createProvider } from "./provider.js";
 import { buildProviderHistory, isModelMessage } from "./history.js";
+import { generateSessionTitle } from "./session-title.js";
 import type { Message, TokenUsage } from "./types.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
@@ -56,6 +57,13 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   if (method === "GET" && sessionMatch?.[1]) {
     const session = await store.get(sessionMatch[1]);
     return session ? json(response, 200, { session }) : json(response, 404, { error: "Session not found" });
+  }
+  if (method === "DELETE" && sessionMatch?.[1]) {
+    if (activeSessions.has(sessionMatch[1])) return json(response, 409, { error: "Wait for the current response to finish" });
+    const removed = await store.remove(sessionMatch[1]);
+    return removed
+      ? json(response, 200, { deletedSessionId: sessionMatch[1] })
+      : json(response, 404, { error: "Session not found" });
   }
 
   const messageMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/messages$`));
@@ -144,11 +152,35 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
   const session = await store.get(sessionId);
   if (!session) return json(response, 404, { error: "Session not found" });
   const body = await readJson(request);
-  const command = typeof body.command === "string" ? body.command.trim().toLowerCase() : "";
+  const rawCommand = typeof body.command === "string" ? body.command.trim() : "";
+  const firstWhitespace = rawCommand.search(/\s/);
+  const command = (firstWhitespace === -1 ? rawCommand : rawCommand.slice(0, firstWhitespace)).toLowerCase();
+  const argument = firstWhitespace === -1 ? "" : rawCommand.slice(firstWhitespace).trim();
+
+  if (command === "/name") {
+    if (argument) {
+      const title = argument.replace(/\s+/g, " ").trim();
+      if (title.length > 80) return json(response, 400, { error: "Session names must be 80 characters or fewer" });
+      return json(response, 200, { command: "name", session: await store.rename(session, title) });
+    }
+
+    const controller = new AbortController();
+    request.once("aborted", () => controller.abort());
+    activeSessions.add(sessionId);
+    try {
+      const title = await generateSessionTitle(provider, session.messages, controller.signal);
+      return json(response, 200, { command: "name", session: await store.rename(session, title) });
+    } catch (error) {
+      return json(response, 502, { error: errorMessage(error) });
+    } finally {
+      activeSessions.delete(sessionId);
+    }
+  }
+
+  if (argument) return json(response, 400, { error: `${command} does not accept arguments` });
 
   if (command === "/clear") {
-    const revision = await store.createRevision(session);
-    return json(response, 201, { command: "clear", session: revision, previousSessionId: session.id });
+    return json(response, 200, { command: "clear", session: await store.clear(session) });
   }
   if (command === "/fork") {
     const now = new Date().toISOString();
