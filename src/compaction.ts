@@ -25,7 +25,12 @@ export function estimateHistoryTokens(history: ProviderMessage[]): number {
   return history.reduce((total, message) => {
     const characters = typeof message.content === "string"
       ? message.content.length
-      : message.content.reduce((sum, block) => sum + (block.type === "thinking" ? block.thinking.length : block.text.length), 0);
+      : message.content.reduce((sum, block) => {
+          if (block.type === "thinking") return sum + block.thinking.length;
+          if (block.type === "text") return sum + block.text.length;
+          if (block.type === "tool_result") return sum + block.content.length;
+          return sum + JSON.stringify(block.input).length;
+        }, 0);
     return total + Math.ceil(characters / 4) + 4;
   }, 0);
 }

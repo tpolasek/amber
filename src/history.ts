@@ -6,6 +6,10 @@ export function isModelMessage(message: Message): boolean {
   return message.kind === undefined || message.kind === "chat";
 }
 
+function isProviderMessage(message: Message): boolean {
+  return isModelMessage(message) || message.kind === "tool-result";
+}
+
 export function buildProviderHistory(
   messages: Message[],
   excludedMessageId?: string,
@@ -15,17 +19,41 @@ export function buildProviderHistory(
     ? messages.findIndex((message) => message.id === compaction.throughMessageId)
     : -1;
   const activeMessages = boundaryIndex >= 0 ? messages.slice(boundaryIndex + 1) : messages;
-  const history = activeMessages
-    .filter((message) => message.id !== excludedMessageId && message.status === "complete" && isModelMessage(message))
-    .map((message): ProviderMessage => ({
+  const history: ProviderMessage[] = [];
+  for (const message of activeMessages
+    .filter((candidate) => candidate.id !== excludedMessageId && candidate.status === "complete" && isProviderMessage(candidate))) {
+    const providerMessage: ProviderMessage = {
       role: message.role,
-      content: message.role === "assistant" && message.thinking && message.thinkingSignature
-        ? [
-            { type: "thinking", thinking: message.thinking, signature: message.thinkingSignature },
-            ...(message.content ? [{ type: "text" as const, text: message.content }] : []),
-          ]
-        : message.content,
-    }));
+      content: message.kind === "tool-result" && message.toolUseId
+        ? [{
+            type: "tool_result",
+            tool_use_id: message.toolUseId,
+            content: message.content,
+            ...(message.toolError ? { is_error: true } : {}),
+          }]
+        : message.role === "assistant" && (message.thinking || message.toolCalls?.length)
+          ? [
+              ...(message.thinking && message.thinkingSignature
+                ? [{ type: "thinking" as const, thinking: message.thinking, signature: message.thinkingSignature }]
+                : []),
+              ...(message.content ? [{ type: "text" as const, text: message.content }] : []),
+              ...(message.toolCalls ?? []).map((call) => ({
+                type: "tool_use" as const,
+                id: call.id,
+                name: call.name,
+                input: call.input,
+              })),
+            ]
+          : message.content,
+    };
+    const previous = history.at(-1);
+    if (message.kind === "tool-result" && previous?.role === "user"
+      && Array.isArray(previous.content) && Array.isArray(providerMessage.content)) {
+      previous.content.push(...providerMessage.content);
+    } else {
+      history.push(providerMessage);
+    }
+  }
 
   if (compaction && boundaryIndex >= 0) {
     history.unshift({ role: "user", content: `${SUMMARY_PREFIX}${compaction.summary}` });

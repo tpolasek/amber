@@ -76,3 +76,46 @@ test("provider history returns signed thinking blocks unchanged", () => {
     ],
   }]);
 });
+
+test("provider history preserves tool calls and groups their results", () => {
+  const now = new Date().toISOString();
+  const messages: Message[] = [
+    {
+      id: "assistant",
+      role: "assistant",
+      content: "I'll inspect both.",
+      createdAt: now,
+      status: "complete",
+      toolCalls: [
+        { id: "tool-1", name: "Shell", input: { command: "pwd" }, status: "complete", output: "/tmp" },
+        { id: "tool-2", name: "Shell", input: { command: "false" }, status: "error", output: "" },
+      ],
+    },
+    {
+      id: "result-1", role: "user", content: "/tmp", createdAt: now, status: "complete",
+      kind: "tool-result", toolUseId: "tool-1",
+    },
+    {
+      id: "result-2", role: "user", content: "Exit code: 1", createdAt: now, status: "complete",
+      kind: "tool-result", toolUseId: "tool-2", toolError: true,
+    },
+  ];
+
+  assert.deepEqual(buildProviderHistory(messages), [
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "I'll inspect both." },
+        { type: "tool_use", id: "tool-1", name: "Shell", input: { command: "pwd" } },
+        { type: "tool_use", id: "tool-2", name: "Shell", input: { command: "false" } },
+      ],
+    },
+    {
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "tool-1", content: "/tmp" },
+        { type: "tool_result", tool_use_id: "tool-2", content: "Exit code: 1", is_error: true },
+      ],
+    },
+  ]);
+});

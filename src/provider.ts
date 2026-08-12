@@ -1,4 +1,4 @@
-import type { LlmProvider, ProviderMessage, StreamEvent, TokenUsage } from "./types.js";
+import type { LlmProvider, ProviderMessage, StreamEvent, StreamOptions, TokenUsage } from "./types.js";
 
 interface AnthropicProviderOptions {
   apiKey?: string;
@@ -10,7 +10,9 @@ interface AnthropicProviderOptions {
 
 interface AnthropicEvent {
   type?: string;
+  index?: number;
   delta?: { type?: string; text?: string; thinking?: string; signature?: string; stop_reason?: string };
+  content_block?: { type?: string; id?: string; name?: string };
   message?: { usage?: { input_tokens?: number; output_tokens?: number } };
   usage?: { input_tokens?: number; output_tokens?: number };
   error?: { message?: string };
@@ -33,7 +35,7 @@ export class AnthropicProvider implements LlmProvider {
     this.#thinkingBudgetTokens = options.thinkingBudgetTokens;
   }
 
-  async *stream(messages: ProviderMessage[], signal: AbortSignal): AsyncGenerator<StreamEvent> {
+  async *stream(messages: ProviderMessage[], signal: AbortSignal, options?: StreamOptions): AsyncGenerator<StreamEvent> {
     const response = await fetch(`${this.#baseUrl}/v1/messages`, {
       method: "POST",
       headers: {
@@ -46,10 +48,12 @@ export class AnthropicProvider implements LlmProvider {
         model: this.model,
         max_tokens: Math.max(4096, (this.#thinkingBudgetTokens ?? 0) + 8192),
         stream: true,
+        ...(options?.tools?.length ? { tools: options.tools } : {}),
         ...(this.#thinkingBudgetTokens
           ? { thinking: { type: "enabled", budget_tokens: this.#thinkingBudgetTokens } }
           : {}),
-        system: "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.",
+        system: options?.system
+          ?? "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.",
         messages,
       }),
       signal,
@@ -87,6 +91,20 @@ export class AnthropicProvider implements LlmProvider {
           }
           if (event.type === "content_block_delta" && event.delta?.type === "signature_delta" && event.delta.signature) {
             yield { type: "thinking_signature_delta", signature: event.delta.signature };
+          }
+          if (event.type === "content_block_start" && event.content_block?.type === "tool_use"
+            && event.index !== undefined && event.content_block.id && event.content_block.name) {
+            yield {
+              type: "tool_use_start",
+              index: event.index,
+              id: event.content_block.id,
+              name: event.content_block.name,
+            };
+          }
+          if (event.type === "content_block_delta" && event.delta?.type === "input_json_delta"
+            && event.index !== undefined) {
+            const partialJson = (event.delta as { partial_json?: string }).partial_json;
+            if (partialJson) yield { type: "tool_input_delta", index: event.index, partialJson };
           }
           if (event.type === "message_start" && event.message?.usage) {
             yield { type: "usage", usage: mapUsage(event.message.usage) };

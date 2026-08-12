@@ -1,0 +1,94 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { parseShellInput, ShellExecutor } from "../src/shell-tool.js";
+
+test("parses Shell input and applies its default timeout", () => {
+  assert.deepEqual(parseShellInput({ command: "  pwd  " }), { command: "pwd", timeoutMs: 120_000 });
+  assert.throws(() => parseShellInput({ command: "pwd", timeout_ms: 50 }), /timeout_ms/);
+  assert.throws(() => parseShellInput({ command: "" }), /non-empty command/);
+});
+
+test("runs Shell in an allowed directory and captures output", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-shell-"));
+  const executor = new ShellExecutor();
+  let runningDirectory = "";
+  let streamed = "";
+  const result = await executor.run(
+    { command: "printf amber", timeoutMs: 2_000 },
+    [directory],
+    new AbortController().signal,
+    {
+      onRunning: (cwd) => { runningDirectory = cwd; },
+      onOutput: (chunk) => { streamed += chunk; },
+    },
+  );
+  assert.equal(runningDirectory, directory);
+  assert.equal(streamed, "amber");
+  assert.equal(result.output, "amber");
+  assert.equal(result.status, "complete");
+  assert.equal(result.exitCode, 0);
+});
+
+test("times Shell out and serializes concurrent calls within one executor", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-shell-"));
+  const executor = new ShellExecutor();
+  const starts: string[] = [];
+  const first = executor.run(
+    { command: "sleep 0.15", timeoutMs: 2_000 }, [directory], new AbortController().signal,
+    { onRunning: () => starts.push("first"), onOutput: () => undefined },
+  );
+  const second = executor.run(
+    { command: "printf second", timeoutMs: 2_000 }, [directory], new AbortController().signal,
+    { onRunning: () => starts.push("second"), onOutput: () => undefined },
+  );
+  await Promise.all([first, second]);
+  assert.deepEqual(starts, ["first", "second"]);
+
+  const timedOut = await executor.run(
+    { command: "sleep 2", timeoutMs: 100 }, [directory], new AbortController().signal,
+    { onRunning: () => undefined, onOutput: () => undefined },
+  );
+  assert.equal(timedOut.status, "timed_out");
+  assert.match(timedOut.resultText, /Timed out after 100 ms/);
+});
+
+test("separate session executors run concurrently", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-shell-"));
+  const firstExecutor = new ShellExecutor();
+  const secondExecutor = new ShellExecutor();
+  let firstCompleted = false;
+  let secondStartedBeforeFirstCompleted = false;
+  const first = firstExecutor.run(
+    { command: "sleep 0.2", timeoutMs: 2_000 }, [directory], new AbortController().signal,
+    { onRunning: () => undefined, onOutput: () => undefined },
+  ).then((result) => {
+    firstCompleted = true;
+    return result;
+  });
+  const second = secondExecutor.run(
+    { command: "printf parallel", timeoutMs: 2_000 }, [directory], new AbortController().signal,
+    {
+      onRunning: () => { secondStartedBeforeFirstCompleted = !firstCompleted; },
+      onOutput: () => undefined,
+    },
+  );
+  await Promise.all([first, second]);
+  assert.equal(secondStartedBeforeFirstCompleted, true);
+});
+
+test("rejects a working directory outside the allowed roots", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-shell-"));
+  const executor = new ShellExecutor();
+  await assert.rejects(
+    executor.run(
+      { command: "pwd", workingDirectory: tmpdir(), timeoutMs: 2_000 },
+      [directory],
+      new AbortController().signal,
+      { onRunning: () => undefined, onOutput: () => undefined },
+    ),
+    /outside the project and added directories/,
+  );
+});

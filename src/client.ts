@@ -1,14 +1,17 @@
 interface TokenUsage { input: number; output: number }
-interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; streamingThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "compact-banner"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage }
+type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
+interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number }
+interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; streamingThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "compact-banner" | "tool-result"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean }
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
-interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction }
+interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction; directories?: string[] }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface Config { provider: string; model: string; mode: "live" }
-interface CommandDefinition { name: "/context" | "/clear" | "/compact" | "/fork" | "/name"; description: string }
+interface CommandDefinition { name: "/add-dir" | "/context" | "/clear" | "/compact" | "/fork" | "/name"; description: string }
 interface MarkdownRenderer { render(source: string): string }
 declare const markdownit: (options: { html: boolean; linkify: boolean; breaks: boolean; typographer: boolean }) => MarkdownRenderer;
 
 const commands: CommandDefinition[] = [
+  { name: "/add-dir", description: "Add a working directory for this session" },
   { name: "/context", description: "Show token usage for the current model context" },
   { name: "/clear", description: "Erase this session's conversation and model context" },
   { name: "/compact", description: "Summarize model context while keeping the full transcript" },
@@ -205,6 +208,7 @@ async function sendMessage(): Promise<void> {
   scrollToBottom(false);
   state.controller = new AbortController();
   let assistantElement: HTMLElement | null = null;
+  let assistantMessage: Message | null = null;
   try {
     const response = await fetch(`/api/sessions/${session.id}/messages`, {
       method: "POST",
@@ -219,28 +223,43 @@ async function sendMessage(): Promise<void> {
       if (event === "start") {
         const payload = data as { userMessage: Message; assistantMessage: Message };
         session.messages.push(payload.userMessage, payload.assistantMessage);
+        assistantMessage = payload.assistantMessage;
         assistantElement = appendMessage(payload.assistantMessage);
         elements.emptyState.hidden = true;
         renderHeader();
         appendMessage(payload.userMessage, assistantElement);
       } else if (event === "delta") {
-        const message = session.messages.at(-1);
+        const message = assistantMessage;
         if (message?.role === "assistant") {
           message.streamingThinking = false;
           message.content += (data as { text: string }).text;
           updateMessage(assistantElement, message);
         }
       } else if (event === "thinking_delta") {
-        const message = session.messages.at(-1);
+        const message = assistantMessage;
         if (message?.role === "assistant") {
           message.streamingThinking = true;
           message.thinking = (message.thinking ?? "") + (data as { thinking: string }).thinking;
           updateMessage(assistantElement, message);
         }
+      } else if (event === "assistant_complete") {
+        const message = (data as { message: Message }).message;
+        assistantMessage = message;
+        const index = session.messages.findIndex((candidate) => candidate.id === message.id);
+        if (index >= 0) session.messages[index] = message;
+        updateMessage(assistantElement, message);
+      } else if (event === "tool_update") {
+        applyToolUpdate(session, data as { messageId: string; toolCall: ToolCall });
+      } else if (event === "tool_output") {
+        applyToolOutput(session, data as { messageId: string; toolUseId: string; chunk: string });
+      } else if (event === "continuation") {
+        assistantMessage = (data as { assistantMessage: Message }).assistantMessage;
+        session.messages.push(assistantMessage);
+        assistantElement = appendMessage(assistantMessage);
       } else if (event === "done") {
         const payload = data as { message: Message; session: Session };
         state.session = payload.session;
-        updateMessage(assistantElement, payload.message);
+        renderSession();
       } else if (event === "error") {
         const payload = data as { error: string; message?: Message };
         if (payload.message) updateMessage(assistantElement, payload.message);
@@ -259,6 +278,29 @@ async function sendMessage(): Promise<void> {
   }
 }
 
+function applyToolUpdate(session: Session, payload: { messageId: string; toolCall: ToolCall }): void {
+  const message = session.messages.find((candidate) => candidate.id === payload.messageId);
+  if (!message) return;
+  const calls = (message.toolCalls ??= []);
+  const index = calls.findIndex((call) => call.id === payload.toolCall.id);
+  if (index >= 0) calls[index] = payload.toolCall;
+  else calls.push(payload.toolCall);
+  updateMessage(messageElement(message.id), message);
+}
+
+function applyToolOutput(session: Session, payload: { messageId: string; toolUseId: string; chunk: string }): void {
+  const message = session.messages.find((candidate) => candidate.id === payload.messageId);
+  const call = message?.toolCalls?.find((candidate) => candidate.id === payload.toolUseId);
+  if (!message || !call) return;
+  call.output += payload.chunk;
+  updateMessage(messageElement(message.id), message);
+}
+
+function messageElement(messageId: string): HTMLElement | null {
+  return [...elements.transcript.querySelectorAll<HTMLElement>(".message")]
+    .find((element) => element.dataset.messageId === messageId) ?? null;
+}
+
 async function runCommand(command: string): Promise<void> {
   const session = state.session;
   if (!session || state.streaming) return;
@@ -270,12 +312,14 @@ async function runCommand(command: string): Promise<void> {
   setBusy(true);
   scrollToBottom(false);
   try {
-    const result = await api<{ command: "context" | "clear" | "compact" | "fork" | "name"; session: Session; previousSessionId?: string }>(
+    const result = await api<{ command: "add-dir" | "context" | "clear" | "compact" | "fork" | "name"; session: Session; directory?: string; previousSessionId?: string }>(
       `/api/sessions/${session.id}/commands`,
       { method: "POST", body: JSON.stringify({ command }) },
     );
     state.session = result.session;
-    if (result.command === "clear") {
+    if (result.command === "add-dir") {
+      notify(`Directory added · ${result.directory}`);
+    } else if (result.command === "clear") {
       notify("Session cleared");
     } else if (result.command === "compact") {
       notify("Context compacted · full history retained");
@@ -369,7 +413,9 @@ function renderSession(): void {
   const session = state.session;
   if (!session) return;
   elements.emptyState.hidden = session.messages.length > 0;
-  for (const message of session.messages) appendMessage(message);
+  for (const message of session.messages) {
+    if (message.kind !== "tool-result") appendMessage(message);
+  }
   resetPromptHistory();
   closeHistorySearch(false);
   renderHeader();
@@ -452,6 +498,7 @@ function appendMessage(message: Message, before: HTMLElement | null = null): HTM
       <header><span class="role-name"></span><span class="message-time"></span><span class="message-usage"></span></header>
       <details class="message-thinking"><summary><span>Thinking</span><span class="thinking-status"></span></summary><div class="thinking-content"></div></details>
       <div class="message-content"></div>
+      <div class="message-tools"></div>
     </div>`;
   if (before) elements.transcript.insertBefore(article, before);
   else elements.transcript.append(article);
@@ -472,6 +519,7 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
   const thinking = requiredWithin(element, ".message-thinking") as HTMLDetailsElement;
   const thinkingContent = requiredWithin(thinking, ".thinking-content");
   const thinkingStatus = requiredWithin(thinking, ".thinking-status");
+  renderToolCalls(requiredWithin(element, ".message-tools"), message.toolCalls ?? []);
   const hasThinking = Boolean(message.thinking);
   thinking.hidden = !hasThinking;
   if (hasThinking) {
@@ -512,6 +560,79 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
     link.target = "_blank";
     link.rel = "noopener noreferrer";
   });
+}
+
+function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
+  const openOutputs = new Set(
+    [...container.querySelectorAll<HTMLDetailsElement>(".tool-output-details[open]")]
+      .map((details) => details.dataset.toolUseId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  container.replaceChildren();
+  container.hidden = calls.length === 0;
+  for (const call of calls) {
+    const card = document.createElement("section");
+    card.className = `tool-call ${call.status}`;
+    card.dataset.toolUseId = call.id;
+
+    const header = document.createElement("div");
+    header.className = "tool-call-header";
+    const name = document.createElement("strong");
+    name.textContent = call.name;
+    const status = document.createElement("span");
+    status.className = "tool-call-status";
+    status.textContent = toolStatusLabel(call);
+    header.append(name, status);
+
+    const command = document.createElement("code");
+    command.className = "tool-command";
+    command.textContent = typeof call.input.command === "string" ? call.input.command : "Preparing tool input…";
+    card.append(header, command);
+
+    const metadata = toolMetadata(call);
+    if (metadata) {
+      const meta = document.createElement("div");
+      meta.className = "tool-call-meta";
+      meta.textContent = metadata;
+      card.append(meta);
+    }
+    if (call.output) {
+      const details = document.createElement("details");
+      details.className = "tool-output-details";
+      details.dataset.toolUseId = call.id;
+      details.open = openOutputs.has(call.id);
+      const summary = document.createElement("summary");
+      const lineCount = call.output.split("\n").length;
+      summary.textContent = `Output · ${lineCount.toLocaleString()} ${lineCount === 1 ? "line" : "lines"}`;
+      const output = document.createElement("pre");
+      output.className = "tool-output";
+      output.textContent = call.output;
+      details.append(summary, output);
+      card.append(details);
+    }
+    container.append(card);
+  }
+}
+
+function toolStatusLabel(call: ToolCall): string {
+  if (call.status === "running") return "RUNNING…";
+  if (call.status === "timed_out") return "TIMED OUT";
+  if (call.status === "complete") return "COMPLETE";
+  if (call.status === "error") return "FAILED";
+  return "QUEUED";
+}
+
+function toolMetadata(call: ToolCall): string {
+  const values: string[] = [];
+  if (call.workingDirectory) values.push(call.workingDirectory);
+  if (call.timeoutMs !== undefined) values.push(`timeout ${formatDuration(call.timeoutMs)}`);
+  if (call.durationMs !== undefined) values.push(`ran ${formatDuration(call.durationMs)}`);
+  if (call.exitCode !== undefined && call.exitCode !== null) values.push(`exit ${call.exitCode}`);
+  return values.join(" · ");
+}
+
+function formatDuration(milliseconds: number): string {
+  return milliseconds < 1000 ? `${milliseconds}ms` : `${(milliseconds / 1000).toFixed(milliseconds < 10_000 ? 1 : 0)}s`;
 }
 
 async function refreshCurrentSession(): Promise<void> {
@@ -583,7 +704,7 @@ function resizePrompt(): void {
 
 function updateCommandMenu(): void {
   const value = elements.prompt.value.trim().toLowerCase();
-  if (!/^\/[a-z]*$/.test(value)) return hideCommandMenu();
+  if (!/^\/[a-z-]*$/.test(value)) return hideCommandMenu();
   matchingCommands = commands.filter((command) => command.name.startsWith(value));
   selectedCommand = 0;
   if (matchingCommands.length === 0) return hideCommandMenu();
@@ -612,10 +733,10 @@ function renderCommandMenu(): void {
 }
 
 function selectCommand(command: CommandDefinition, execute: boolean): void {
-  elements.prompt.value = command.name;
+  elements.prompt.value = command.name === "/add-dir" ? `${command.name} ` : command.name;
   hideCommandMenu();
   resizePrompt();
-  if (execute) elements.composer.requestSubmit();
+  if (execute && command.name !== "/add-dir") elements.composer.requestSubmit();
   else elements.prompt.focus();
 }
 
@@ -628,7 +749,7 @@ function hideCommandMenu(): void {
 function sessionPromptHistory(): string[] {
   if (!state.session) return [];
   return state.session.messages
-    .filter((message) => message.role === "user")
+    .filter((message) => message.role === "user" && message.kind !== "tool-result")
     .map((message) => message.content)
     .reverse();
 }

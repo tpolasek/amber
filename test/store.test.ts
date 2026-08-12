@@ -93,6 +93,7 @@ test("forks a session with independent history and a provenance banner", async (
     createdAt: new Date().toISOString(),
     coveredMessageCount: 1,
   };
+  original.directories = ["/tmp/example-workspace"];
   await store.save(original);
   const banner = {
     id: "banner-1",
@@ -109,6 +110,8 @@ test("forks a session with independent history and a provenance banner", async (
   assert.deepEqual(fork.messages, [original.messages[0], banner]);
   assert.deepEqual(fork.compaction, original.compaction);
   assert.notEqual(fork.compaction, original.compaction);
+  assert.deepEqual(fork.directories, original.directories);
+  assert.notEqual(fork.directories, original.directories);
   fork.messages[0]!.content = "Changed only in the fork";
   fork.compaction!.summary = "Changed only in the fork";
   assert.equal(original.messages[0]?.content, "Keep me");

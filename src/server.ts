@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -8,10 +9,12 @@ import { createProvider } from "./provider.js";
 import { buildProviderHistory, isModelMessage } from "./history.js";
 import { generateSessionTitle } from "./session-title.js";
 import { estimateHistoryTokens, formatCompactionBanner, generateCompactionSummary } from "./compaction.js";
-import type { Message, TokenUsage } from "./types.js";
+import { parseShellInput, SHELL_TOOL, ShellExecutor } from "./shell-tool.js";
+import type { Message, Session, TokenUsage, ToolCall } from "./types.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(sourceDirectory, "../..");
+const workspaceRoot = await realpath(projectRoot);
 const publicDirectory = join(projectRoot, "public");
 const clientScript = join(sourceDirectory, "client.js");
 const markdownScript = join(projectRoot, "node_modules", "markdown-it", "dist", "browser", "markdown-it.umd.min.js");
@@ -103,7 +106,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
 
   const now = new Date().toISOString();
   const userMessage: Message = { id: randomUUID(), role: "user", content, createdAt: now, status: "complete" };
-  const assistantMessage: Message = { id: randomUUID(), role: "assistant", content: "", createdAt: now, status: "streaming" };
+  let assistantMessage = createAssistantMessage(now);
   session.messages.push(userMessage, assistantMessage);
   await store.save(session);
 
@@ -115,6 +118,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   });
   sendEvent(response, "start", { userMessage, assistantMessage });
   activeSessions.add(sessionId);
+  const shellExecutor = new ShellExecutor();
   const controller = new AbortController();
   request.on("aborted", () => controller.abort());
   response.on("close", () => {
@@ -122,28 +126,128 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   });
 
   try {
-    const history = buildProviderHistory(session.messages, assistantMessage.id, session.compaction);
-    let usage: Partial<TokenUsage> = {};
-    for await (const event of provider.stream(history, controller.signal)) {
-      if (event.type === "delta") {
-        assistantMessage.content += event.text;
-        sendEvent(response, "delta", { text: event.text });
-      } else if (event.type === "thinking_delta") {
-        assistantMessage.thinking = (assistantMessage.thinking ?? "") + event.thinking;
-        sendEvent(response, "thinking_delta", { thinking: event.thinking });
-      } else if (event.type === "thinking_signature_delta") {
-        assistantMessage.thinkingSignature = (assistantMessage.thinkingSignature ?? "") + event.signature;
-      } else if (event.type === "usage") {
-        usage = { ...usage, ...event.usage };
+    const allowedDirectories = sessionDirectories(session);
+    for (let round = 0; round < 8; round += 1) {
+      const history = buildProviderHistory(session.messages, assistantMessage.id, session.compaction);
+      const toolDrafts = new Map<number, { call: ToolCall; inputJson: string }>();
+      let usage: Partial<TokenUsage> = {};
+      for await (const event of provider.stream(history, controller.signal, {
+        tools: [SHELL_TOOL],
+        system: agentSystemPrompt(allowedDirectories),
+      })) {
+        if (event.type === "delta") {
+          assistantMessage.content += event.text;
+          sendEvent(response, "delta", { text: event.text });
+        } else if (event.type === "thinking_delta") {
+          assistantMessage.thinking = (assistantMessage.thinking ?? "") + event.thinking;
+          sendEvent(response, "thinking_delta", { thinking: event.thinking });
+        } else if (event.type === "thinking_signature_delta") {
+          assistantMessage.thinkingSignature = (assistantMessage.thinkingSignature ?? "") + event.signature;
+        } else if (event.type === "tool_use_start") {
+          const call: ToolCall = {
+            id: event.id,
+            name: event.name,
+            input: {},
+            status: "queued",
+            output: "",
+          };
+          toolDrafts.set(event.index, { call, inputJson: "" });
+          (assistantMessage.toolCalls ??= []).push(call);
+          sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+        } else if (event.type === "tool_input_delta") {
+          const draft = toolDrafts.get(event.index);
+          if (draft) draft.inputJson += event.partialJson;
+        } else if (event.type === "usage") {
+          usage = { ...usage, ...event.usage };
+        }
       }
+
+      assistantMessage.status = "complete";
+      if (usage.input !== undefined && usage.output !== undefined) assistantMessage.usage = usage as TokenUsage;
+      for (const draft of toolDrafts.values()) {
+        try {
+          const parsed = JSON.parse(draft.inputJson || "{}") as unknown;
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Tool input must be an object");
+          draft.call.input = parsed as Record<string, unknown>;
+        } catch (error) {
+          draft.call.status = "error";
+          draft.call.output = `Invalid tool input: ${errorMessage(error)}`;
+        }
+      }
+      await store.save(session);
+      sendEvent(response, "assistant_complete", { message: assistantMessage });
+
+      if (toolDrafts.size === 0) {
+        sendEvent(response, "done", { message: assistantMessage, session });
+        return;
+      }
+
+      for (const { call } of toolDrafts.values()) {
+        let resultText = call.output;
+        let abortAfterResult: Error | undefined;
+        if (call.status !== "error") {
+          if (call.name !== SHELL_TOOL.name) {
+            call.status = "error";
+            call.output = `Unknown tool: ${call.name}`;
+          } else {
+            try {
+              const input = parseShellInput(call.input);
+              await store.save(session);
+              sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+              const result = await shellExecutor.run(input, allowedDirectories, controller.signal, {
+                onRunning: (workingDirectory) => {
+                  call.status = "running";
+                  call.startedAt = new Date().toISOString();
+                  call.workingDirectory = workingDirectory;
+                  call.timeoutMs = input.timeoutMs;
+                  sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+                },
+                onOutput: (chunk) => {
+                  call.output += chunk;
+                  sendEvent(response, "tool_output", { messageId: assistantMessage.id, toolUseId: call.id, chunk });
+                },
+              });
+              call.status = result.status;
+              call.output = result.output;
+              call.exitCode = result.exitCode;
+              call.durationMs = result.durationMs;
+              call.completedAt = new Date().toISOString();
+              resultText = result.resultText;
+            } catch (error) {
+              call.status = "error";
+              call.output = errorMessage(error);
+              call.completedAt = new Date().toISOString();
+              resultText = call.output;
+              if (error instanceof Error && error.name === "AbortError") abortAfterResult = error;
+            }
+          }
+        }
+        sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+        session.messages.push({
+          id: randomUUID(),
+          role: "user",
+          content: resultText || call.output || "Tool failed without output",
+          createdAt: new Date().toISOString(),
+          status: "complete",
+          kind: "tool-result",
+          toolUseId: call.id,
+          toolError: call.status !== "complete",
+        });
+        await store.save(session);
+        if (abortAfterResult) throw abortAfterResult;
+      }
+
+      if (round === 7) throw new Error("Agent stopped after 8 tool rounds");
+      assistantMessage = createAssistantMessage();
+      session.messages.push(assistantMessage);
+      await store.save(session);
+      sendEvent(response, "continuation", { assistantMessage });
     }
-    assistantMessage.status = "complete";
-    if (usage.input !== undefined && usage.output !== undefined) assistantMessage.usage = usage as TokenUsage;
-    await store.save(session);
-    sendEvent(response, "done", { message: assistantMessage, session });
   } catch (error) {
-    assistantMessage.status = "error";
-    if (!assistantMessage.content) assistantMessage.content = "Response interrupted.";
+    if (assistantMessage.status === "streaming") {
+      assistantMessage.status = "error";
+      if (!assistantMessage.content) assistantMessage.content = "Response interrupted.";
+    }
     await store.save(session);
     const message = error instanceof Error && error.name === "AbortError" ? "Generation stopped" : errorMessage(error);
     if (!response.writableEnded) sendEvent(response, "error", { error: message, message: assistantMessage });
@@ -151,6 +255,24 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     activeSessions.delete(sessionId);
     response.end();
   }
+}
+
+function createAssistantMessage(createdAt = new Date().toISOString()): Message {
+  return { id: randomUUID(), role: "assistant", content: "", createdAt, status: "streaming" };
+}
+
+function sessionDirectories(session: Session): string[] {
+  return [...new Set([workspaceRoot, ...(session.directories ?? [])])];
+}
+
+function agentSystemPrompt(directories: string[]): string {
+  return [
+    "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.",
+    "Use the Shell tool when you need to inspect or change the workspace. Wait for each tool result before continuing.",
+    `Primary working directory: ${workspaceRoot}`,
+    "Available working directories:",
+    ...directories.map((directory) => `- ${directory}`),
+  ].join("\n");
 }
 
 async function executeCommand(request: IncomingMessage, response: ServerResponse, sessionId: string): Promise<void> {
@@ -162,6 +284,22 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
   const firstWhitespace = rawCommand.search(/\s/);
   const command = (firstWhitespace === -1 ? rawCommand : rawCommand.slice(0, firstWhitespace)).toLowerCase();
   const argument = firstWhitespace === -1 ? "" : rawCommand.slice(firstWhitespace).trim();
+
+  if (command === "/add-dir") {
+    if (!argument) return json(response, 400, { error: "Usage: /add-dir <directory>" });
+    try {
+      const expanded = argument === "~" ? homedir() : argument.startsWith("~/") ? join(homedir(), argument.slice(2)) : argument;
+      const directory = await realpath(resolve(workspaceRoot, expanded));
+      if (!(await stat(directory)).isDirectory()) return json(response, 400, { error: `Not a directory: ${directory}` });
+      if (directory !== workspaceRoot && !(session.directories ?? []).includes(directory)) {
+        (session.directories ??= []).push(directory);
+        await store.save(session);
+      }
+      return json(response, 200, { command: "add-dir", directory, session });
+    } catch (error) {
+      return json(response, 400, { error: `Could not add directory: ${errorMessage(error)}` });
+    }
+  }
 
   if (command === "/name") {
     if (argument) {

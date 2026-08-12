@@ -66,6 +66,7 @@ export class SessionStore {
       updatedAt: now,
       messages: [...structuredClone(session.messages), banner],
       ...(session.compaction ? { compaction: structuredClone(session.compaction) } : {}),
+      ...(session.directories ? { directories: structuredClone(session.directories) } : {}),
     };
     await this.save(fork);
     return fork;
@@ -116,14 +117,17 @@ export class SessionStore {
       .filter((session): session is Session => session !== null)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .slice(0, limit)
-      .map((session) => ({
-        id: session.id,
-        title: session.title,
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
-        messageCount: session.messages.length,
-        preview: session.messages.at(-1)?.content.slice(0, 120) ?? "No messages yet",
-      }));
+      .map((session) => {
+        const visibleMessages = session.messages.filter((message) => message.kind !== "tool-result");
+        return {
+          id: session.id,
+          title: session.title,
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+          messageCount: visibleMessages.length,
+          preview: visibleMessages.at(-1)?.content.slice(0, 120) ?? "No messages yet",
+        };
+      });
   }
 
   #path(id: string): string {

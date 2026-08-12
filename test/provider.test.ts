@@ -9,6 +9,7 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
   let receivedPath = "";
   let receivedModel = "";
   let receivedThinking: unknown;
+  let receivedTools: unknown;
   let receivedMaxTokens = 0;
   const gateway = createServer(async (request, response) => {
     receivedAuthorization = request.headers.authorization ?? "";
@@ -19,15 +20,19 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
       model: string;
       max_tokens: number;
       thinking?: unknown;
+      tools?: unknown;
     };
     receivedModel = body.model;
     receivedMaxTokens = body.max_tokens;
     receivedThinking = body.thinking;
+    receivedTools = body.tools;
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.write('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":9}}}\n\n');
     response.write('event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"Working it out"}}\n\n');
     response.write('event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"signature_delta","signature":"signed-thought"}}\n\n');
     response.write('event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}\n\n');
+    response.write('event: content_block_start\ndata: {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"tool-1","name":"Shell","input":{}}}\n\n');
+    response.write('event: content_block_delta\ndata: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\\"command\\":\\"pwd\\"}"}}\n\n');
     response.end('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n');
   });
   gateway.listen(0, "127.0.0.1");
@@ -43,7 +48,12 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
     thinkingBudgetTokens: 2048,
   });
   const events = [];
-  for await (const event of provider.stream([{ role: "user", content: "Hi" }], new AbortController().signal)) {
+  const tools = [{ name: "Shell", description: "Run a command", input_schema: { type: "object" as const, properties: {} } }];
+  for await (const event of provider.stream(
+    [{ role: "user", content: "Hi" }],
+    new AbortController().signal,
+    { tools },
+  )) {
     events.push(event);
   }
 
@@ -52,11 +62,14 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
   assert.equal(receivedModel, "glm-test");
   assert.equal(receivedMaxTokens, 10_240);
   assert.deepEqual(receivedThinking, { type: "enabled", budget_tokens: 2048 });
+  assert.deepEqual(receivedTools, tools);
   assert.deepEqual(events, [
     { type: "usage", usage: { input: 9 } },
     { type: "thinking_delta", thinking: "Working it out" },
     { type: "thinking_signature_delta", signature: "signed-thought" },
     { type: "delta", text: "Hello" },
+    { type: "tool_use_start", index: 2, id: "tool-1", name: "Shell" },
+    { type: "tool_input_delta", index: 2, partialJson: '{"command":"pwd"}' },
     { type: "usage", usage: { output: 2 } },
     { type: "done", stopReason: "end_turn" },
   ]);
