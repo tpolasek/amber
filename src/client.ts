@@ -1,3 +1,5 @@
+import { StreamingThinkingReveal } from "./streaming-thinking.js";
+
 interface TokenUsage { input: number; output: number }
 type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
 interface ToolStatusDisplay { text: string; appendElapsed?: boolean }
@@ -34,6 +36,7 @@ let historyDraft = "";
 let historyMatches: string[] = [];
 let selectedHistoryMatch = 0;
 const toolOutputDisclosurePreferences = new Map<string, boolean>();
+const streamingThinkingReveals = new WeakMap<HTMLElement, StreamingThinkingReveal>();
 
 const state: { session: Session | null; config: Config | null; streaming: boolean; controller: AbortController | null } = {
   session: null,
@@ -426,7 +429,10 @@ function renderConfig(): void {
 }
 
 function renderSession(): void {
-  elements.transcript.querySelectorAll(".message").forEach((element) => element.remove());
+  elements.transcript.querySelectorAll<HTMLElement>(".message").forEach((element) => {
+    stopStreamingThinkingReveal(element);
+    element.remove();
+  });
   const session = state.session;
   if (!session) return;
   elements.emptyState.hidden = session.messages.length > 0;
@@ -559,19 +565,29 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
   const content = requiredWithin(element, ".message-content");
   const thinking = requiredWithin(element, ".message-thinking") as HTMLDetailsElement;
   const thinkingContent = requiredWithin(thinking, ".thinking-content");
+  const thinkingLabel = requiredWithin(thinking, "summary span:first-child");
   const thinkingStatus = requiredWithin(thinking, ".thinking-status");
   renderToolCalls(requiredWithin(element, ".message-tools"), message.toolCalls ?? []);
   const hasThinking = Boolean(message.thinking);
   thinking.hidden = !hasThinking;
   if (hasThinking) {
     const wasOpen = thinking.open;
-    thinkingContent.innerHTML = markdown.render(message.thinking ?? "")
-      + (message.status === "streaming" && message.streamingThinking ? '<span class="cursor-block"></span>' : "");
-    thinking.open = message.status === "streaming" ? true : wasStreaming ? false : wasOpen;
+    const activelyThinking = message.status === "streaming" && Boolean(message.streamingThinking);
+    thinking.classList.toggle("streaming-thinking", activelyThinking);
+    thinkingLabel.textContent = activelyThinking ? "Thinking…" : "Thinking";
+    if (activelyThinking) {
+      updateStreamingThinkingReveal(element, thinkingContent, message.thinking ?? "");
+    } else {
+      stopStreamingThinkingReveal(element);
+      thinkingContent.innerHTML = markdown.render(message.thinking ?? "");
+    }
+    thinking.open = activelyThinking ? true : wasStreaming ? false : wasOpen;
     const thinkingTokens = Math.ceil((message.thinking?.length ?? 0) / 4).toLocaleString();
-    thinkingStatus.textContent = message.status === "streaming"
+    thinkingStatus.textContent = activelyThinking
       ? `≈${thinkingTokens} tokens · streaming`
       : `≈${thinkingTokens} tokens · click to expand`;
+  } else {
+    stopStreamingThinkingReveal(element);
   }
   if (message.kind === "fork-banner") {
     const linkedSessionId = message.sourceSessionId ?? message.forkedSessionId;
@@ -601,6 +617,31 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
     link.target = "_blank";
     link.rel = "noopener noreferrer";
   });
+}
+
+function updateStreamingThinkingReveal(element: HTMLElement, container: HTMLElement, thinking: string): void {
+  let reveal = streamingThinkingReveals.get(element);
+  if (!reveal) {
+    container.replaceChildren();
+    reveal = new StreamingThinkingReveal((displayed) => {
+      if (!element.isConnected) {
+        stopStreamingThinkingReveal(element);
+        return;
+      }
+      container.innerHTML = markdown.render(displayed) + '<span class="cursor-block"></span>';
+      scrollTranscriptToBottom();
+    });
+    streamingThinkingReveals.set(element, reveal);
+    reveal.start();
+  }
+  reveal.update(thinking);
+}
+
+function stopStreamingThinkingReveal(element: HTMLElement): void {
+  const reveal = streamingThinkingReveals.get(element);
+  if (!reveal) return;
+  reveal.stop();
+  streamingThinkingReveals.delete(element);
 }
 
 function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
