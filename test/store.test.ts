@@ -11,6 +11,7 @@ test("creates, persists, and lists sessions newest first", async () => {
   await store.initialize();
 
   const first = await store.create();
+  assert.match(first.id, /^[a-z]+\.[a-z]+\.[a-z]+$/);
   first.title = "First session";
   first.messages.push({
     id: "message-1",
@@ -35,6 +36,24 @@ test("creates, persists, and lists sessions newest first", async () => {
     messageCount: 1,
     preview: "Hello, agent",
   });
+});
+
+test("creates durable numbered revisions without changing the original", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const original = await store.create();
+  original.messages.push({
+    id: "message-1", role: "user", content: "Keep me", createdAt: new Date().toISOString(), status: "complete",
+  });
+  await store.save(original);
+
+  const second = await store.createRevision(original);
+  const third = await store.createRevision(second);
+  assert.equal(second.id, `${original.id}.2`);
+  assert.equal(third.id, `${original.id}.3`);
+  assert.deepEqual(second.messages, []);
+  assert.equal((await store.get(original.id))?.messages[0]?.content, "Keep me");
 });
 
 test("rejects invalid session identifiers", async () => {

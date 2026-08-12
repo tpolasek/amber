@@ -17,6 +17,7 @@ const host = process.env.HOST ?? "127.0.0.1";
 const store = new SessionStore(dataDirectory);
 const provider = createProvider(process.env);
 const activeSessions = new Set<string>();
+const SESSION_PATH_ID = "([a-z0-9.-]+)";
 
 await store.initialize();
 
@@ -49,15 +50,20 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return json(response, 201, { session: await store.create() });
   }
 
-  const sessionMatch = url.pathname.match(/^\/api\/sessions\/([a-f0-9-]{36})$/);
+  const sessionMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}$`));
   if (method === "GET" && sessionMatch?.[1]) {
     const session = await store.get(sessionMatch[1]);
     return session ? json(response, 200, { session }) : json(response, 404, { error: "Session not found" });
   }
 
-  const messageMatch = url.pathname.match(/^\/api\/sessions\/([a-f0-9-]{36})\/messages$/);
+  const messageMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/messages$`));
   if (method === "POST" && messageMatch?.[1]) {
     return streamMessage(request, response, messageMatch[1]);
+  }
+
+  const commandMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/commands$`));
+  if (method === "POST" && commandMatch?.[1]) {
+    return executeCommand(request, response, commandMatch[1]);
   }
 
   if (method === "GET" && url.pathname === "/app.js") {
@@ -66,7 +72,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   if (method === "GET" && url.pathname === "/styles.css") {
     return serveFile(response, join(publicDirectory, "styles.css"), "text/css; charset=utf-8");
   }
-  if (method === "GET" && (url.pathname === "/" || /^\/s\/[a-f0-9-]{36}$/.test(url.pathname))) {
+  if (method === "GET" && (url.pathname === "/" || /^\/s\/[a-z0-9.-]+$/.test(url.pathname))) {
     return serveFile(response, join(publicDirectory, "index.html"), "text/html; charset=utf-8", "no-cache");
   }
   json(response, 404, { error: "Not found" });
@@ -85,7 +91,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   const userMessage: Message = { id: randomUUID(), role: "user", content, createdAt: now, status: "complete" };
   const assistantMessage: Message = { id: randomUUID(), role: "assistant", content: "", createdAt: now, status: "streaming" };
   session.messages.push(userMessage, assistantMessage);
-  if (session.messages.length === 2) session.title = titleFrom(content);
   await store.save(session);
 
   response.writeHead(200, {
@@ -104,7 +109,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
 
   try {
     const history: ProviderMessage[] = session.messages
-      .filter((message) => message.id !== assistantMessage.id && message.status === "complete")
+      .filter((message) => message.id !== assistantMessage.id && message.status === "complete" && message.kind !== "command")
       .map(({ role, content: messageContent }) => ({ role, content: messageContent }));
     let usage: Partial<TokenUsage> = {};
     for await (const event of provider.stream(history, controller.signal)) {
@@ -129,6 +134,52 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     activeSessions.delete(sessionId);
     response.end();
   }
+}
+
+async function executeCommand(request: IncomingMessage, response: ServerResponse, sessionId: string): Promise<void> {
+  if (activeSessions.has(sessionId)) return json(response, 409, { error: "Wait for the current response to finish" });
+  const session = await store.get(sessionId);
+  if (!session) return json(response, 404, { error: "Session not found" });
+  const body = await readJson(request);
+  const command = typeof body.command === "string" ? body.command.trim().toLowerCase() : "";
+
+  if (command === "/clear") {
+    const revision = await store.createRevision(session);
+    return json(response, 201, { command: "clear", session: revision, previousSessionId: session.id });
+  }
+  if (command === "/context") {
+    const chatMessages = session.messages.filter((message) => message.kind !== "command");
+    const assistantMessages = chatMessages.filter((message) => message.role === "assistant" && message.status === "complete");
+    const latestUsage = assistantMessages.slice().reverse().find((message) => message.usage)?.usage;
+    const totalInput = assistantMessages.reduce((total, message) => total + (message.usage?.input ?? 0), 0);
+    const totalOutput = assistantMessages.reduce((total, message) => total + (message.usage?.output ?? 0), 0);
+    const currentTokens = (latestUsage?.input ?? 0) + (latestUsage?.output ?? 0);
+    const now = new Date().toISOString();
+    const userMessage: Message = {
+      id: randomUUID(), role: "user", content: command, createdAt: now, status: "complete", kind: "command",
+    };
+    const assistantMessage: Message = {
+      id: randomUUID(),
+      role: "assistant",
+      content: [
+        `**Context · ${session.id}**`,
+        "",
+        `- Model: \`${provider.model}\``,
+        `- Active context: **${currentTokens.toLocaleString()} tokens** (latest measured turn)`,
+        `- Latest input / output: **${(latestUsage?.input ?? 0).toLocaleString()} / ${(latestUsage?.output ?? 0).toLocaleString()}**`,
+        `- Session input: **${totalInput.toLocaleString()} tokens**`,
+        `- Session output: **${totalOutput.toLocaleString()} tokens**`,
+        `- Model messages: **${chatMessages.length}**`,
+      ].join("\n"),
+      createdAt: now,
+      status: "complete",
+      kind: "command",
+    };
+    session.messages.push(userMessage, assistantMessage);
+    await store.save(session);
+    return json(response, 200, { command: "context", session });
+  }
+  return json(response, 400, { error: `Unknown command: ${command || "(empty)"}` });
 }
 
 async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
@@ -170,11 +221,6 @@ async function serveFile(
     "content-security-policy": "default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'",
   });
   response.end(content);
-}
-
-function titleFrom(content: string): string {
-  const firstLine = content.split("\n")[0]?.trim() ?? content;
-  return firstLine.length > 48 ? `${firstLine.slice(0, 47)}…` : firstLine;
 }
 
 function errorMessage(error: unknown): string {

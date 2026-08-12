@@ -12,6 +12,7 @@ export interface Message {
   content: string;
   createdAt: string;
   status: MessageStatus;
+  kind?: "chat" | "command";
   usage?: TokenUsage;
 }
 

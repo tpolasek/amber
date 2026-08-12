@@ -29,7 +29,7 @@
       </aside>
       <div class="sidebar-scrim"></div>
 
-      <main class="terminal">
+      <main id="terminal" class="terminal">
         <header class="topbar">
           <button id="toggle-sidebar" class="icon-button menu-button" aria-label="Open sessions">☰</button>
           <div class="breadcrumb"><span>~/agents</span><b>/</b><strong id="session-title">initializing</strong><small>#<span id="session-id">--------</span></small></div>
@@ -64,7 +64,14 @@
             <textarea id="prompt" rows="1" maxlength="32000" placeholder="Enter a directive…" aria-label="Message"></textarea>
             <button id="submit-button" type="submit" class="send-button"><span>SEND</span><i>↵</i></button>
           </form>
-          <div class="composer-meta"><span><kbd>ENTER</kbd> send</span><span><kbd>SHIFT + ENTER</kbd> newline</span><span class="secure">◇ SESSION URL PERSISTED</span></div>
+          <div id="command-menu" class="command-menu" role="listbox" aria-label="Slash commands" hidden></div>
+          <div id="history-search" class="history-search" hidden>
+            <label for="history-query"><span>(reverse-i-search)</span>`</label>
+            <input id="history-query" type="text" autocomplete="off" spellcheck="false" aria-label="Search prompt history">
+            <span>':</span>
+            <div id="history-results" class="history-results" role="listbox" aria-label="Matching prompts"></div>
+          </div>
+          <div class="composer-meta"><span class="secure">◇ SESSION URL PERSISTED</span></div>
         </footer>
       </main>
     </div>

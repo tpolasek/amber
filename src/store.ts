@@ -1,9 +1,10 @@
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomInt } from "node:crypto";
 import type { Session, SessionSummary } from "./types.js";
+import { COMMON_WORDS } from "./words.js";
 
-const SESSION_ID = /^[a-f0-9-]{36}$/;
+const SESSION_ID = /^(?:[a-f0-9-]{36}|[a-z]+(?:\.[a-z]+){2})(?:\.[2-9]\d*)?$/;
 
 export class SessionStore {
   readonly #directory: string;
@@ -17,10 +18,30 @@ export class SessionStore {
   }
 
   async create(): Promise<Session> {
+    let id = "";
+    do id = randomSessionId();
+    while (await this.get(id));
+    return this.#createWithId(id);
+  }
+
+  async createRevision(session: Session): Promise<Session> {
+    const baseId = revisionBase(session.id);
+    const entries = await readdir(this.#directory, { withFileTypes: true });
+    const escapedBase = baseId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const revisionPattern = new RegExp(`^${escapedBase}\\.(\\d+)\\.json$`);
+    let nextRevision = 2;
+    for (const entry of entries) {
+      const match = entry.name.match(revisionPattern);
+      if (match?.[1]) nextRevision = Math.max(nextRevision, Number(match[1]) + 1);
+    }
+    return this.#createWithId(`${baseId}.${nextRevision}`);
+  }
+
+  async #createWithId(id: string): Promise<Session> {
     const now = new Date().toISOString();
     const session: Session = {
-      id: randomUUID(),
-      title: "Untitled transmission",
+      id,
+      title: id,
       createdAt: now,
       updatedAt: now,
       messages: [],
@@ -74,4 +95,14 @@ export class SessionStore {
   #path(id: string): string {
     return join(this.#directory, `${id}.json`);
   }
+}
+
+function randomSessionId(): string {
+  const words = new Set<string>();
+  while (words.size < 3) words.add(COMMON_WORDS[randomInt(COMMON_WORDS.length)] ?? "amber");
+  return [...words].join(".");
+}
+
+function revisionBase(id: string): string {
+  return id.replace(/\.\d+$/, "");
 }
