@@ -1,15 +1,16 @@
 interface TokenUsage { input: number; output: number }
-interface Message { id: string; role: "user" | "assistant"; content: string; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command"; usage?: TokenUsage }
+interface Message { id: string; role: "user" | "assistant"; content: string; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage }
 interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[] }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface Config { provider: string; model: string; mode: "live" }
-interface CommandDefinition { name: "/context" | "/clear"; description: string }
+interface CommandDefinition { name: "/context" | "/clear" | "/fork"; description: string }
 interface MarkdownRenderer { render(source: string): string }
 declare const markdownit: (options: { html: boolean; linkify: boolean; breaks: boolean; typographer: boolean }) => MarkdownRenderer;
 
 const commands: CommandDefinition[] = [
   { name: "/context", description: "Show token usage for the current model context" },
   { name: "/clear", description: "Clear context and create a numbered session revision" },
+  { name: "/fork", description: "Fork this session with its complete history" },
 ];
 const markdown = markdownit({ html: false, linkify: true, breaks: false, typographer: false });
 const SESSION_ROUTE = /^\/s\/([a-z0-9.-]+)$/;
@@ -256,7 +257,7 @@ async function runCommand(command: CommandDefinition["name"]): Promise<void> {
   setBusy(true);
   scrollToBottom(false);
   try {
-    const result = await api<{ command: "context" | "clear"; session: Session; previousSessionId?: string }>(
+    const result = await api<{ command: "context" | "clear" | "fork"; session: Session; previousSessionId?: string }>(
       `/api/sessions/${session.id}/commands`,
       { method: "POST", body: JSON.stringify({ command }) },
     );
@@ -264,6 +265,9 @@ async function runCommand(command: CommandDefinition["name"]): Promise<void> {
     if (result.command === "clear") {
       history.pushState({}, "", `/s/${result.session.id}`);
       notify(`Context cleared · ${result.session.id}`);
+    } else if (result.command === "fork") {
+      history.pushState({}, "", `/s/${result.session.id}`);
+      notify(`Session forked · ${result.session.id}`);
     }
     renderSession();
     scrollToBottom(false);
@@ -324,7 +328,8 @@ function renderSessionList(): void {
 
 function appendMessage(message: Message, before: HTMLElement | null = null): HTMLElement {
   const article = document.createElement("article");
-  article.className = `message ${message.role}${message.kind === "command" ? " command-message" : ""}`;
+  const messageClass = message.kind === "command" ? " command-message" : message.kind === "fork-banner" ? " fork-banner" : "";
+  article.className = `message ${message.role}${messageClass}`;
   article.dataset.messageId = message.id;
   article.innerHTML = `
     <div class="message-rail"><span class="role-glyph"></span><span class="rail-line"></span></div>
@@ -347,6 +352,20 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
   requiredWithin(element, ".message-time").textContent = formatTime(message.createdAt);
   requiredWithin(element, ".message-usage").textContent = message.usage ? `${message.usage.input} in / ${message.usage.output} out` : "";
   const content = requiredWithin(element, ".message-content");
+  if (message.kind === "fork-banner") {
+    const linkedSessionId = message.sourceSessionId ?? message.forkedSessionId;
+    const label = message.sourceSessionId ? "Forked from session: " : "Forked to session: ";
+    content.replaceChildren(document.createTextNode(label));
+    if (linkedSessionId) {
+      const link = document.createElement("a");
+      link.href = `/s/${linkedSessionId}`;
+      link.textContent = linkedSessionId;
+      content.append(link);
+    } else {
+      content.replaceChildren(document.createTextNode(message.content));
+    }
+    return;
+  }
   content.innerHTML = markdown.render(message.content) + (message.status === "streaming" ? '<span class="cursor-block"></span>' : "");
   content.querySelectorAll<HTMLAnchorElement>("a").forEach((link) => {
     link.target = "_blank";

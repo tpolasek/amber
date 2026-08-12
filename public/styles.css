@@ -134,6 +134,12 @@ button { color: inherit; }
 .message.error .message-content { color: #b87162; }
 .command-message .role-glyph, .command-message .role-name { color: #86704a; }
 .command-message .message-content { color: #a99670; }
+.fork-banner { display: block; padding-top: 16px; }
+.fork-banner .message-rail, .fork-banner header { display: none; }
+.fork-banner .message-content { padding: 9px 13px; border: 1px solid #ffe27a; background: #f2c94c; color: #211900; font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+.fork-banner .message-content::before { content: "◆ "; }
+.fork-banner .message-content a { color: #211900; text-decoration-color: rgba(33,25,0,.55); font-weight: 800; }
+.fork-banner .message-content a:hover { color: #000; }
 .cursor-block { display: inline-block; width: 7px; height: 13px; margin-left: 3px; vertical-align: -2px; background: var(--amber); animation: blink .8s steps(1) infinite; box-shadow: 0 0 7px var(--amber); }
 
 .composer-shell { position: sticky; bottom: 0; z-index: 6; padding: 14px 24px 18px; background: var(--surface); }

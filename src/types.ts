@@ -12,7 +12,9 @@ export interface Message {
   content: string;
   createdAt: string;
   status: MessageStatus;
-  kind?: "chat" | "command";
+  kind?: "chat" | "command" | "fork-banner";
+  sourceSessionId?: string;
+  forkedSessionId?: string;
   usage?: TokenUsage;
 }
 

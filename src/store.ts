@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomInt } from "node:crypto";
-import type { Session, SessionSummary } from "./types.js";
+import type { Message, Session, SessionSummary } from "./types.js";
 import { COMMON_WORDS } from "./words.js";
 
 const SESSION_ID = /^(?:[a-f0-9-]{36}|[a-z]+(?:\.[a-z]+){2})(?:\.[2-9]\d*)?$/;
@@ -35,6 +35,23 @@ export class SessionStore {
       if (match?.[1]) nextRevision = Math.max(nextRevision, Number(match[1]) + 1);
     }
     return this.#createWithId(`${baseId}.${nextRevision}`);
+  }
+
+  async createFork(session: Session, banner: Message): Promise<Session> {
+    let id = "";
+    do id = randomSessionId();
+    while (await this.get(id));
+
+    const now = new Date().toISOString();
+    const fork: Session = {
+      id,
+      title: id,
+      createdAt: now,
+      updatedAt: now,
+      messages: [...structuredClone(session.messages), banner],
+    };
+    await this.save(fork);
+    return fork;
   }
 
   async #createWithId(id: string): Promise<Session> {

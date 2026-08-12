@@ -56,6 +56,33 @@ test("creates durable numbered revisions without changing the original", async (
   assert.equal((await store.get(original.id))?.messages[0]?.content, "Keep me");
 });
 
+test("forks a session with independent history and a provenance banner", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const original = await store.create();
+  original.messages.push({
+    id: "message-1", role: "user", content: "Keep me", createdAt: new Date().toISOString(), status: "complete",
+  });
+  await store.save(original);
+  const banner = {
+    id: "banner-1",
+    role: "assistant" as const,
+    content: `Forked from session: ${original.id}`,
+    createdAt: new Date().toISOString(),
+    status: "complete" as const,
+    kind: "fork-banner" as const,
+    sourceSessionId: original.id,
+  };
+
+  const fork = await store.createFork(original, banner);
+  assert.notEqual(fork.id, original.id);
+  assert.deepEqual(fork.messages, [original.messages[0], banner]);
+  fork.messages[0]!.content = "Changed only in the fork";
+  assert.equal(original.messages[0]?.content, "Keep me");
+  assert.deepEqual((await store.get(fork.id))?.messages, [original.messages[0], banner]);
+});
+
 test("rejects invalid session identifiers", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-store-"));
   const store = new SessionStore(directory);

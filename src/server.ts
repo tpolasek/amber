@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { SessionStore } from "./store.js";
 import { createProvider } from "./provider.js";
-import type { Message, ProviderMessage, TokenUsage } from "./types.js";
+import { buildProviderHistory, isModelMessage } from "./history.js";
+import type { Message, TokenUsage } from "./types.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(sourceDirectory, "../..");
@@ -112,9 +113,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   });
 
   try {
-    const history: ProviderMessage[] = session.messages
-      .filter((message) => message.id !== assistantMessage.id && message.status === "complete" && message.kind !== "command")
-      .map(({ role, content: messageContent }) => ({ role, content: messageContent }));
+    const history = buildProviderHistory(session.messages, assistantMessage.id);
     let usage: Partial<TokenUsage> = {};
     for await (const event of provider.stream(history, controller.signal)) {
       if (event.type === "delta") {
@@ -151,8 +150,33 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     const revision = await store.createRevision(session);
     return json(response, 201, { command: "clear", session: revision, previousSessionId: session.id });
   }
+  if (command === "/fork") {
+    const now = new Date().toISOString();
+    const forkBanner: Message = {
+      id: randomUUID(),
+      role: "assistant",
+      content: `Forked from session: ${session.id}`,
+      createdAt: now,
+      status: "complete",
+      kind: "fork-banner",
+      sourceSessionId: session.id,
+    };
+    const fork = await store.createFork(session, forkBanner);
+    const sourceBanner: Message = {
+      id: randomUUID(),
+      role: "assistant",
+      content: `Forked to session: ${fork.id}`,
+      createdAt: now,
+      status: "complete",
+      kind: "fork-banner",
+      forkedSessionId: fork.id,
+    };
+    session.messages.push(sourceBanner);
+    await store.save(session);
+    return json(response, 201, { command: "fork", session: fork, previousSessionId: session.id });
+  }
   if (command === "/context") {
-    const chatMessages = session.messages.filter((message) => message.kind !== "command");
+    const chatMessages = session.messages.filter(isModelMessage);
     const assistantMessages = chatMessages.filter((message) => message.role === "assistant" && message.status === "complete");
     const latestUsage = assistantMessages.slice().reverse().find((message) => message.usage)?.usage;
     const totalInput = assistantMessages.reduce((total, message) => total + (message.usage?.input ?? 0), 0);

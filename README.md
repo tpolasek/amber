@@ -33,6 +33,7 @@ Environment variables are documented in `.env.example`. `.env` files are intenti
 
 - `/context` reports the latest measured active context, input/output usage, session output total, and model-message count. Command output is persisted in the transcript but excluded from model context.
 - `/clear` starts an empty numbered revision such as `bacon.dog.fish.2`; the original transcript remains available at its existing URL.
+- `/fork` creates a new session with a copy of the complete transcript. It appends reciprocal provenance banners linking the fork to its source and the source to its fork. Fork banners persist in chat history but are excluded from model context.
 
 ## API
 
