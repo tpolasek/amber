@@ -1,0 +1,21 @@
+{
+  "name": "amber-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "An amber terminal interface for browser-based LLM sessions.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/server.js",
+    "dev": "npm run build && node --watch dist/src/server.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}
