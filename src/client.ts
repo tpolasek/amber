@@ -534,9 +534,9 @@ function appendMessage(message: Message, before: HTMLElement | null = null): HTM
   article.className = `message ${message.role}${messageClass}`;
   article.dataset.messageId = message.id;
   article.innerHTML = `
-    <div class="message-rail"><span class="role-glyph"></span><span class="rail-line"></span></div>
+    <div class="message-rail"><span class="role-name"></span><span class="role-glyph"></span><span class="rail-line"></span></div>
     <div class="message-main">
-      <header><span class="role-name"></span><span class="message-time"></span><span class="message-usage"></span></header>
+      <header><span class="message-time"></span><span class="message-usage"></span></header>
       <details class="message-thinking"><summary><span>Thinking</span><span class="thinking-status"></span></summary><div class="thinking-content"></div></details>
       <div class="message-content"></div>
       <div class="message-tools"></div>
@@ -553,7 +553,7 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
   element.classList.toggle("streaming", message.status === "streaming");
   element.classList.toggle("error", message.status === "error");
   requiredWithin(element, ".role-glyph").textContent = message.role === "user" ? "◆" : "●";
-  requiredWithin(element, ".role-name").textContent = message.role === "user" ? "" : "agent";
+  requiredWithin(element, ".role-name").textContent = message.role;
   requiredWithin(element, ".message-time").textContent = formatTime(message.createdAt);
   requiredWithin(element, ".message-usage").textContent = message.usage ? `${message.usage.input} in / ${message.usage.output} out` : "";
   const content = requiredWithin(element, ".message-content");
