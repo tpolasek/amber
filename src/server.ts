@@ -10,6 +10,7 @@ import { buildProviderHistory, isModelMessage } from "./history.js";
 import { generateSessionTitle } from "./session-title.js";
 import { estimateHistoryTokens, formatCompactionBanner, generateCompactionSummary } from "./compaction.js";
 import { parseShellInput, SHELL_TOOL, ShellExecutor } from "./shell-tool.js";
+import { executeFileTool, FILE_TOOLS } from "./file-tools.js";
 import type { Message, Session, TokenUsage, ToolCall } from "./types.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
@@ -132,7 +133,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       const toolDrafts = new Map<number, { call: ToolCall; inputJson: string }>();
       let usage: Partial<TokenUsage> = {};
       for await (const event of provider.stream(history, controller.signal, {
-        tools: [SHELL_TOOL],
+        tools: [SHELL_TOOL, ...FILE_TOOLS],
         system: agentSystemPrompt(allowedDirectories),
       })) {
         if (event.type === "delta") {
@@ -186,10 +187,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         let resultText = call.output;
         let abortAfterResult: Error | undefined;
         if (call.status !== "error") {
-          if (call.name !== SHELL_TOOL.name) {
-            call.status = "error";
-            call.output = `Unknown tool: ${call.name}`;
-          } else {
+          if (call.name === SHELL_TOOL.name) {
             try {
               const input = parseShellInput(call.input);
               await store.save(session);
@@ -220,6 +218,28 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               resultText = call.output;
               if (error instanceof Error && error.name === "AbortError") abortAfterResult = error;
             }
+          } else if (FILE_TOOLS.some((tool) => tool.name === call.name)) {
+            const started = Date.now();
+            call.status = "running";
+            call.startedAt = new Date(started).toISOString();
+            if (typeof call.input.file_path === "string") call.filePath = call.input.file_path;
+            sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+            try {
+              const result = await executeFileTool(call.name, call.input, allowedDirectories, session);
+              call.status = "complete";
+              call.filePath = result.filePath;
+              call.output = result.output;
+              resultText = result.resultText;
+            } catch (error) {
+              call.status = "error";
+              call.output = errorMessage(error);
+              resultText = call.output;
+            }
+            call.durationMs = Date.now() - started;
+            call.completedAt = new Date().toISOString();
+          } else {
+            call.status = "error";
+            call.output = `Unknown tool: ${call.name}`;
           }
         }
         sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
@@ -268,7 +288,7 @@ function sessionDirectories(session: Session): string[] {
 function agentSystemPrompt(directories: string[]): string {
   return [
     "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.",
-    "Use the Shell tool when you need to inspect or change the workspace. Wait for each tool result before continuing.",
+    "Use Read, Edit, and Write for text files; use Shell for commands and directory operations. Wait for each tool result before continuing.",
     `Primary working directory: ${workspaceRoot}`,
     "Available working directories:",
     ...directories.map((directory) => `- ${directory}`),

@@ -20,6 +20,7 @@ export interface ToolCall {
   exitCode?: number | null;
   workingDirectory?: string;
   timeoutMs?: number;
+  filePath?: string;
 }
 
 export interface Message {
@@ -54,6 +55,14 @@ export interface Session {
   messages: Message[];
   compaction?: SessionCompaction;
   directories?: string[];
+  fileReadState?: Record<string, FileReadState>;
+}
+
+export interface FileReadState {
+  mtimeMs: number;
+  size: number;
+  hash: string;
+  full: boolean;
 }
 
 export interface SessionSummary {

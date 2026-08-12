@@ -32,6 +32,7 @@ export class SessionStore {
   async clear(session: Session): Promise<Session> {
     session.messages = [];
     delete session.compaction;
+    delete session.fileReadState;
     await this.save(session);
     return session;
   }
@@ -67,6 +68,7 @@ export class SessionStore {
       messages: [...structuredClone(session.messages), banner],
       ...(session.compaction ? { compaction: structuredClone(session.compaction) } : {}),
       ...(session.directories ? { directories: structuredClone(session.directories) } : {}),
+      ...(session.fileReadState ? { fileReadState: structuredClone(session.fileReadState) } : {}),
     };
     await this.save(fork);
     return fork;

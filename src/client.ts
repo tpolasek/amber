@@ -1,6 +1,6 @@
 interface TokenUsage { input: number; output: number }
 type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
-interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number }
+interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string }
 interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; streamingThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "compact-banner" | "tool-result"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean }
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
 interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction; directories?: string[] }
@@ -586,7 +586,7 @@ function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
 
     const command = document.createElement("code");
     command.className = "tool-command";
-    command.textContent = typeof call.input.command === "string" ? call.input.command : "Preparing tool input…";
+    command.textContent = toolSubject(call);
     card.append(header, command);
 
     const metadata = toolMetadata(call);
@@ -620,6 +620,11 @@ function toolStatusLabel(call: ToolCall): string {
   if (call.status === "complete") return "COMPLETE";
   if (call.status === "error") return "FAILED";
   return "QUEUED";
+}
+
+function toolSubject(call: ToolCall): string {
+  if (call.name === "Shell") return typeof call.input.command === "string" ? call.input.command : "Preparing tool input…";
+  return call.filePath ?? (typeof call.input.file_path === "string" ? call.input.file_path : "Preparing file path…");
 }
 
 function toolMetadata(call: ToolCall): string {

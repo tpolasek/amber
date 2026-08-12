@@ -30,6 +30,7 @@ Environment variables are documented in `.env.example`. `.env` files are intenti
 - `src/provider.ts` — provider boundary for Anthropic-compatible APIs. Future tool-use, MCP, approvals, and alternative providers can be added behind this interface.
 - Anthropic-compatible text and thinking deltas stream live. Thinking and its opaque signature are stored separately, returned unchanged in subsequent model history, shown expanded while generating, and collapsed into a reopenable disclosure when the response completes.
 - `src/shell-tool.ts` — the first agent tool: a blocking Shell runner with streamed output, a 120-second default timeout, a 10-minute maximum, and per-session serialization. Different sessions may execute concurrently.
+- `src/file-tools.ts` — Claude Code-style `Read`, `Write`, and `Edit` tools for plain-text files. Images, PDFs, and notebooks are deliberately unsupported.
 - `src/store.ts` — atomic JSON persistence under `data/sessions`; sessions use three-word IDs drawn from the bundled [Basic English 2000 word list](https://people.sc.fsu.edu/~jburkardt/datasets/words/basic_english_2000.txt) and durable `/s/:sessionId` URLs.
 
 ## Terminal commands
@@ -53,6 +54,10 @@ Environment variables are documented in `.env.example`. `.env` files are intenti
 ## Agent tools
 
 - `Shell` runs `/bin/bash -lc <command>` in the project or an `/add-dir` working directory. The model may override the 120-second timeout with `timeout_ms` up to 600,000 ms. Calls within one session execute in order and block the agent loop until completion or timeout; separate sessions can run Shell concurrently. Command, working directory, timeout, duration, exit code, and final status are shown in the transcript; streamed output is collapsed by default and can be expanded on demand.
+- `Read` reads an absolute plain-text path with numbered output. It accepts a 1-based `offset` and a `limit` of up to 2,000 lines.
+- `Write` creates or completely replaces a plain-text file. Replacing an existing file requires a fresh full `Read` first.
+- `Edit` performs an exact string replacement, requiring a unique match unless `replace_all` is set. Existing files require a fresh full `Read`; an empty `old_string` may create a missing file.
+- File tools are restricted to the project and directories enabled with `/add-dir`. Calls execute serially within a session; separate sessions remain independent.
 - Tool calls and results are persisted and sent back to the model. Tool-result protocol messages remain hidden from the visible transcript, while their status cards remain part of the assistant history.
 - `/add-dir` controls the working directories advertised to the agent and accepted as `working_directory`; it is not an operating-system sandbox for arbitrary shell commands.
 

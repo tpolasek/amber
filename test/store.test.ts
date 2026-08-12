@@ -55,12 +55,16 @@ test("clears a session in place", async () => {
     createdAt: new Date().toISOString(),
     coveredMessageCount: 1,
   };
+  session.fileReadState = {
+    "/tmp/file.txt": { mtimeMs: 1, size: 4, hash: "hash", full: true },
+  };
   await store.save(session);
 
   const cleared = await store.clear(session);
   assert.equal(cleared.id, session.id);
   assert.deepEqual(cleared.messages, []);
   assert.equal(cleared.compaction, undefined);
+  assert.equal(cleared.fileReadState, undefined);
   assert.deepEqual((await store.get(session.id))?.messages, []);
 });
 
@@ -94,6 +98,9 @@ test("forks a session with independent history and a provenance banner", async (
     coveredMessageCount: 1,
   };
   original.directories = ["/tmp/example-workspace"];
+  original.fileReadState = {
+    "/tmp/example-workspace/file.txt": { mtimeMs: 1, size: 4, hash: "hash", full: true },
+  };
   await store.save(original);
   const banner = {
     id: "banner-1",
@@ -112,6 +119,8 @@ test("forks a session with independent history and a provenance banner", async (
   assert.notEqual(fork.compaction, original.compaction);
   assert.deepEqual(fork.directories, original.directories);
   assert.notEqual(fork.directories, original.directories);
+  assert.deepEqual(fork.fileReadState, original.fileReadState);
+  assert.notEqual(fork.fileReadState, original.fileReadState);
   fork.messages[0]!.content = "Changed only in the fork";
   fork.compaction!.summary = "Changed only in the fork";
   assert.equal(original.messages[0]?.content, "Keep me");
