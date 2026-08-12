@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#100b03">
     <meta name="description" content="AMBER — browser terminal for persistent LLM agent sessions">
     <title>AMBER // Agent Terminal</title>
-    <link rel="stylesheet" href="/styles.css?v=19">
+    <link rel="stylesheet" href="/styles.css?v=22">
   </head>
   <body>
     <div class="noise" aria-hidden="true"></div>
@@ -18,7 +18,7 @@
           <div><strong>AMBER</strong><small>AGENT TERMINAL</small></div>
           <button id="close-sidebar" class="icon-button close-sidebar" aria-label="Close sidebar">×</button>
         </div>
-        <button id="new-session" class="new-session"><span>＋</span> NEW TRANSMISSION <kbd>⌘N</kbd></button>
+        <button id="new-session" class="new-session"><span>＋</span> NEW SESSION <kbd>⌘N</kbd></button>
         <div class="sidebar-label"><span>SESSION ARCHIVE</span><span class="line"></span></div>
         <nav id="session-list" class="session-list" aria-label="Previous sessions"></nav>
         <footer class="sidebar-footer">
@@ -32,7 +32,10 @@
       <main id="terminal" class="terminal">
         <header class="topbar">
           <button id="toggle-sidebar" class="icon-button menu-button" aria-label="Open sessions">☰</button>
-          <div class="breadcrumb"><span>~/agents</span><b>/</b><strong id="session-title">initializing</strong><small>#<span id="session-id">--------</span></small></div>
+          <div class="breadcrumb">
+            <div class="session-identity"><strong id="session-title">initializing</strong><b>:</b><span id="session-id">--------</span></div>
+            <div id="session-directories" class="session-directories" aria-label="Session directories"></div>
+          </div>
           <div class="provider-status"><span id="provider-dot" class="status-dot"></span><span id="provider-label">CONNECTING</span></div>
         </header>
 

@@ -50,7 +50,13 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 
   if (method === "GET" && url.pathname === "/api/config") {
-    return json(response, 200, { provider: provider.name, model: provider.model, mode: provider.mode });
+    return json(response, 200, {
+      provider: provider.name,
+      model: provider.model,
+      mode: provider.mode,
+      homeDirectory: homedir(),
+      workspaceRoot,
+    });
   }
   if (method === "GET" && url.pathname === "/api/sessions") {
     return json(response, 200, { sessions: await store.list() });

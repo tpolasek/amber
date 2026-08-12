@@ -6,7 +6,7 @@ interface Message { id: string; role: "user" | "assistant"; content: string; thi
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
 interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
-interface Config { provider: string; model: string; mode: "live" }
+interface Config { provider: string; model: string; mode: "live"; homeDirectory: string; workspaceRoot: string }
 interface CommandDefinition { name: "/add-dir" | "/cwd" | "/context" | "/clear" | "/compact" | "/fork" | "/name"; description: string }
 interface DirectoryCompletion { value: string; absolutePath: string }
 interface MarkdownRenderer { render(source: string): string }
@@ -60,6 +60,7 @@ const elements = {
   closeSidebar: required<HTMLButtonElement>("close-sidebar"),
   sessionTitle: required<HTMLElement>("session-title"),
   sessionId: required<HTMLElement>("session-id"),
+  sessionDirectories: required<HTMLElement>("session-directories"),
   provider: required<HTMLElement>("provider-label"),
   providerDot: required<HTMLElement>("provider-dot"),
   modeBanner: required<HTMLElement>("mode-banner"),
@@ -438,10 +439,35 @@ function renderSession(): void {
 }
 
 function renderHeader(): void {
-  if (!state.session) return;
-  elements.sessionTitle.textContent = state.session.title;
-  elements.sessionId.textContent = state.session.id.slice(0, 8);
-  document.title = `${state.session.title} · AMBER`;
+  const session = state.session;
+  const config = state.config;
+  if (!session || !config) return;
+  elements.sessionTitle.textContent = session.title;
+  elements.sessionTitle.title = session.title;
+  elements.sessionId.textContent = session.id;
+  elements.sessionId.title = session.id;
+  elements.sessionDirectories.replaceChildren();
+  const currentDirectory = session.cwd ?? config.workspaceRoot;
+  const directories = [...new Set([...(session.directories ?? []), currentDirectory])];
+  for (const directory of directories) {
+    const item = document.createElement("span");
+    item.className = "session-directory";
+    item.classList.toggle("cwd", directory === currentDirectory);
+    item.title = directory;
+    item.append(document.createTextNode(displayHomeRelativePath(directory, config.homeDirectory)));
+    if (directory === currentDirectory) {
+      const marker = document.createElement("b");
+      marker.textContent = " (CWD)";
+      item.append(marker);
+    }
+    elements.sessionDirectories.append(item);
+  }
+  document.title = `${session.title} · AMBER`;
+}
+
+function displayHomeRelativePath(path: string, homeDirectory: string): string {
+  if (path === homeDirectory) return "~";
+  return path.startsWith(`${homeDirectory}/`) ? `~/${path.slice(homeDirectory.length + 1)}` : path;
 }
 
 function renderSessionList(): void {
