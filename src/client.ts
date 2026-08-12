@@ -721,7 +721,7 @@ function shouldRenderToolOutput(call: ToolCall): boolean {
 }
 
 function shouldExpandToolOutput(call: ToolCall, isDiff: boolean): boolean {
-  return isDiff || call.output.length < 100;
+  return isDiff;
 }
 
 function isDiffOutput(call: ToolCall): boolean {
@@ -783,7 +783,7 @@ function shouldInlineToolSubject(subject: string): boolean {
 
 function toolMetadata(call: ToolCall): string {
   const values: string[] = [];
-  if (call.workingDirectory) values.push(call.workingDirectory);
+  if (call.name !== "Shell" && call.workingDirectory) values.push(call.workingDirectory);
   if (call.name === "Shell" && call.exitCode !== undefined && call.exitCode !== null && call.exitCode !== 0) {
     if (call.timeoutMs !== undefined) values.push(`timeout ${formatDuration(call.timeoutMs)}`);
     values.push(`exit ${call.exitCode}`);
