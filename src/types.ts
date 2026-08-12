@@ -63,6 +63,14 @@ export interface FileReadState {
   size: number;
   hash: string;
   full: boolean;
+  totalLines?: number;
+  ranges?: FileReadRange[];
+  hasRead?: boolean;
+}
+
+export interface FileReadRange {
+  startLine: number;
+  endLine: number;
 }
 
 export interface SessionSummary {

@@ -288,7 +288,7 @@ function sessionDirectories(session: Session): string[] {
 function agentSystemPrompt(directories: string[]): string {
   return [
     "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.",
-    "Use Read, Edit, and Write for text files; use Shell for commands and directory operations. Wait for each tool result before continuing.",
+    "Use Read, Edit, and Write for text files; use Shell for commands and directory operations. Wait for each tool result before continuing. File content returned by Read remains available earlier in the conversation: never reread an already covered range unless Write or Edit has changed that file.",
     `Primary working directory: ${workspaceRoot}`,
     "Available working directories:",
     ...directories.map((directory) => `- ${directory}`),

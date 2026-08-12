@@ -16,6 +16,9 @@ test("exposes text-only Read, Write, and Edit definitions", () => {
   const readProperties = FILE_TOOLS[0]?.input_schema.properties ?? {};
   assert.deepEqual(Object.keys(readProperties), ["file_path", "offset", "limit"]);
   assert.equal("pages" in readProperties, false);
+  assert.match(FILE_TOOLS[1]?.description ?? "", /fully read once/);
+  assert.doesNotMatch(FILE_TOOLS[1]?.description ?? "", /must not have changed/);
+  assert.match(FILE_TOOLS[2]?.description ?? "", /do not repeatedly Read/);
 });
 
 test("Read returns numbered lines and records full-read state", async () => {
@@ -31,6 +34,48 @@ test("Read returns numbered lines and records full-read state", async () => {
   assert.equal(current.fileReadState?.[filePath]?.full, true);
 });
 
+test("Read deduplicates ranges already present in conversation context", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-files-"));
+  const filePath = join(directory, "sample.txt");
+  await writeFile(filePath, "one\ntwo\nthree\nfour\n", "utf8");
+  const current = session();
+
+  await executeFileTool("Read", { file_path: filePath, offset: 1, limit: 3 }, [directory], current);
+  const cached = await executeFileTool("Read", { file_path: filePath, offset: 2, limit: 2 }, [directory], current);
+
+  assert.equal(cached.output, "Cached Read · reused earlier context");
+  assert.match(cached.resultText, /already returned by an earlier Read/);
+  assert.doesNotMatch(cached.resultText, /two\n.*three/s);
+});
+
+test("adjacent Read ranges combine to deduplicate a later overlapping range", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-files-"));
+  const filePath = join(directory, "sample.txt");
+  await writeFile(filePath, "one\ntwo\nthree\nfour\n", "utf8");
+  const current = session();
+
+  await executeFileTool("Read", { file_path: filePath, offset: 1, limit: 2 }, [directory], current);
+  await executeFileTool("Read", { file_path: filePath, offset: 3, limit: 2 }, [directory], current);
+  const cached = await executeFileTool("Read", { file_path: filePath, offset: 1, limit: 4 }, [directory], current);
+
+  assert.equal(cached.output, "Cached Read · reused earlier context");
+  await executeFileTool("Write", { file_path: filePath, content: "all covered\n" }, [directory], current);
+});
+
+test("Read deduplicates repeated empty and beyond-EOF results", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-files-"));
+  const filePath = join(directory, "empty.txt");
+  await writeFile(filePath, "", "utf8");
+  const current = session();
+
+  await executeFileTool("Read", { file_path: filePath }, [directory], current);
+  const emptyCached = await executeFileTool("Read", { file_path: filePath }, [directory], current);
+  const beyondCached = await executeFileTool("Read", { file_path: filePath, offset: 100, limit: 2 }, [directory], current);
+
+  assert.equal(emptyCached.output, "Cached Read · reused earlier context");
+  assert.equal(beyondCached.output, "Cached Read · reused earlier context");
+});
+
 test("partial Read does not authorize an existing-file write", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-files-"));
   const filePath = join(directory, "sample.txt");
@@ -44,7 +89,7 @@ test("partial Read does not authorize an existing-file write", async () => {
   );
 });
 
-test("Write creates nested files and requires a fresh read before overwrite", async () => {
+test("Write creates nested files, requires one full read, and resets Read coverage", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-files-"));
   const filePath = join(directory, "nested", "sample.txt");
   const current = session();
@@ -55,11 +100,14 @@ test("Write creates nested files and requires a fresh read before overwrite", as
   await executeFileTool("Write", { file_path: filePath, content: "updated\n" }, [directory], current);
   assert.equal(await readFile(filePath, "utf8"), "updated\n");
 
+  const afterWrite = await executeFileTool("Read", { file_path: filePath }, [directory], current);
+  assert.equal(afterWrite.resultText, "     1→updated");
+  const cachedAfterWrite = await executeFileTool("Read", { file_path: filePath }, [directory], current);
+  assert.equal(cachedAfterWrite.output, "Cached Read · reused earlier context");
+
   await writeFile(filePath, "external change\n", "utf8");
-  await assert.rejects(
-    executeFileTool("Write", { file_path: filePath, content: "stale write\n" }, [directory], current),
-    /modified since read/,
-  );
+  await executeFileTool("Write", { file_path: filePath, content: "no concurrency checks\n" }, [directory], current);
+  assert.equal(await readFile(filePath, "utf8"), "no concurrency checks\n");
 });
 
 test("Edit requires exact uniqueness and preserves CRLF and file mode", async () => {
@@ -83,6 +131,11 @@ test("Edit requires exact uniqueness and preserves CRLF and file mode", async ()
   assert.match(edited.output, /-two\n-two\n\+three\n\+three/);
   assert.equal(await readFile(filePath, "utf8"), "one\r\nthree\r\nthree\r\n");
   assert.equal((await stat(filePath)).mode & 0o777, 0o755);
+
+  const afterEdit = await executeFileTool("Read", { file_path: filePath }, [directory], current);
+  assert.match(afterEdit.resultText, /1→one\n\s+2→three/);
+  const cachedAfterEdit = await executeFileTool("Read", { file_path: filePath }, [directory], current);
+  assert.equal(cachedAfterEdit.output, "Cached Read · reused earlier context");
 });
 
 test("Edit with an empty old_string creates a missing file", async () => {
