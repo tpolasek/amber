@@ -20,6 +20,7 @@ const commands: CommandDefinition[] = [
 ];
 const markdown = markdownit({ html: false, linkify: true, breaks: false, typographer: false });
 const SESSION_ROUTE = /^\/s\/([a-z0-9.-]+)$/;
+const MAX_INLINE_TOOL_SUBJECT_LENGTH = 80;
 let matchingCommands: CommandDefinition[] = [];
 let selectedCommand = 0;
 let historyPosition = -1;
@@ -60,6 +61,7 @@ const elements = {
 };
 
 void initialize();
+window.setInterval(updateRunningShellStatus, 1_000);
 
 async function initialize(): Promise<void> {
   wireEvents();
@@ -571,23 +573,37 @@ function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
   container.replaceChildren();
   container.hidden = calls.length === 0;
   for (const call of calls) {
+    const subject = toolSubject(call);
+    const compactSubject = shouldInlineToolSubject(subject);
     const card = document.createElement("section");
-    card.className = `tool-call ${call.status}`;
+    card.className = `tool-call ${call.status}${compactSubject ? " compact" : ""}`;
     card.dataset.toolUseId = call.id;
 
     const header = document.createElement("div");
     header.className = "tool-call-header";
+    const title = document.createElement("div");
+    title.className = "tool-call-title";
     const name = document.createElement("strong");
-    name.textContent = call.name;
+    name.textContent = `${call.name}${compactSubject ? ":" : ""}`;
+    title.append(name);
+    if (compactSubject) {
+      const inlineSubject = document.createElement("code");
+      inlineSubject.className = "tool-inline-subject";
+      inlineSubject.textContent = subject;
+      inlineSubject.title = subject;
+      title.append(inlineSubject);
+    }
     const status = document.createElement("span");
     status.className = "tool-call-status";
     status.textContent = toolStatusLabel(call);
-    header.append(name, status);
-
-    const command = document.createElement("code");
-    command.className = "tool-command";
-    command.textContent = toolSubject(call);
-    card.append(header, command);
+    header.append(title, status);
+    card.append(header);
+    if (!compactSubject) {
+      const command = document.createElement("code");
+      command.className = "tool-command";
+      command.textContent = subject;
+      card.append(command);
+    }
 
     const metadata = toolMetadata(call);
     if (metadata) {
@@ -596,7 +612,7 @@ function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
       meta.textContent = metadata;
       card.append(meta);
     }
-    if (call.output) {
+    if (shouldRenderToolOutput(call)) {
       const details = document.createElement("details");
       details.className = "tool-output-details";
       details.dataset.toolUseId = call.id;
@@ -619,6 +635,10 @@ function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
     }
     container.append(card);
   }
+}
+
+function shouldRenderToolOutput(call: ToolCall): boolean {
+  return Boolean(call.output) && !(call.name === "Shell" && call.output === "(no output)");
 }
 
 function shouldExpandToolOutput(call: ToolCall, isDiff: boolean): boolean {
@@ -660,9 +680,18 @@ function diffLineClass(line: string): string {
 }
 
 function toolStatusLabel(call: ToolCall): string {
-  if (call.status === "running") return "RUNNING…";
-  if (call.status === "timed_out") return "TIMED OUT";
-  if (call.status === "complete") return "COMPLETE";
+  if (call.status === "running") {
+    const elapsed = call.name === "Shell" && call.startedAt
+      ? ` ${formatDuration(Math.max(0, Date.now() - Date.parse(call.startedAt)))}`
+      : "…";
+    return `RUNNING${elapsed}`;
+  }
+  if (call.status === "timed_out") {
+    return `TIMED OUT${call.timeoutMs !== undefined ? ` ${formatDuration(call.timeoutMs)}` : ""}`;
+  }
+  if (call.status === "complete") {
+    return call.name === "Shell" && call.durationMs !== undefined ? formatDuration(call.durationMs) : "COMPLETE";
+  }
   if (call.status === "error") return "FAILED";
   return "QUEUED";
 }
@@ -672,13 +701,31 @@ function toolSubject(call: ToolCall): string {
   return call.filePath ?? (typeof call.input.file_path === "string" ? call.input.file_path : "Preparing file path…");
 }
 
+function shouldInlineToolSubject(subject: string): boolean {
+  return subject.length <= MAX_INLINE_TOOL_SUBJECT_LENGTH && !subject.includes("\n");
+}
+
 function toolMetadata(call: ToolCall): string {
   const values: string[] = [];
   if (call.workingDirectory) values.push(call.workingDirectory);
-  if (call.timeoutMs !== undefined) values.push(`timeout ${formatDuration(call.timeoutMs)}`);
-  if (call.durationMs !== undefined) values.push(`ran ${formatDuration(call.durationMs)}`);
-  if (call.exitCode !== undefined && call.exitCode !== null) values.push(`exit ${call.exitCode}`);
+  if (call.name === "Shell" && call.exitCode !== undefined && call.exitCode !== null && call.exitCode !== 0) {
+    if (call.timeoutMs !== undefined) values.push(`timeout ${formatDuration(call.timeoutMs)}`);
+    values.push(`exit ${call.exitCode}`);
+  }
   return values.join(" · ");
+}
+
+function updateRunningShellStatus(): void {
+  const session = state.session;
+  if (!session) return;
+  for (const message of session.messages) {
+    for (const call of message.toolCalls ?? []) {
+      if (call.name !== "Shell" || call.status !== "running" || !call.startedAt) continue;
+      const card = elements.transcript.querySelector<HTMLElement>(`.tool-call[data-tool-use-id="${CSS.escape(call.id)}"]`);
+      const status = card?.querySelector<HTMLElement>(".tool-call-status");
+      if (status) status.textContent = toolStatusLabel(call);
+    }
+  }
 }
 
 function formatDuration(milliseconds: number): string {

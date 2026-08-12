@@ -154,8 +154,11 @@ button { color: inherit; }
 .tool-call.running { border-color: rgba(255,178,26,.62); box-shadow: inset 2px 0 0 var(--amber); }
 .tool-call.error, .tool-call.timed_out { border-color: rgba(255,104,77,.5); }
 .tool-call-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 10px; border-bottom: 1px solid rgba(255,178,26,.12); color: #b99b62; font-size: 9px; letter-spacing: .08em; }
+.tool-call.compact .tool-call-header { border-bottom: 0; }
+.tool-call-title { min-width: 0; display: flex; align-items: baseline; gap: 6px; }
 .tool-call-header strong { color: var(--amber-hot); font-weight: 600; }
-.tool-call-status { color: #75613d; }
+.tool-inline-subject { min-width: 0; overflow: hidden; color: #d9b970; font: 10px/1.3 var(--mono); letter-spacing: 0; text-overflow: ellipsis; white-space: nowrap; }
+.tool-call-status { flex: none; color: #75613d; }
 .tool-call.running .tool-call-status { color: var(--amber); animation: blink 1s steps(1) infinite; }
 .tool-call.complete .tool-call-status { color: #9eb36a; }
 .tool-call.error .tool-call-status, .tool-call.timed_out .tool-call-status { color: #ff937c; }
