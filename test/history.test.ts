@@ -40,7 +40,8 @@ test("provider history uses the active summary and messages after the compaction
 
   assert.equal(history.length, 2);
   assert.equal(history[0]?.role, "user");
-  assert.match(history[0]?.content ?? "", /generated summary[\s\S]*first version, which is complete/);
+  assert.equal(typeof history[0]?.content, "string");
+  assert.match(history[0]?.content as string, /generated summary[\s\S]*first version, which is complete/);
   assert.deepEqual(history[1], { role: "user", content: "Now add tests" });
 });
 
@@ -54,4 +55,24 @@ test("provider history safely falls back to raw messages when a compaction bound
     createdAt: message.createdAt,
     coveredMessageCount: 1,
   }), [{ role: "user", content: "Keep the raw history" }]);
+});
+
+test("provider history returns signed thinking blocks unchanged", () => {
+  const message: Message = {
+    id: "assistant",
+    role: "assistant",
+    content: "The answer is 42.",
+    thinking: "Check the arithmetic carefully.",
+    thinkingSignature: "opaque-provider-signature",
+    createdAt: new Date().toISOString(),
+    status: "complete",
+  };
+
+  assert.deepEqual(buildProviderHistory([message]), [{
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "Check the arithmetic carefully.", signature: "opaque-provider-signature" },
+      { type: "text", text: "The answer is 42." },
+    ],
+  }]);
 });

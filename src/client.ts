@@ -1,5 +1,5 @@
 interface TokenUsage { input: number; output: number }
-interface Message { id: string; role: "user" | "assistant"; content: string; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "compact-banner"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage }
+interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; streamingThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "compact-banner"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage }
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
 interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
@@ -226,7 +226,15 @@ async function sendMessage(): Promise<void> {
       } else if (event === "delta") {
         const message = session.messages.at(-1);
         if (message?.role === "assistant") {
+          message.streamingThinking = false;
           message.content += (data as { text: string }).text;
+          updateMessage(assistantElement, message);
+        }
+      } else if (event === "thinking_delta") {
+        const message = session.messages.at(-1);
+        if (message?.role === "assistant") {
+          message.streamingThinking = true;
+          message.thinking = (message.thinking ?? "") + (data as { thinking: string }).thinking;
           updateMessage(assistantElement, message);
         }
       } else if (event === "done") {
@@ -442,6 +450,7 @@ function appendMessage(message: Message, before: HTMLElement | null = null): HTM
     <div class="message-rail"><span class="role-glyph"></span><span class="rail-line"></span></div>
     <div class="message-main">
       <header><span class="role-name"></span><span class="message-time"></span><span class="message-usage"></span></header>
+      <details class="message-thinking"><summary><span>Thinking</span><span class="thinking-status"></span></summary><div class="thinking-content"></div></details>
       <div class="message-content"></div>
     </div>`;
   if (before) elements.transcript.insertBefore(article, before);
@@ -452,6 +461,7 @@ function appendMessage(message: Message, before: HTMLElement | null = null): HTM
 
 function updateMessage(element: HTMLElement | null, message: Message): void {
   if (!element) return;
+  const wasStreaming = element.classList.contains("streaming");
   element.classList.toggle("streaming", message.status === "streaming");
   element.classList.toggle("error", message.status === "error");
   requiredWithin(element, ".role-glyph").textContent = message.role === "user" ? ">" : "●";
@@ -459,6 +469,21 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
   requiredWithin(element, ".message-time").textContent = formatTime(message.createdAt);
   requiredWithin(element, ".message-usage").textContent = message.usage ? `${message.usage.input} in / ${message.usage.output} out` : "";
   const content = requiredWithin(element, ".message-content");
+  const thinking = requiredWithin(element, ".message-thinking") as HTMLDetailsElement;
+  const thinkingContent = requiredWithin(thinking, ".thinking-content");
+  const thinkingStatus = requiredWithin(thinking, ".thinking-status");
+  const hasThinking = Boolean(message.thinking);
+  thinking.hidden = !hasThinking;
+  if (hasThinking) {
+    const wasOpen = thinking.open;
+    thinkingContent.innerHTML = markdown.render(message.thinking ?? "")
+      + (message.status === "streaming" && message.streamingThinking ? '<span class="cursor-block"></span>' : "");
+    thinking.open = message.status === "streaming" ? true : wasStreaming ? false : wasOpen;
+    const thinkingTokens = Math.ceil((message.thinking?.length ?? 0) / 4).toLocaleString();
+    thinkingStatus.textContent = message.status === "streaming"
+      ? `≈${thinkingTokens} tokens · streaming`
+      : `≈${thinkingTokens} tokens · click to expand`;
+  }
   if (message.kind === "fork-banner") {
     const linkedSessionId = message.sourceSessionId ?? message.forkedSessionId;
     const label = message.sourceSessionId ? "Forked from session: " : "Forked to session: ";

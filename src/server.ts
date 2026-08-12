@@ -128,6 +128,11 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       if (event.type === "delta") {
         assistantMessage.content += event.text;
         sendEvent(response, "delta", { text: event.text });
+      } else if (event.type === "thinking_delta") {
+        assistantMessage.thinking = (assistantMessage.thinking ?? "") + event.thinking;
+        sendEvent(response, "thinking_delta", { thinking: event.thinking });
+      } else if (event.type === "thinking_signature_delta") {
+        assistantMessage.thinkingSignature = (assistantMessage.thinkingSignature ?? "") + event.signature;
       } else if (event.type === "usage") {
         usage = { ...usage, ...event.usage };
       }

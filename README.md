@@ -16,6 +16,7 @@ Configure an Anthropic-compatible backend, then open `http://127.0.0.1:3000`:
 export ANTHROPIC_AUTH_TOKEN="your-key"
 export ANTHROPIC_BASE_URL="https://api.z.ai/api/anthropic"
 export ANTHROPIC_MODEL="glm-4.7" # optional for Z.AI
+# export ANTHROPIC_THINKING_BUDGET_TOKENS=32768 # Z.AI default; set 0 to disable
 npm start
 ```
 
@@ -27,6 +28,7 @@ Environment variables are documented in `.env.example`. `.env` files are intenti
 - Agent responses are rendered inline with `markdown-it`, including tables, fenced code, lists, links, blockquotes, and other CommonMark formatting. Raw HTML is disabled.
 - `src/server.ts` — static server and small JSON/SSE API built on `node:http`.
 - `src/provider.ts` — provider boundary for Anthropic-compatible APIs. Future tool-use, MCP, approvals, and alternative providers can be added behind this interface.
+- Anthropic-compatible text and thinking deltas stream live. Thinking and its opaque signature are stored separately, returned unchanged in subsequent model history, shown expanded while generating, and collapsed into a reopenable disclosure when the response completes.
 - `src/store.ts` — atomic JSON persistence under `data/sessions`; sessions use three-word IDs drawn from the bundled [Basic English 2000 word list](https://people.sc.fsu.edu/~jburkardt/datasets/words/basic_english_2000.txt) and durable `/s/:sessionId` URLs.
 
 ## Terminal commands

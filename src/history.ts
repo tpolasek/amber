@@ -17,7 +17,15 @@ export function buildProviderHistory(
   const activeMessages = boundaryIndex >= 0 ? messages.slice(boundaryIndex + 1) : messages;
   const history = activeMessages
     .filter((message) => message.id !== excludedMessageId && message.status === "complete" && isModelMessage(message))
-    .map(({ role, content }) => ({ role, content }));
+    .map((message): ProviderMessage => ({
+      role: message.role,
+      content: message.role === "assistant" && message.thinking && message.thinkingSignature
+        ? [
+            { type: "thinking", thinking: message.thinking, signature: message.thinkingSignature },
+            ...(message.content ? [{ type: "text" as const, text: message.content }] : []),
+          ]
+        : message.content,
+    }));
 
   if (compaction && boundaryIndex >= 0) {
     history.unshift({ role: "user", content: `${SUMMARY_PREFIX}${compaction.summary}` });

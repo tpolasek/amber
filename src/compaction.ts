@@ -22,7 +22,12 @@ export async function generateCompactionSummary(
 }
 
 export function estimateHistoryTokens(history: ProviderMessage[]): number {
-  return history.reduce((total, message) => total + Math.ceil(message.content.length / 4) + 4, 0);
+  return history.reduce((total, message) => {
+    const characters = typeof message.content === "string"
+      ? message.content.length
+      : message.content.reduce((sum, block) => sum + (block.type === "thinking" ? block.thinking.length : block.text.length), 0);
+    return total + Math.ceil(characters / 4) + 4;
+  }, 0);
 }
 
 export function formatCompactionBanner(beforeTokens: number, afterTokens: number, coveredMessageCount: number): string {
