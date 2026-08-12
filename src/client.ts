@@ -210,7 +210,6 @@ async function sendMessage(): Promise<void> {
   resetPromptHistory();
   resizePrompt();
   setStreaming(true);
-  scrollToBottom(false);
   state.controller = new AbortController();
   let assistantElement: HTMLElement | null = null;
   let assistantMessage: Message | null = null;
@@ -270,7 +269,7 @@ async function sendMessage(): Promise<void> {
         if (payload.message) updateMessage(assistantElement, payload.message);
         notify(payload.error);
       }
-      scrollToBottom();
+      scrollTranscriptToBottom();
     });
   } catch (error) {
     if (!(error instanceof DOMException && error.name === "AbortError")) notify(messageFrom(error));
@@ -315,7 +314,6 @@ async function runCommand(command: string): Promise<void> {
   resetPromptHistory();
   resizePrompt();
   setBusy(true);
-  scrollToBottom(false);
   try {
     const result = await api<{ command: "add-dir" | "cwd" | "context" | "clear" | "compact" | "fork" | "name"; session: Session; directory?: string; cwdChanged?: boolean; previousSessionId?: string }>(
       `/api/sessions/${session.id}/commands`,
@@ -337,7 +335,6 @@ async function runCommand(command: string): Promise<void> {
       notify(`Session named · ${result.session.title}`);
     }
     renderSession();
-    scrollToBottom(false);
     await loadSessionList();
   } catch (error) {
     notify(messageFrom(error));
@@ -368,7 +365,6 @@ async function runCompactCommand(command: string): Promise<void> {
   session.messages.push(progressMessage);
   const progressElement = appendMessage(progressMessage);
   elements.emptyState.hidden = true;
-  scrollToBottom(false);
 
   let streamError = "";
   try {
@@ -394,7 +390,6 @@ async function runCompactCommand(command: string): Promise<void> {
       } else if (event === "error") {
         streamError = (data as { error: string }).error;
       }
-      scrollToBottom();
     });
     if (streamError) throw new Error(streamError);
   } catch (error) {
@@ -426,7 +421,6 @@ function renderSession(): void {
   resetPromptHistory();
   closeHistorySearch(false);
   renderHeader();
-  scrollToBottom(false);
 }
 
 function renderHeader(): void {
@@ -886,7 +880,6 @@ function openHistorySearch(): void {
     moveHistorySelection(1);
   }
   elements.historyQuery.focus();
-  scrollToBottom(false);
 }
 
 function updateHistorySearch(): void {
@@ -951,12 +944,9 @@ function setPromptValue(value: string): void {
   elements.prompt.setSelectionRange(value.length, value.length);
 }
 
-function scrollToBottom(smooth = true): void {
+function scrollTranscriptToBottom(): void {
   requestAnimationFrame(() => {
-    elements.transcript.scrollTo({
-      top: elements.transcript.scrollHeight,
-      behavior: smooth && !state.streaming ? "smooth" : "auto",
-    });
+    elements.transcript.scrollTop = elements.transcript.scrollHeight;
   });
 }
 
