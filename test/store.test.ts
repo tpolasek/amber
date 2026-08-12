@@ -49,11 +49,18 @@ test("clears a session in place", async () => {
   session.messages.push({
     id: "message-1", role: "user", content: "Keep me", createdAt: new Date().toISOString(), status: "complete",
   });
+  session.compaction = {
+    summary: "Keep me",
+    throughMessageId: "message-1",
+    createdAt: new Date().toISOString(),
+    coveredMessageCount: 1,
+  };
   await store.save(session);
 
   const cleared = await store.clear(session);
   assert.equal(cleared.id, session.id);
   assert.deepEqual(cleared.messages, []);
+  assert.equal(cleared.compaction, undefined);
   assert.deepEqual((await store.get(session.id))?.messages, []);
 });
 
@@ -80,6 +87,12 @@ test("forks a session with independent history and a provenance banner", async (
   original.messages.push({
     id: "message-1", role: "user", content: "Keep me", createdAt: new Date().toISOString(), status: "complete",
   });
+  original.compaction = {
+    summary: "The user asked to be kept.",
+    throughMessageId: "message-1",
+    createdAt: new Date().toISOString(),
+    coveredMessageCount: 1,
+  };
   await store.save(original);
   const banner = {
     id: "banner-1",
@@ -94,9 +107,14 @@ test("forks a session with independent history and a provenance banner", async (
   const fork = await store.createFork(original, banner);
   assert.notEqual(fork.id, original.id);
   assert.deepEqual(fork.messages, [original.messages[0], banner]);
+  assert.deepEqual(fork.compaction, original.compaction);
+  assert.notEqual(fork.compaction, original.compaction);
   fork.messages[0]!.content = "Changed only in the fork";
+  fork.compaction!.summary = "Changed only in the fork";
   assert.equal(original.messages[0]?.content, "Keep me");
+  assert.equal(original.compaction.summary, "The user asked to be kept.");
   assert.deepEqual((await store.get(fork.id))?.messages, [original.messages[0], banner]);
+  assert.equal((await store.get(fork.id))?.compaction?.summary, "The user asked to be kept.");
 });
 
 test("rejects invalid session identifiers", async () => {

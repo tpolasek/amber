@@ -12,10 +12,17 @@ export interface Message {
   content: string;
   createdAt: string;
   status: MessageStatus;
-  kind?: "chat" | "command" | "fork-banner";
+  kind?: "chat" | "command" | "fork-banner" | "compact-banner";
   sourceSessionId?: string;
   forkedSessionId?: string;
   usage?: TokenUsage;
+}
+
+export interface SessionCompaction {
+  summary: string;
+  throughMessageId: string;
+  createdAt: string;
+  coveredMessageCount: number;
 }
 
 export interface Session {
@@ -24,6 +31,7 @@ export interface Session {
   createdAt: string;
   updatedAt: string;
   messages: Message[];
+  compaction?: SessionCompaction;
 }
 
 export interface SessionSummary {

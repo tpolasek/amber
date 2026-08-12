@@ -31,6 +31,7 @@ export class SessionStore {
 
   async clear(session: Session): Promise<Session> {
     session.messages = [];
+    delete session.compaction;
     await this.save(session);
     return session;
   }
@@ -64,6 +65,7 @@ export class SessionStore {
       createdAt: now,
       updatedAt: now,
       messages: [...structuredClone(session.messages), banner],
+      ...(session.compaction ? { compaction: structuredClone(session.compaction) } : {}),
     };
     await this.save(fork);
     return fork;

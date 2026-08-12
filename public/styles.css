@@ -144,6 +144,10 @@ button { color: inherit; }
 .fork-banner .message-content::before { content: "◆ "; }
 .fork-banner .message-content a { color: #211900; text-decoration-color: rgba(33,25,0,.55); font-weight: 800; }
 .fork-banner .message-content a:hover { color: #000; }
+.compact-banner { display: block; padding-top: 16px; }
+.compact-banner .message-rail, .compact-banner header { display: none; }
+.compact-banner .message-content { padding: 9px 13px; border: 1px solid #c99524; background: #3b2b0b; color: #ffd66f; font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+.compact-banner .message-content::before { content: "◇ "; }
 .cursor-block { display: inline-block; width: 7px; height: 13px; margin-left: 3px; vertical-align: -2px; background: var(--amber); animation: blink .8s steps(1) infinite; box-shadow: 0 0 7px var(--amber); }
 
 .composer-shell { position: sticky; bottom: 0; z-index: 6; padding: 14px 24px 18px; background: var(--surface); }

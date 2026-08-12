@@ -1,15 +1,17 @@
 interface TokenUsage { input: number; output: number }
-interface Message { id: string; role: "user" | "assistant"; content: string; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage }
-interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[] }
+interface Message { id: string; role: "user" | "assistant"; content: string; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "compact-banner"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage }
+interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
+interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface Config { provider: string; model: string; mode: "live" }
-interface CommandDefinition { name: "/context" | "/clear" | "/fork" | "/name"; description: string }
+interface CommandDefinition { name: "/context" | "/clear" | "/compact" | "/fork" | "/name"; description: string }
 interface MarkdownRenderer { render(source: string): string }
 declare const markdownit: (options: { html: boolean; linkify: boolean; breaks: boolean; typographer: boolean }) => MarkdownRenderer;
 
 const commands: CommandDefinition[] = [
   { name: "/context", description: "Show token usage for the current model context" },
   { name: "/clear", description: "Erase this session's conversation and model context" },
+  { name: "/compact", description: "Summarize model context while keeping the full transcript" },
   { name: "/fork", description: "Fork this session with its complete history" },
   { name: "/name", description: "Generate a session name, or pass a title" },
 ];
@@ -252,6 +254,7 @@ async function sendMessage(): Promise<void> {
 async function runCommand(command: string): Promise<void> {
   const session = state.session;
   if (!session || state.streaming) return;
+  if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/compact") return runCompactCommand(command);
   elements.prompt.value = "";
   hideCommandMenu();
   resetPromptHistory();
@@ -259,13 +262,15 @@ async function runCommand(command: string): Promise<void> {
   setBusy(true);
   scrollToBottom(false);
   try {
-    const result = await api<{ command: "context" | "clear" | "fork" | "name"; session: Session; previousSessionId?: string }>(
+    const result = await api<{ command: "context" | "clear" | "compact" | "fork" | "name"; session: Session; previousSessionId?: string }>(
       `/api/sessions/${session.id}/commands`,
       { method: "POST", body: JSON.stringify({ command }) },
     );
     state.session = result.session;
     if (result.command === "clear") {
       notify("Session cleared");
+    } else if (result.command === "compact") {
+      notify("Context compacted · full history retained");
     } else if (result.command === "fork") {
       history.pushState({}, "", `/s/${result.session.id}`);
       notify(`Session forked · ${result.session.id}`);
@@ -279,6 +284,67 @@ async function runCommand(command: string): Promise<void> {
     notify(messageFrom(error));
   } finally {
     setBusy(false);
+    elements.prompt.focus();
+  }
+}
+
+async function runCompactCommand(command: string): Promise<void> {
+  const session = state.session;
+  if (!session || state.streaming) return;
+  elements.prompt.value = "";
+  hideCommandMenu();
+  resetPromptHistory();
+  resizePrompt();
+  setStreaming(true);
+  state.controller = new AbortController();
+
+  const progressMessage: Message = {
+    id: `compact-progress-${Date.now()}`,
+    role: "assistant",
+    content: "Compacting model context…",
+    createdAt: new Date().toISOString(),
+    status: "streaming",
+    kind: "compact-banner",
+  };
+  session.messages.push(progressMessage);
+  const progressElement = appendMessage(progressMessage);
+  elements.emptyState.hidden = true;
+  scrollToBottom(false);
+
+  let streamError = "";
+  try {
+    const response = await fetch(`/api/sessions/${session.id}/commands`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ command }),
+      signal: state.controller.signal,
+    });
+    if (!response.ok) throw new Error(await responseError(response));
+    if (!response.body) throw new Error("Server returned no stream");
+
+    await readEventStream(response.body, (event, data) => {
+      if (event === "progress") {
+        const generatedCharacters = (data as { generatedCharacters: number }).generatedCharacters;
+        const generatedTokens = Math.ceil(generatedCharacters / 4);
+        progressMessage.content = `Compacting model context… ≈${generatedTokens.toLocaleString()} tokens generated`;
+        updateMessage(progressElement, progressMessage);
+      } else if (event === "done") {
+        state.session = (data as { command: "compact"; session: Session }).session;
+        renderSession();
+        notify("Context compacted · full history retained");
+      } else if (event === "error") {
+        streamError = (data as { error: string }).error;
+      }
+      scrollToBottom();
+    });
+    if (streamError) throw new Error(streamError);
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === "AbortError")) notify(messageFrom(error));
+    await refreshCurrentSession();
+  } finally {
+    state.controller = null;
+    setStreaming(false);
+    await loadSessionList();
     elements.prompt.focus();
   }
 }
@@ -363,7 +429,13 @@ async function deleteSession(summary: Summary): Promise<void> {
 
 function appendMessage(message: Message, before: HTMLElement | null = null): HTMLElement {
   const article = document.createElement("article");
-  const messageClass = message.kind === "command" ? " command-message" : message.kind === "fork-banner" ? " fork-banner" : "";
+  const messageClass = message.kind === "command"
+    ? " command-message"
+    : message.kind === "fork-banner"
+      ? " fork-banner"
+      : message.kind === "compact-banner"
+        ? " compact-banner"
+        : "";
   article.className = `message ${message.role}${messageClass}`;
   article.dataset.messageId = message.id;
   article.innerHTML = `
@@ -398,6 +470,15 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
       content.append(link);
     } else {
       content.replaceChildren(document.createTextNode(message.content));
+    }
+    return;
+  }
+  if (message.kind === "compact-banner") {
+    content.replaceChildren(document.createTextNode(message.content));
+    if (message.status === "streaming") {
+      const cursor = document.createElement("span");
+      cursor.className = "cursor-block";
+      content.append(cursor);
     }
     return;
   }

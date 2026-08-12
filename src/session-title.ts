@@ -1,13 +1,14 @@
 import { buildProviderHistory } from "./history.js";
 import { SESSION_TITLE_PROMPT } from "./prompts.js";
-import type { LlmProvider, Message } from "./types.js";
+import type { LlmProvider, Message, SessionCompaction } from "./types.js";
 
 export async function generateSessionTitle(
   provider: LlmProvider,
   messages: Message[],
   signal: AbortSignal,
+  compaction?: SessionCompaction,
 ): Promise<string> {
-  const history = buildProviderHistory(messages);
+  const history = buildProviderHistory(messages, undefined, compaction);
   history.push({ role: "user", content: SESSION_TITLE_PROMPT });
 
   let output = "";

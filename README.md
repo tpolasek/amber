@@ -33,7 +33,8 @@ Environment variables are documented in `.env.example`. `.env` files are intenti
 
 - `/context` reports the latest measured active context, input/output usage, session output total, and model-message count. Command output is persisted in the transcript but excluded from model context.
 - `/clear` permanently erases the active session's transcript and model context while keeping its existing ID and URL. Use `/fork` first when the conversation should be preserved.
-- `/fork` creates a new session with a copy of the complete transcript. It appends reciprocal provenance banners linking the fork to its source and the source to its fork. Fork banners persist in chat history but are excluded from model context.
+- `/compact` streams visible progress while replacing earlier model context with an LLM-generated continuation summary and retaining the complete transcript for browsing. Its persisted banner reports the estimated before/after context size and reduction; estimates use a provider-independent character heuristic. The summary and boundary are stored as session metadata, the banner is excluded from model context, and the summarization exchange is not added as chat messages.
+- `/fork` creates a new session with a copy of the complete transcript and its active compacted context, if present. It appends reciprocal provenance banners linking the fork to its source and the source to its fork. Fork banners persist in chat history but are excluded from model context.
 - `/name <session name>` changes the active session's title as shown in the session archive. Running `/name` without a title asks the configured LLM to generate one from the conversation; the naming prompt and response are not saved in chat history.
 
 ## API
@@ -43,6 +44,6 @@ Environment variables are documented in `.env.example`. `.env` files are intenti
 - `GET /api/sessions/:id` restores a transcript.
 - `DELETE /api/sessions/:id` permanently deletes a session.
 - `POST /api/sessions/:id/messages` appends a user message and streams agent events as server-sent events.
-- `POST /api/sessions/:id/commands` runs a supported local slash command without invoking the model.
+- `POST /api/sessions/:id/commands` runs a supported slash command. Bare `/name` and `/compact` invoke the configured model without recording those command exchanges as chat messages.
 
 This first version is intended for local, single-user use and binds to `127.0.0.1` by default. Add authentication and a database-backed `SessionStore` before exposing it publicly.

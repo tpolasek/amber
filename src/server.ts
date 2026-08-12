@@ -7,6 +7,7 @@ import { SessionStore } from "./store.js";
 import { createProvider } from "./provider.js";
 import { buildProviderHistory, isModelMessage } from "./history.js";
 import { generateSessionTitle } from "./session-title.js";
+import { estimateHistoryTokens, formatCompactionBanner, generateCompactionSummary } from "./compaction.js";
 import type { Message, TokenUsage } from "./types.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
@@ -121,7 +122,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   });
 
   try {
-    const history = buildProviderHistory(session.messages, assistantMessage.id);
+    const history = buildProviderHistory(session.messages, assistantMessage.id, session.compaction);
     let usage: Partial<TokenUsage> = {};
     for await (const event of provider.stream(history, controller.signal)) {
       if (event.type === "delta") {
@@ -168,7 +169,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     request.once("aborted", () => controller.abort());
     activeSessions.add(sessionId);
     try {
-      const title = await generateSessionTitle(provider, session.messages, controller.signal);
+      const title = await generateSessionTitle(provider, session.messages, controller.signal, session.compaction);
       return json(response, 200, { command: "name", session: await store.rename(session, title) });
     } catch (error) {
       return json(response, 502, { error: errorMessage(error) });
@@ -181,6 +182,69 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
 
   if (command === "/clear") {
     return json(response, 200, { command: "clear", session: await store.clear(session) });
+  }
+  if (command === "/compact") {
+    const previousBoundary = session.compaction
+      ? session.messages.findIndex((message) => message.id === session.compaction?.throughMessageId)
+      : -1;
+    const newModelMessages = session.messages
+      .slice(previousBoundary + 1)
+      .filter((message) => message.status === "complete" && isModelMessage(message));
+    const throughMessage = newModelMessages.at(-1);
+    if (!throughMessage) {
+      return json(response, 400, { error: session.compaction ? "No new conversation to compact" : "No conversation to compact" });
+    }
+
+    const controller = new AbortController();
+    request.once("aborted", () => controller.abort());
+    response.on("close", () => {
+      if (!response.writableEnded) controller.abort();
+    });
+    activeSessions.add(sessionId);
+    response.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    });
+    sendEvent(response, "start", { message: "Compacting model context…" });
+    try {
+      const history = buildProviderHistory(session.messages, undefined, session.compaction);
+      const beforeTokens = estimateHistoryTokens(history);
+      const summary = await generateCompactionSummary(provider, history, controller.signal, (generatedCharacters) => {
+        if (!response.destroyed && !response.writableEnded) {
+          sendEvent(response, "progress", { generatedCharacters });
+        }
+      });
+      const now = new Date().toISOString();
+      const coveredMessageCount = session.messages
+        .slice(0, session.messages.findIndex((message) => message.id === throughMessage.id) + 1)
+        .filter((message) => message.status === "complete" && isModelMessage(message)).length;
+      const compaction = {
+        summary,
+        throughMessageId: throughMessage.id,
+        createdAt: now,
+        coveredMessageCount,
+      };
+      const afterTokens = estimateHistoryTokens(buildProviderHistory(session.messages, undefined, compaction));
+      session.compaction = compaction;
+      session.messages.push({
+        id: randomUUID(),
+        role: "assistant",
+        content: formatCompactionBanner(beforeTokens, afterTokens, coveredMessageCount),
+        createdAt: now,
+        status: "complete",
+        kind: "compact-banner",
+      });
+      await store.save(session);
+      if (!response.destroyed && !response.writableEnded) sendEvent(response, "done", { command: "compact", session });
+    } catch (error) {
+      if (!response.destroyed && !response.writableEnded) sendEvent(response, "error", { error: errorMessage(error) });
+    } finally {
+      activeSessions.delete(sessionId);
+      response.end();
+    }
+    return;
   }
   if (command === "/fork") {
     const now = new Date().toISOString();
@@ -209,6 +273,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
   }
   if (command === "/context") {
     const chatMessages = session.messages.filter(isModelMessage);
+    const activeHistory = buildProviderHistory(session.messages, undefined, session.compaction);
     const assistantMessages = chatMessages.filter((message) => message.role === "assistant" && message.status === "complete");
     const latestUsage = assistantMessages.slice().reverse().find((message) => message.usage)?.usage;
     const totalInput = assistantMessages.reduce((total, message) => total + (message.usage?.input ?? 0), 0);
@@ -230,6 +295,8 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
         `- Session input: **${totalInput.toLocaleString()} tokens**`,
         `- Session output: **${totalOutput.toLocaleString()} tokens**`,
         `- Model messages: **${chatMessages.length}**`,
+        `- Active provider messages: **${activeHistory.length}**${session.compaction ? ` (summary + messages after compaction)` : ""}`,
+        ...(session.compaction ? [`- Compacted messages: **${session.compaction.coveredMessageCount}**`] : []),
       ].join("\n"),
       createdAt: now,
       status: "complete",
