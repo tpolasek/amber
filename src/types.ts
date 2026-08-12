@@ -8,6 +8,11 @@ export interface TokenUsage {
 
 export type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
 
+export interface ToolStatusDisplay {
+  text: string;
+  appendElapsed?: boolean;
+}
+
 export interface ToolCall {
   id: string;
   name: string;
@@ -21,6 +26,7 @@ export interface ToolCall {
   workingDirectory?: string;
   timeoutMs?: number;
   filePath?: string;
+  statusDisplay?: ToolStatusDisplay;
 }
 
 export interface Message {
@@ -55,6 +61,8 @@ export interface Session {
   messages: Message[];
   compaction?: SessionCompaction;
   directories?: string[];
+  cwd?: string;
+  addDirInitialized?: boolean;
   fileReadState?: Record<string, FileReadState>;
 }
 

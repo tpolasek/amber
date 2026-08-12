@@ -68,6 +68,8 @@ export class SessionStore {
       messages: [...structuredClone(session.messages), banner],
       ...(session.compaction ? { compaction: structuredClone(session.compaction) } : {}),
       ...(session.directories ? { directories: structuredClone(session.directories) } : {}),
+      ...(session.cwd ? { cwd: session.cwd } : {}),
+      ...(session.addDirInitialized !== undefined ? { addDirInitialized: session.addDirInitialized } : {}),
       ...(session.fileReadState ? { fileReadState: structuredClone(session.fileReadState) } : {}),
     };
     await this.save(fork);

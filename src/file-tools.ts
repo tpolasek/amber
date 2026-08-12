@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
-import { basename, dirname, extname, isAbsolute, join, relative } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { createTwoFilesPatch, FILE_HEADERS_ONLY } from "diff";
 import type { FileReadState, Session, ToolDefinition } from "./types.js";
 
@@ -16,11 +17,11 @@ const UNSUPPORTED_READ_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".
 
 export const READ_TOOL: ToolDefinition = {
   name: "Read",
-  description: `Read a text file from the local filesystem. The file_path must be absolute. By default this reads up to ${MAX_LINES_TO_READ} lines from line 1. Results use cat -n style line numbers. Use offset and limit for large files. Read files, not directories. Previously returned ranges remain in conversation context; do not reread them. A redundant Read returns only a short cache reminder.`,
+  description: `Read a text file from the local filesystem. Relative file_path values resolve from the session current working directory; absolute and ~/ paths are also accepted. By default this reads up to ${MAX_LINES_TO_READ} lines from line 1. Results use cat -n style line numbers. Use offset and limit for large files. Read files, not directories. Previously returned ranges remain in conversation context; do not reread them. A redundant Read returns only a short cache reminder.`,
   input_schema: {
     type: "object",
     properties: {
-      file_path: { type: "string", description: "Absolute path to the file to read." },
+      file_path: { type: "string", description: "File path, absolute or relative to the session current working directory." },
       offset: { type: "integer", minimum: 1, description: "1-based line number to start reading from." },
       limit: { type: "integer", minimum: 1, maximum: MAX_LINES_TO_READ, description: "Maximum lines to read." },
     },
@@ -31,11 +32,11 @@ export const READ_TOOL: ToolDefinition = {
 
 export const WRITE_TOOL: ToolDefinition = {
   name: "Write",
-  description: "Write a file to the local filesystem. The file_path must be absolute. Existing files must first be fully read once with Read so their contents are available in conversation context; repeated Reads are unnecessary. Prefer Edit for small changes; Write replaces the complete file. A successful Write invalidates cached Read coverage for this file, so a later inspection may Read it once again.",
+  description: "Write a file to the local filesystem. Relative file_path values resolve from the session current working directory; absolute and ~/ paths are also accepted. Existing files must first be fully read once with Read so their contents are available in conversation context; repeated Reads are unnecessary. Prefer Edit for small changes; Write replaces the complete file. A successful Write invalidates cached Read coverage for this file, so a later inspection may Read it once again.",
   input_schema: {
     type: "object",
     properties: {
-      file_path: { type: "string", description: "Absolute path to create or overwrite." },
+      file_path: { type: "string", description: "Path to create or overwrite, absolute or relative to the session current working directory." },
       content: { type: "string", description: "Complete new file content." },
     },
     required: ["file_path", "content"],
@@ -45,11 +46,11 @@ export const WRITE_TOOL: ToolDefinition = {
 
 export const EDIT_TOOL: ToolDefinition = {
   name: "Edit",
-  description: "Perform an exact string replacement in a text file. An existing file must first be fully read once with Read so its contents are available in conversation context; do not repeatedly Read it before editing. old_string must be unique unless replace_all is true. Never include Read's line-number prefix in old_string. A successful Edit invalidates cached Read coverage for this file, so a later inspection may Read it once again.",
+  description: "Perform an exact string replacement in a text file. Relative file_path values resolve from the session current working directory; absolute and ~/ paths are also accepted. An existing file must first be fully read once with Read so its contents are available in conversation context; do not repeatedly Read it before editing. old_string must be unique unless replace_all is true. Never include Read's line-number prefix in old_string. A successful Edit invalidates cached Read coverage for this file, so a later inspection may Read it once again.",
   input_schema: {
     type: "object",
     properties: {
-      file_path: { type: "string", description: "Absolute path to the file to modify." },
+      file_path: { type: "string", description: "File path to modify, absolute or relative to the session current working directory." },
       old_string: { type: "string", description: "Exact text to replace." },
       new_string: { type: "string", description: "Replacement text; must differ from old_string." },
       replace_all: { type: "boolean", description: "Replace every occurrence. Defaults to false." },
@@ -72,19 +73,22 @@ export async function executeFileTool(
   input: Record<string, unknown>,
   allowedDirectories: string[],
   session: Session,
+  currentDirectory = allowedDirectories[0],
 ): Promise<FileToolResult> {
-  if (name === READ_TOOL.name) return readTextFile(input, allowedDirectories, session);
-  if (name === WRITE_TOOL.name) return writeTextFile(input, allowedDirectories, session);
-  if (name === EDIT_TOOL.name) return editTextFile(input, allowedDirectories, session);
+  if (!currentDirectory) throw new Error("No current working directory is configured");
+  if (name === READ_TOOL.name) return readTextFile(input, allowedDirectories, currentDirectory, session);
+  if (name === WRITE_TOOL.name) return writeTextFile(input, allowedDirectories, currentDirectory, session);
+  if (name === EDIT_TOOL.name) return editTextFile(input, allowedDirectories, currentDirectory, session);
   throw new Error(`Unknown file tool: ${name}`);
 }
 
 async function readTextFile(
   input: Record<string, unknown>,
   allowedDirectories: string[],
+  currentDirectory: string,
   session: Session,
 ): Promise<FileToolResult> {
-  const requestedPath = requiredAbsolutePath(input.file_path);
+  const requestedPath = resolvedFilePath(input.file_path, currentDirectory);
   assertSupportedTextPath(requestedPath);
   if (isBlockedDevice(requestedPath)) throw new Error(`Cannot read '${requestedPath}': this device file would block or produce infinite output.`);
   const filePath = await resolveExistingPath(requestedPath, allowedDirectories);
@@ -129,9 +133,10 @@ async function readTextFile(
 async function writeTextFile(
   input: Record<string, unknown>,
   allowedDirectories: string[],
+  currentDirectory: string,
   session: Session,
 ): Promise<FileToolResult> {
-  const requestedPath = requiredAbsolutePath(input.file_path);
+  const requestedPath = resolvedFilePath(input.file_path, currentDirectory);
   assertSupportedTextPath(requestedPath);
   if (typeof input.content !== "string") throw new Error("Write requires string content");
   const { filePath, existing } = await resolveWritePath(requestedPath, allowedDirectories);
@@ -154,9 +159,10 @@ async function writeTextFile(
 async function editTextFile(
   input: Record<string, unknown>,
   allowedDirectories: string[],
+  currentDirectory: string,
   session: Session,
 ): Promise<FileToolResult> {
-  const requestedPath = requiredAbsolutePath(input.file_path);
+  const requestedPath = resolvedFilePath(input.file_path, currentDirectory);
   assertSupportedTextPath(requestedPath);
   if (typeof input.old_string !== "string" || typeof input.new_string !== "string") {
     throw new Error("Edit requires string old_string and new_string values");
@@ -318,10 +324,11 @@ function assertAllowed(filePath: string, allowedDirectories: string[]): void {
   if (!allowed) throw new Error(`File is outside the project and added directories: ${filePath}`);
 }
 
-function requiredAbsolutePath(value: unknown): string {
+function resolvedFilePath(value: unknown, currentDirectory: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error("file_path must be a non-empty string");
-  if (!isAbsolute(value)) throw new Error("file_path must be absolute, not relative");
-  return value;
+  const trimmed = value.trim();
+  const expanded = trimmed === "~" ? homedir() : trimmed.startsWith("~/") ? join(homedir(), trimmed.slice(2)) : trimmed;
+  return isAbsolute(expanded) ? expanded : resolve(currentDirectory, expanded);
 }
 
 function assertSupportedTextPath(filePath: string): void {

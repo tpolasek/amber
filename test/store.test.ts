@@ -98,6 +98,8 @@ test("forks a session with independent history and a provenance banner", async (
     coveredMessageCount: 1,
   };
   original.directories = ["/tmp/example-workspace"];
+  original.cwd = "/tmp/example-workspace/subdirectory";
+  original.addDirInitialized = true;
   original.fileReadState = {
     "/tmp/example-workspace/file.txt": { mtimeMs: 1, size: 4, hash: "hash", full: true },
   };
@@ -119,6 +121,8 @@ test("forks a session with independent history and a provenance banner", async (
   assert.notEqual(fork.compaction, original.compaction);
   assert.deepEqual(fork.directories, original.directories);
   assert.notEqual(fork.directories, original.directories);
+  assert.equal(fork.cwd, original.cwd);
+  assert.equal(fork.addDirInitialized, true);
   assert.deepEqual(fork.fileReadState, original.fileReadState);
   assert.notEqual(fork.fileReadState, original.fileReadState);
   fork.messages[0]!.content = "Changed only in the fork";

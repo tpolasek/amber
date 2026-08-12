@@ -15,21 +15,24 @@ test("runs Shell in an allowed directory and captures output", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-shell-"));
   const executor = new ShellExecutor();
   let runningDirectory = "";
+  let runningStatus = {};
   let streamed = "";
   const result = await executor.run(
     { command: "printf amber", timeoutMs: 2_000 },
     [directory],
     new AbortController().signal,
     {
-      onRunning: (cwd) => { runningDirectory = cwd; },
+      onRunning: (cwd, status) => { runningDirectory = cwd; runningStatus = status; },
       onOutput: (chunk) => { streamed += chunk; },
     },
   );
   assert.equal(runningDirectory, directory);
+  assert.deepEqual(runningStatus, { text: "RUNNING", appendElapsed: true });
   assert.equal(streamed, "amber");
   assert.equal(result.output, "amber");
   assert.equal(result.status, "complete");
   assert.equal(result.exitCode, 0);
+  assert.match(result.statusDisplay.text, /^(?:\d+ms|\d+(?:\.\d)?s)$/);
 });
 
 test("times Shell out and serializes concurrent calls within one executor", async () => {
@@ -52,6 +55,7 @@ test("times Shell out and serializes concurrent calls within one executor", asyn
     { onRunning: () => undefined, onOutput: () => undefined },
   );
   assert.equal(timedOut.status, "timed_out");
+  assert.deepEqual(timedOut.statusDisplay, { text: "TIMED OUT 100ms" });
   assert.match(timedOut.resultText, /Timed out after 100 ms/);
 });
 

@@ -152,7 +152,7 @@ test("Edit with an empty old_string creates a missing file", async () => {
   assert.equal(await readFile(filePath, "utf8"), "created by edit\n");
 });
 
-test("file tools reject relative, binary, and outside paths", async () => {
+test("file tools resolve relative paths from CWD and reject binary and outside paths", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-files-"));
   const outside = await mkdtemp(join(tmpdir(), "amber-outside-"));
   const binaryPath = join(directory, "binary.dat");
@@ -163,7 +163,10 @@ test("file tools reject relative, binary, and outside paths", async () => {
   await writeFile(outsidePath, "outside", "utf8");
   const current = session();
 
-  await assert.rejects(executeFileTool("Read", { file_path: "relative.txt" }, [directory], current), /must be absolute/);
+  await writeFile(join(directory, "relative.txt"), "relative", "utf8");
+  const relative = await executeFileTool("Read", { file_path: "relative.txt" }, [directory], current);
+  assert.equal(relative.filePath, join(directory, "relative.txt"));
+  assert.equal(relative.resultText, "     1→relative");
   await assert.rejects(executeFileTool("Read", { file_path: binaryPath }, [directory], current), /only supports text/);
   await assert.rejects(executeFileTool("Read", { file_path: imagePath }, [directory], current), /images, PDFs, and notebooks/);
   await assert.rejects(executeFileTool("Write", { file_path: imagePath, content: "text" }, [directory], current), /images, PDFs, and notebooks/);

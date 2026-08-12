@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
-import type { ToolDefinition, ToolStatus } from "./types.js";
+import type { ToolDefinition, ToolStatus, ToolStatusDisplay } from "./types.js";
 
 export const DEFAULT_SHELL_TIMEOUT_MS = 120_000;
 export const MAX_SHELL_TIMEOUT_MS = 600_000;
@@ -40,10 +40,11 @@ export interface ShellResult {
   exitCode: number | null;
   durationMs: number;
   workingDirectory: string;
+  statusDisplay: ToolStatusDisplay;
 }
 
 export interface ShellHooks {
-  onRunning: (workingDirectory: string) => void;
+  onRunning: (workingDirectory: string, statusDisplay: ToolStatusDisplay) => void;
   onOutput: (chunk: string) => void;
 }
 
@@ -59,7 +60,7 @@ export class ShellExecutor {
     const operation = this.#tail.then(async () => {
       if (signal.aborted) throw abortError();
       const workingDirectory = await resolveWorkingDirectory(input.workingDirectory, allowedDirectories);
-      hooks.onRunning(workingDirectory);
+      hooks.onRunning(workingDirectory, { text: "RUNNING", appendElapsed: true });
       return executeShell(input, workingDirectory, signal, hooks.onOutput);
     });
     this.#tail = operation.then(() => undefined, () => undefined);
@@ -190,9 +191,20 @@ function executeShell(
         exitCode,
         durationMs,
         workingDirectory,
+        statusDisplay: shellFinishedStatus(status, durationMs, input.timeoutMs),
       });
     });
   });
+}
+
+function shellFinishedStatus(status: ShellResult["status"], durationMs: number, timeoutMs: number): ToolStatusDisplay {
+  if (status === "complete") return { text: formatShellDuration(durationMs) };
+  if (status === "timed_out") return { text: `TIMED OUT ${formatShellDuration(timeoutMs)}` };
+  return { text: "FAILED" };
+}
+
+function formatShellDuration(milliseconds: number): string {
+  return milliseconds < 1000 ? `${milliseconds}ms` : `${(milliseconds / 1000).toFixed(milliseconds < 10_000 ? 1 : 0)}s`;
 }
 
 function truncate(value: string): string {

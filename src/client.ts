@@ -1,17 +1,19 @@
 interface TokenUsage { input: number; output: number }
 type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
-interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string }
+interface ToolStatusDisplay { text: string; appendElapsed?: boolean }
+interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string; statusDisplay?: ToolStatusDisplay }
 interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; streamingThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "compact-banner" | "tool-result"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean }
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
-interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction; directories?: string[] }
+interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface Config { provider: string; model: string; mode: "live" }
-interface CommandDefinition { name: "/add-dir" | "/context" | "/clear" | "/compact" | "/fork" | "/name"; description: string }
+interface CommandDefinition { name: "/add-dir" | "/cwd" | "/context" | "/clear" | "/compact" | "/fork" | "/name"; description: string }
 interface MarkdownRenderer { render(source: string): string }
 declare const markdownit: (options: { html: boolean; linkify: boolean; breaks: boolean; typographer: boolean }) => MarkdownRenderer;
 
 const commands: CommandDefinition[] = [
   { name: "/add-dir", description: "Add a working directory for this session" },
+  { name: "/cwd", description: "Show or change the current working directory" },
   { name: "/context", description: "Show token usage for the current model context" },
   { name: "/clear", description: "Erase this session's conversation and model context" },
   { name: "/compact", description: "Summarize model context while keeping the full transcript" },
@@ -61,7 +63,7 @@ const elements = {
 };
 
 void initialize();
-window.setInterval(updateRunningShellStatus, 1_000);
+window.setInterval(updateElapsedToolStatuses, 1_000);
 
 async function initialize(): Promise<void> {
   wireEvents();
@@ -315,13 +317,15 @@ async function runCommand(command: string): Promise<void> {
   setBusy(true);
   scrollToBottom(false);
   try {
-    const result = await api<{ command: "add-dir" | "context" | "clear" | "compact" | "fork" | "name"; session: Session; directory?: string; previousSessionId?: string }>(
+    const result = await api<{ command: "add-dir" | "cwd" | "context" | "clear" | "compact" | "fork" | "name"; session: Session; directory?: string; cwdChanged?: boolean; previousSessionId?: string }>(
       `/api/sessions/${session.id}/commands`,
       { method: "POST", body: JSON.stringify({ command }) },
     );
     state.session = result.session;
     if (result.command === "add-dir") {
-      notify(`Directory added · ${result.directory}`);
+      notify(`${result.cwdChanged ? "Directory added and CWD changed" : "Directory added"} · ${result.directory}`);
+    } else if (result.command === "cwd") {
+      notify(`CWD · ${result.directory}`);
     } else if (result.command === "clear") {
       notify("Session cleared");
     } else if (result.command === "compact") {
@@ -680,18 +684,15 @@ function diffLineClass(line: string): string {
 }
 
 function toolStatusLabel(call: ToolCall): string {
-  if (call.status === "running") {
-    const elapsed = call.name === "Shell" && call.startedAt
+  if (call.statusDisplay) {
+    const elapsed = call.statusDisplay.appendElapsed && call.startedAt
       ? ` ${formatDuration(Math.max(0, Date.now() - Date.parse(call.startedAt)))}`
-      : "…";
-    return `RUNNING${elapsed}`;
+      : "";
+    return `${call.statusDisplay.text}${elapsed}`;
   }
-  if (call.status === "timed_out") {
-    return `TIMED OUT${call.timeoutMs !== undefined ? ` ${formatDuration(call.timeoutMs)}` : ""}`;
-  }
-  if (call.status === "complete") {
-    return call.name === "Shell" && call.durationMs !== undefined ? formatDuration(call.durationMs) : "COMPLETE";
-  }
+  if (call.status === "running") return "RUNNING…";
+  if (call.status === "timed_out") return "TIMED OUT";
+  if (call.status === "complete") return "COMPLETE";
   if (call.status === "error") return "FAILED";
   return "QUEUED";
 }
@@ -715,12 +716,12 @@ function toolMetadata(call: ToolCall): string {
   return values.join(" · ");
 }
 
-function updateRunningShellStatus(): void {
+function updateElapsedToolStatuses(): void {
   const session = state.session;
   if (!session) return;
   for (const message of session.messages) {
     for (const call of message.toolCalls ?? []) {
-      if (call.name !== "Shell" || call.status !== "running" || !call.startedAt) continue;
+      if (call.status !== "running" || !call.statusDisplay?.appendElapsed || !call.startedAt) continue;
       const card = elements.transcript.querySelector<HTMLElement>(`.tool-call[data-tool-use-id="${CSS.escape(call.id)}"]`);
       const status = card?.querySelector<HTMLElement>(".tool-call-status");
       if (status) status.textContent = toolStatusLabel(call);
@@ -830,10 +831,11 @@ function renderCommandMenu(): void {
 }
 
 function selectCommand(command: CommandDefinition, execute: boolean): void {
-  elements.prompt.value = command.name === "/add-dir" ? `${command.name} ` : command.name;
+  const acceptsPath = command.name === "/add-dir" || command.name === "/cwd";
+  elements.prompt.value = acceptsPath ? `${command.name} ` : command.name;
   hideCommandMenu();
   resizePrompt();
-  if (execute && command.name !== "/add-dir") elements.composer.requestSubmit();
+  if (execute && !acceptsPath) elements.composer.requestSubmit();
   else elements.prompt.focus();
 }
 
@@ -951,9 +953,9 @@ function setPromptValue(value: string): void {
 
 function scrollToBottom(smooth = true): void {
   requestAnimationFrame(() => {
-    elements.terminal.scrollTo({
-      top: elements.terminal.scrollHeight,
-      behavior: smooth ? "smooth" : "auto",
+    elements.transcript.scrollTo({
+      top: elements.transcript.scrollHeight,
+      behavior: smooth && !state.streaming ? "smooth" : "auto",
     });
   });
 }

@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { SessionStore } from "./store.js";
@@ -128,13 +128,14 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
 
   try {
     const allowedDirectories = sessionDirectories(session);
+    const currentDirectory = sessionWorkingDirectory(session);
     for (let round = 0; round < 8; round += 1) {
       const history = buildProviderHistory(session.messages, assistantMessage.id, session.compaction);
       const toolDrafts = new Map<number, { call: ToolCall; inputJson: string }>();
       let usage: Partial<TokenUsage> = {};
       for await (const event of provider.stream(history, controller.signal, {
         tools: [SHELL_TOOL, ...FILE_TOOLS],
-        system: agentSystemPrompt(allowedDirectories),
+        system: agentSystemPrompt(currentDirectory, allowedDirectories),
       })) {
         if (event.type === "delta") {
           assistantMessage.content += event.text;
@@ -193,11 +194,12 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               await store.save(session);
               sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
               const result = await shellExecutor.run(input, allowedDirectories, controller.signal, {
-                onRunning: (workingDirectory) => {
+                onRunning: (workingDirectory, statusDisplay) => {
                   call.status = "running";
                   call.startedAt = new Date().toISOString();
                   call.workingDirectory = workingDirectory;
                   call.timeoutMs = input.timeoutMs;
+                  call.statusDisplay = statusDisplay;
                   sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
                 },
                 onOutput: (chunk) => {
@@ -209,6 +211,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               call.output = result.output;
               call.exitCode = result.exitCode;
               call.durationMs = result.durationMs;
+              call.statusDisplay = result.statusDisplay;
               call.completedAt = new Date().toISOString();
               resultText = result.resultText;
             } catch (error) {
@@ -225,7 +228,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             if (typeof call.input.file_path === "string") call.filePath = call.input.file_path;
             sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
             try {
-              const result = await executeFileTool(call.name, call.input, allowedDirectories, session);
+              const result = await executeFileTool(call.name, call.input, allowedDirectories, session, currentDirectory);
               call.status = "complete";
               call.filePath = result.filePath;
               call.output = result.output;
@@ -282,14 +285,30 @@ function createAssistantMessage(createdAt = new Date().toISOString()): Message {
 }
 
 function sessionDirectories(session: Session): string[] {
+  return [...new Set([sessionWorkingDirectory(session), ...sessionDirectoryRoots(session)])];
+}
+
+function sessionDirectoryRoots(session: Session): string[] {
   return [...new Set([workspaceRoot, ...(session.directories ?? [])])];
 }
 
-function agentSystemPrompt(directories: string[]): string {
+function sessionWorkingDirectory(session: Session): string {
+  const roots = sessionDirectoryRoots(session);
+  return session.cwd && directoryAllowed(session.cwd, roots) ? session.cwd : workspaceRoot;
+}
+
+function directoryAllowed(directory: string, roots: string[]): boolean {
+  return roots.some((root) => {
+    const child = relative(root, directory);
+    return child === "" || (!child.startsWith("..") && !isAbsolute(child));
+  });
+}
+
+function agentSystemPrompt(currentDirectory: string, directories: string[]): string {
   return [
     "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.",
     "Use Read, Edit, and Write for text files; use Shell for commands and directory operations. Wait for each tool result before continuing. File content returned by Read remains available earlier in the conversation: never reread an already covered range unless Write or Edit has changed that file.",
-    `Primary working directory: ${workspaceRoot}`,
+    `Current working directory: ${currentDirectory}`,
     "Available working directories:",
     ...directories.map((directory) => `- ${directory}`),
   ].join("\n");
@@ -311,13 +330,34 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
       const expanded = argument === "~" ? homedir() : argument.startsWith("~/") ? join(homedir(), argument.slice(2)) : argument;
       const directory = await realpath(resolve(workspaceRoot, expanded));
       if (!(await stat(directory)).isDirectory()) return json(response, 400, { error: `Not a directory: ${directory}` });
+      const firstAddDir = session.addDirInitialized !== true && (session.directories?.length ?? 0) === 0;
       if (directory !== workspaceRoot && !(session.directories ?? []).includes(directory)) {
         (session.directories ??= []).push(directory);
-        await store.save(session);
       }
-      return json(response, 200, { command: "add-dir", directory, session });
+      session.addDirInitialized = true;
+      if (firstAddDir) session.cwd = directory;
+      await store.save(session);
+      return json(response, 200, { command: "add-dir", directory, cwdChanged: firstAddDir, session });
     } catch (error) {
       return json(response, 400, { error: `Could not add directory: ${errorMessage(error)}` });
+    }
+  }
+
+  if (command === "/cwd") {
+    const currentDirectory = sessionWorkingDirectory(session);
+    if (!argument) return json(response, 200, { command: "cwd", directory: currentDirectory, session });
+    try {
+      const expanded = argument === "~" ? homedir() : argument.startsWith("~/") ? join(homedir(), argument.slice(2)) : argument;
+      const directory = await realpath(resolve(currentDirectory, expanded));
+      if (!(await stat(directory)).isDirectory()) return json(response, 400, { error: `Not a directory: ${directory}` });
+      if (!directoryAllowed(directory, sessionDirectoryRoots(session))) {
+        return json(response, 400, { error: `Directory is not in the project or an /add-dir root: ${directory}` });
+      }
+      session.cwd = directory;
+      await store.save(session);
+      return json(response, 200, { command: "cwd", directory, session });
+    } catch (error) {
+      return json(response, 400, { error: `Could not change directory: ${errorMessage(error)}` });
     }
   }
 
