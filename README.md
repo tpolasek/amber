@@ -24,6 +24,7 @@ Environment variables are documented in `.env.example`. `.env` files are intenti
 ## Architecture
 
 - `src/client.ts` — responsive browser terminal, session navigation, SSE stream handling, and lightweight safe Markdown rendering.
+- Agent responses are rendered inline with `markdown-it`, including tables, fenced code, lists, links, blockquotes, and other CommonMark formatting. Raw HTML is disabled.
 - `src/server.ts` — static server and small JSON/SSE API built on `node:http`.
 - `src/provider.ts` — provider boundary for Anthropic-compatible APIs. Future tool-use, MCP, approvals, and alternative providers can be added behind this interface.
 - `src/store.ts` — atomic JSON persistence under `data/sessions`; sessions use memorable three-word IDs such as `bacon.dog.fish` and durable `/s/:sessionId` URLs.

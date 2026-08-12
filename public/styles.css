@@ -107,13 +107,30 @@ button { color: inherit; }
 .message-content { color: #c8b58e; font-family: var(--mono); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
 .user .message-content { color: #ead8b4; }
 .message-content p { margin: 0 0 10px; }
+.message-content > :first-child { margin-top: 0; }
+.message-content > :last-child { margin-bottom: 0; }
 .message-content strong { color: var(--amber-hot); font-weight: 500; }
 .message-content em { color: #d4b97f; }
+.message-content del { color: #756647; }
+.message-content a { color: var(--amber); text-decoration-color: var(--amber-dim); text-underline-offset: 3px; }
+.message-content a:hover { color: var(--amber-hot); }
 .message-content code { padding: 2px 4px; background: var(--amber-faint); color: #efbf64; }
 .message-content pre { overflow-x: auto; margin: 10px 0; padding: 11px 13px; border: 0; border-left: 2px solid var(--amber-dim); background: #0a0a07; }
 .message-content pre code { padding: 0; background: none; color: #c5ad7c; }
-.message-content ul { padding-left: 20px; }
-.message-content h3, .message-content h4, .message-content h5 { color: var(--amber-hot); letter-spacing: .05em; }
+.message-content ul, .message-content ol { margin: 7px 0 10px; padding-left: 24px; }
+.message-content li + li { margin-top: 3px; }
+.message-content li::marker { color: var(--amber-dim); }
+.message-content h1, .message-content h2, .message-content h3, .message-content h4, .message-content h5, .message-content h6 { margin: 15px 0 7px; color: var(--amber-hot); font-size: 1em; font-weight: 600; letter-spacing: .04em; }
+.message-content h1::before { content: "# "; color: var(--amber-dim); }
+.message-content h2::before { content: "## "; color: var(--amber-dim); }
+.message-content h3::before { content: "### "; color: var(--amber-dim); }
+.message-content blockquote { margin: 10px 0; padding: 1px 0 1px 13px; border-left: 2px solid var(--amber-dim); color: #978564; }
+.message-content blockquote p { margin: 4px 0; }
+.message-content hr { height: 1px; margin: 15px 0; border: 0; background: var(--amber-line); }
+.message-content table { width: 100%; margin: 10px 0; border: 1px solid rgba(255,178,26,.48); border-collapse: collapse; font-size: 12px; }
+.message-content th, .message-content td { padding: 7px 9px; border: 1px solid rgba(255,178,26,.38); text-align: left; vertical-align: top; }
+.message-content th { color: var(--amber-hot); background: var(--amber-faint); font-weight: 500; }
+.message-content img { max-width: 100%; height: auto; border: 1px solid var(--amber-line); }
 .message.error .message-content { color: #b87162; }
 .command-message .role-glyph, .command-message .role-name { color: #86704a; }
 .command-message .message-content { color: #a99670; }

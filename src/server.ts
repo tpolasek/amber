@@ -11,6 +11,7 @@ const sourceDirectory = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(sourceDirectory, "../..");
 const publicDirectory = join(projectRoot, "public");
 const clientScript = join(sourceDirectory, "client.js");
+const markdownScript = join(projectRoot, "node_modules", "markdown-it", "dist", "browser", "markdown-it.umd.min.js");
 const dataDirectory = resolve(process.env.DATA_DIR ?? join(projectRoot, "data", "sessions"));
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "127.0.0.1";
@@ -68,6 +69,9 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
 
   if (method === "GET" && url.pathname === "/app.js") {
     return serveFile(response, clientScript, "text/javascript; charset=utf-8", "no-cache");
+  }
+  if (method === "GET" && url.pathname === "/vendor/markdown-it.js") {
+    return serveFile(response, markdownScript, "text/javascript; charset=utf-8", "public, max-age=31536000, immutable");
   }
   if (method === "GET" && url.pathname === "/styles.css") {
     return serveFile(response, join(publicDirectory, "styles.css"), "text/css; charset=utf-8");

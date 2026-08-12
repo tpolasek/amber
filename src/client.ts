@@ -4,11 +4,14 @@ interface Session { id: string; title: string; createdAt: string; updatedAt: str
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface Config { provider: string; model: string; mode: "live" }
 interface CommandDefinition { name: "/context" | "/clear"; description: string }
+interface MarkdownRenderer { render(source: string): string }
+declare const markdownit: (options: { html: boolean; linkify: boolean; breaks: boolean; typographer: boolean }) => MarkdownRenderer;
 
 const commands: CommandDefinition[] = [
   { name: "/context", description: "Show token usage for the current model context" },
   { name: "/clear", description: "Clear context and create a numbered session revision" },
 ];
+const markdown = markdownit({ html: false, linkify: true, breaks: false, typographer: false });
 const SESSION_ROUTE = /^\/s\/([a-z0-9.-]+)$/;
 let matchingCommands: CommandDefinition[] = [];
 let selectedCommand = 0;
@@ -343,7 +346,12 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
   requiredWithin(element, ".role-name").textContent = message.role === "user" ? "" : "agent";
   requiredWithin(element, ".message-time").textContent = formatTime(message.createdAt);
   requiredWithin(element, ".message-usage").textContent = message.usage ? `${message.usage.input} in / ${message.usage.output} out` : "";
-  requiredWithin(element, ".message-content").innerHTML = renderMarkdown(message.content) + (message.status === "streaming" ? '<span class="cursor-block"></span>' : "");
+  const content = requiredWithin(element, ".message-content");
+  content.innerHTML = markdown.render(message.content) + (message.status === "streaming" ? '<span class="cursor-block"></span>' : "");
+  content.querySelectorAll<HTMLAnchorElement>("a").forEach((link) => {
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+  });
 }
 
 async function refreshCurrentSession(): Promise<void> {
@@ -389,35 +397,6 @@ async function readEventStream(stream: ReadableStream<Uint8Array>, onEvent: (eve
       if (data) onEvent(event, JSON.parse(data));
     }
   }
-}
-
-function renderMarkdown(source: string): string {
-  const escaped = escapeHtml(source);
-  const blocks = escaped.split(/\n{2,}/).map((block) => {
-    if (block.startsWith("```")) {
-      const match = block.match(/^```[^\n]*\n?([\s\S]*?)```$/);
-      return match ? `<pre><code>${match[1]}</code></pre>` : `<pre><code>${block.slice(3)}</code></pre>`;
-    }
-    const lines = block.split("\n");
-    if (lines.every((line) => /^[-*] /.test(line))) return `<ul>${lines.map((line) => `<li>${inline(line.slice(2))}</li>`).join("")}</ul>`;
-    if (/^#{1,3} /.test(lines[0] ?? "")) {
-      const level = (lines[0]?.match(/^#+/)?.[0].length ?? 2) + 2;
-      return `<h${level}>${inline((lines[0] ?? "").replace(/^#+ /, ""))}</h${level}>${lines.slice(1).map(inline).join("<br>")}`;
-    }
-    return `<p>${lines.map(inline).join("<br>")}</p>`;
-  });
-  return blocks.join("");
-}
-
-function inline(value: string): string {
-  return value
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*([^*]+)\*/g, "<em>$1</em>");
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] ?? character);
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
