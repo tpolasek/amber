@@ -8,6 +8,7 @@ interface Session { id: string; title: string; createdAt: string; updatedAt: str
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface Config { provider: string; model: string; mode: "live" }
 interface CommandDefinition { name: "/add-dir" | "/cwd" | "/context" | "/clear" | "/compact" | "/fork" | "/name"; description: string }
+interface DirectoryCompletion { value: string; absolutePath: string }
 interface MarkdownRenderer { render(source: string): string }
 declare const markdownit: (options: { html: boolean; linkify: boolean; breaks: boolean; typographer: boolean }) => MarkdownRenderer;
 
@@ -25,6 +26,9 @@ const SESSION_ROUTE = /^\/s\/([a-z0-9.-]+)$/;
 const MAX_INLINE_TOOL_SUBJECT_LENGTH = 80;
 let matchingCommands: CommandDefinition[] = [];
 let selectedCommand = 0;
+let directoryCompletions: DirectoryCompletion[] = [];
+let directoryCompletionCommand: "/add-dir" | "/cwd" | null = null;
+let directoryCompletionRequest = 0;
 let historyPosition = -1;
 let historyDraft = "";
 let historyMatches: string[] = [];
@@ -107,8 +111,10 @@ function wireEvents(): void {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         const direction = event.key === "ArrowDown" ? 1 : -1;
-        selectedCommand = (selectedCommand + direction + matchingCommands.length) % matchingCommands.length;
-        renderCommandMenu();
+        const optionCount = directoryCompletions.length || matchingCommands.length;
+        selectedCommand = (selectedCommand + direction + optionCount) % optionCount;
+        if (directoryCompletions.length) renderDirectoryMenu();
+        else renderCommandMenu();
         return;
       }
       if (event.key === "Escape") {
@@ -116,10 +122,18 @@ function wireEvents(): void {
         hideCommandMenu();
         return;
       }
-      if ((event.key === "Enter" || event.key === "Tab") && matchingCommands[selectedCommand]) {
-        event.preventDefault();
-        selectCommand(matchingCommands[selectedCommand]!, event.key === "Enter");
-        return;
+      if (event.key === "Enter" || event.key === "Tab") {
+        const directory = directoryCompletions[selectedCommand];
+        if (directory && directoryCompletionCommand) {
+          event.preventDefault();
+          acceptDirectoryCompletion(directory);
+          return;
+        }
+        if (matchingCommands[selectedCommand]) {
+          event.preventDefault();
+          selectCommand(matchingCommands[selectedCommand]!, event.key === "Enter");
+          return;
+        }
       }
     }
     if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
@@ -512,7 +526,7 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
   const wasStreaming = element.classList.contains("streaming");
   element.classList.toggle("streaming", message.status === "streaming");
   element.classList.toggle("error", message.status === "error");
-  requiredWithin(element, ".role-glyph").textContent = message.role === "user" ? ">" : "●";
+  requiredWithin(element, ".role-glyph").textContent = message.role === "user" ? "◆" : "●";
   requiredWithin(element, ".role-name").textContent = message.role === "user" ? "" : "agent";
   requiredWithin(element, ".message-time").textContent = formatTime(message.createdAt);
   requiredWithin(element, ".message-usage").textContent = message.usage ? `${message.usage.input} in / ${message.usage.output} out` : "";
@@ -795,12 +809,44 @@ function resizePrompt(): void {
 }
 
 function updateCommandMenu(): void {
+  const directoryMatch = elements.prompt.value.match(/^\/(cwd|add-dir)[ \t]+([^\n]*)$/i);
+  if (directoryMatch?.[1] && directoryMatch[2] !== undefined) {
+    matchingCommands = [];
+    void updateDirectoryCompletions(`/${directoryMatch[1].toLowerCase()}` as "/add-dir" | "/cwd", directoryMatch[2]);
+    return;
+  }
+  directoryCompletionRequest += 1;
+  directoryCompletions = [];
+  directoryCompletionCommand = null;
   const value = elements.prompt.value.trim().toLowerCase();
   if (!/^\/[a-z-]*$/.test(value)) return hideCommandMenu();
   matchingCommands = commands.filter((command) => command.name.startsWith(value));
   selectedCommand = 0;
   if (matchingCommands.length === 0) return hideCommandMenu();
   renderCommandMenu();
+}
+
+async function updateDirectoryCompletions(command: "/add-dir" | "/cwd", path: string): Promise<void> {
+  const session = state.session;
+  if (!session) return hideCommandMenu();
+  const sourceValue = elements.prompt.value;
+  const request = ++directoryCompletionRequest;
+  directoryCompletions = [];
+  directoryCompletionCommand = command;
+  selectedCommand = 0;
+  elements.commandMenu.hidden = true;
+  try {
+    const query = new URLSearchParams({ command: command.slice(1), path });
+    const result = await api<{ directories: DirectoryCompletion[] }>(
+      `/api/sessions/${session.id}/directory-completions?${query}`,
+    );
+    if (request !== directoryCompletionRequest || elements.prompt.value !== sourceValue) return;
+    directoryCompletions = result.directories;
+    if (directoryCompletions.length === 0) return hideCommandMenu();
+    renderDirectoryMenu();
+  } catch {
+    if (request === directoryCompletionRequest) hideCommandMenu();
+  }
 }
 
 function renderCommandMenu(): void {
@@ -824,6 +870,35 @@ function renderCommandMenu(): void {
   elements.commandMenu.hidden = false;
 }
 
+function renderDirectoryMenu(): void {
+  elements.commandMenu.replaceChildren();
+  directoryCompletions.forEach((directory, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "command-option directory-option";
+    button.classList.toggle("selected", index === selectedCommand);
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-selected", String(index === selectedCommand));
+    const value = document.createElement("strong");
+    value.textContent = directory.value;
+    const absolutePath = document.createElement("span");
+    absolutePath.textContent = directory.absolutePath;
+    button.append(value, absolutePath);
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", () => acceptDirectoryCompletion(directory));
+    elements.commandMenu.append(button);
+  });
+  elements.commandMenu.hidden = false;
+  elements.commandMenu.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
+}
+
+function acceptDirectoryCompletion(directory: DirectoryCompletion): void {
+  if (!directoryCompletionCommand) return;
+  setPromptValue(`${directoryCompletionCommand} ${directory.value}`);
+  hideCommandMenu();
+  elements.prompt.focus();
+}
+
 function selectCommand(command: CommandDefinition, execute: boolean): void {
   const acceptsPath = command.name === "/add-dir" || command.name === "/cwd";
   elements.prompt.value = acceptsPath ? `${command.name} ` : command.name;
@@ -834,7 +909,10 @@ function selectCommand(command: CommandDefinition, execute: boolean): void {
 }
 
 function hideCommandMenu(): void {
+  directoryCompletionRequest += 1;
   matchingCommands = [];
+  directoryCompletions = [];
+  directoryCompletionCommand = null;
   selectedCommand = 0;
   elements.commandMenu.hidden = true;
 }

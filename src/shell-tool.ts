@@ -9,12 +9,12 @@ const MAX_OUTPUT_CHARACTERS = 200_000;
 
 export const SHELL_TOOL: ToolDefinition = {
   name: "Shell",
-  description: "Run a shell command and wait for it to finish. Only one Shell call executes at a time within this session; other sessions may run concurrently. Use working_directory to run inside the project or a directory added with /add-dir.",
+  description: "Run a shell command and wait for it to finish. Only one Shell call executes at a time within this session; other sessions may run concurrently. By default the command starts in the session CWD; use working_directory to select another authorized directory for this call.",
   input_schema: {
     type: "object",
     properties: {
       command: { type: "string", description: "The shell command to execute." },
-      working_directory: { type: "string", description: "Absolute path or a path relative to the main project directory." },
+      working_directory: { type: "string", description: "Absolute path or a path relative to the session CWD. This changes only this Shell call." },
       timeout_ms: {
         type: "integer",
         minimum: 100,
@@ -179,7 +179,7 @@ function executeShell(
       const durationMs = Date.now() - started;
       const status = timedOut ? "timed_out" : exitCode === 0 ? "complete" : "error";
       const sections = [
-        `Working directory: ${workingDirectory}`,
+        `Shell starting directory for this call: ${workingDirectory}`,
         timedOut ? `Timed out after ${input.timeoutMs} ms` : `Exit code: ${exitCode ?? `signal ${closeSignal ?? "unknown"}`}`,
         ...(stdout ? [`stdout:\n${truncate(stdout)}`] : []),
         ...(stderr ? [`stderr:\n${truncate(stderr)}`] : []),

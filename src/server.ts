@@ -11,6 +11,7 @@ import { generateSessionTitle } from "./session-title.js";
 import { estimateHistoryTokens, formatCompactionBanner, generateCompactionSummary } from "./compaction.js";
 import { parseShellInput, SHELL_TOOL, ShellExecutor } from "./shell-tool.js";
 import { executeFileTool, FILE_TOOLS } from "./file-tools.js";
+import { completeDirectories } from "./directory-completion.js";
 import type { Message, Session, TokenUsage, ToolCall } from "./types.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
@@ -79,6 +80,11 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   const commandMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/commands$`));
   if (method === "POST" && commandMatch?.[1]) {
     return executeCommand(request, response, commandMatch[1]);
+  }
+
+  const completionMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/directory-completions$`));
+  if (method === "GET" && completionMatch?.[1]) {
+    return listDirectoryCompletions(response, completionMatch[1], url);
   }
 
   if (method === "GET" && url.pathname === "/app.js") {
@@ -211,6 +217,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               call.output = result.output;
               call.exitCode = result.exitCode;
               call.durationMs = result.durationMs;
+              call.workingDirectory = result.workingDirectory;
               call.statusDisplay = result.statusDisplay;
               call.completedAt = new Date().toISOString();
               resultText = result.resultText;
@@ -309,9 +316,30 @@ function agentSystemPrompt(currentDirectory: string, directories: string[]): str
     "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.",
     "Use Read, Edit, and Write for text files; use Shell for commands and directory operations. Wait for each tool result before continuing. File content returned by Read remains available earlier in the conversation: never reread an already covered range unless Write or Edit has changed that file.",
     `Current working directory: ${currentDirectory}`,
+    "The current working directory above is authoritative. Directory metadata in older Shell results describes where those individual calls started, not the current session CWD. A Shell working_directory override applies only to that call.",
     "Available working directories:",
     ...directories.map((directory) => `- ${directory}`),
   ].join("\n");
+}
+
+async function listDirectoryCompletions(response: ServerResponse, sessionId: string, url: URL): Promise<void> {
+  const session = await store.get(sessionId);
+  if (!session) return json(response, 404, { error: "Session not found" });
+  const command = url.searchParams.get("command");
+  if (command !== "cwd" && command !== "add-dir") {
+    return json(response, 400, { error: "Directory completion requires command=cwd or command=add-dir" });
+  }
+  const fragment = url.searchParams.get("path") ?? "";
+  if (fragment.includes("\0") || fragment.includes("\n") || fragment.length > 4_096) {
+    return json(response, 400, { error: "Invalid directory completion path" });
+  }
+  const currentDirectory = sessionWorkingDirectory(session);
+  const directories = await completeDirectories(
+    fragment,
+    command === "cwd" ? currentDirectory : workspaceRoot,
+    command === "cwd" ? sessionDirectoryRoots(session) : undefined,
+  );
+  json(response, 200, { directories });
 }
 
 async function executeCommand(request: IncomingMessage, response: ServerResponse, sessionId: string): Promise<void> {

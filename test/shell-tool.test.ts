@@ -32,6 +32,8 @@ test("runs Shell in an allowed directory and captures output", async () => {
   assert.equal(result.output, "amber");
   assert.equal(result.status, "complete");
   assert.equal(result.exitCode, 0);
+  assert.equal(result.workingDirectory, directory);
+  assert.match(result.resultText, new RegExp(`Shell starting directory for this call: ${directory}`));
   assert.match(result.statusDisplay.text, /^(?:\d+ms|\d+(?:\.\d)?s)$/);
 });
 
