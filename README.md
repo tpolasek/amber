@@ -55,10 +55,10 @@ Environment variables are documented in `.env.example`. `.env` files are intenti
 
 - `Shell` runs `/bin/bash -lc <command>` in the project or an `/add-dir` working directory. The model may override the 120-second timeout with `timeout_ms` up to 600,000 ms. Calls within one session execute in order and block the agent loop until completion or timeout; separate sessions can run Shell concurrently. Command, working directory, timeout, duration, exit code, and final status are shown in the transcript; streamed output is collapsed by default and can be expanded on demand.
 - `Read` reads an absolute plain-text path with numbered output. It accepts a 1-based `offset` and a `limit` of up to 2,000 lines.
-- `Write` creates or completely replaces a plain-text file. Replacing an existing file requires a fresh full `Read` first.
-- `Edit` performs an exact string replacement, requiring a unique match unless `replace_all` is set. Existing files require a fresh full `Read`; an empty `old_string` may create a missing file.
+- `Write` creates or completely replaces a plain-text file. Replacing an existing file requires a fresh full `Read` first; successful changes show a collapsed unified diff with red removals and green additions.
+- `Edit` performs an exact string replacement, requiring a unique match unless `replace_all` is set. Existing files require a fresh full `Read`; an empty `old_string` may create a missing file. Successful changes use the same unified diff display.
 - File tools are restricted to the project and directories enabled with `/add-dir`. Calls execute serially within a session; separate sessions remain independent.
-- Tool calls and results are persisted and sent back to the model. Tool-result protocol messages remain hidden from the visible transcript, while their status cards remain part of the assistant history.
+- Tool calls and results are persisted and sent back to the model. Tool-result protocol messages remain hidden from the visible transcript, while their status cards remain part of the assistant history. Diffs and outputs shorter than 100 characters are expanded by default; longer non-diff output remains collapsed.
 - `/add-dir` controls the working directories advertised to the agent and accepted as `working_directory`; it is not an operating-system sandbox for arbitrary shell commands.
 
 This first version is intended for local, single-user use and binds to `127.0.0.1` by default. Add authentication and a database-backed `SessionStore` before exposing it publicly.

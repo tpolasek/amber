@@ -26,6 +26,7 @@ let historyPosition = -1;
 let historyDraft = "";
 let historyMatches: string[] = [];
 let selectedHistoryMatch = 0;
+const toolOutputDisclosurePreferences = new Map<string, boolean>();
 
 const state: { session: Session | null; config: Config | null; streaming: boolean; controller: AbortController | null } = {
   session: null,
@@ -563,10 +564,9 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
 }
 
 function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
-  const openOutputs = new Set(
-    [...container.querySelectorAll<HTMLDetailsElement>(".tool-output-details[open]")]
-      .map((details) => details.dataset.toolUseId)
-      .filter((id): id is string => Boolean(id)),
+  const previousOutputStates = new Map(
+    [...container.querySelectorAll<HTMLDetailsElement>(".tool-output-details")]
+      .flatMap((details) => details.dataset.toolUseId ? [[details.dataset.toolUseId, details.open] as const] : []),
   );
   container.replaceChildren();
   container.hidden = calls.length === 0;
@@ -600,18 +600,63 @@ function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
       const details = document.createElement("details");
       details.className = "tool-output-details";
       details.dataset.toolUseId = call.id;
-      details.open = openOutputs.has(call.id);
       const summary = document.createElement("summary");
       const lineCount = call.output.split("\n").length;
-      summary.textContent = `Output · ${lineCount.toLocaleString()} ${lineCount === 1 ? "line" : "lines"}`;
+      const isDiff = isDiffOutput(call);
+      details.open = toolOutputDisclosurePreferences.get(call.id)
+        ?? previousOutputStates.get(call.id)
+        ?? shouldExpandToolOutput(call, isDiff);
+      summary.addEventListener("click", () => {
+        setTimeout(() => toolOutputDisclosurePreferences.set(call.id, details.open), 0);
+      });
+      summary.textContent = `${isDiff ? diffSummary(call.output) : "Output"} · ${lineCount.toLocaleString()} ${lineCount === 1 ? "line" : "lines"}`;
       const output = document.createElement("pre");
-      output.className = "tool-output";
-      output.textContent = call.output;
+      output.className = `tool-output${isDiff ? " tool-diff" : ""}`;
+      if (isDiff) renderDiff(output, call.output);
+      else output.textContent = call.output;
       details.append(summary, output);
       card.append(details);
     }
     container.append(card);
   }
+}
+
+function shouldExpandToolOutput(call: ToolCall, isDiff: boolean): boolean {
+  return isDiff || call.output.length < 100;
+}
+
+function isDiffOutput(call: ToolCall): boolean {
+  return call.status === "complete" && (call.name === "Write" || call.name === "Edit")
+    && call.output.startsWith("--- ") && call.output.includes("\n+++ ");
+}
+
+function diffSummary(diff: string): string {
+  let added = 0;
+  let removed = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+") && !line.startsWith("+++")) added += 1;
+    else if (line.startsWith("-") && !line.startsWith("---")) removed += 1;
+  }
+  return `Diff · +${added.toLocaleString()} −${removed.toLocaleString()}`;
+}
+
+function renderDiff(container: HTMLElement, diff: string): void {
+  const lines = diff.split("\n");
+  lines.forEach((line, index) => {
+    const span = document.createElement("span");
+    span.className = diffLineClass(line);
+    span.textContent = line || " ";
+    container.append(span);
+    if (index < lines.length - 1) container.append("\n");
+  });
+}
+
+function diffLineClass(line: string): string {
+  if (line.startsWith("@@")) return "diff-hunk";
+  if (line.startsWith("+++ ") || line.startsWith("--- ")) return "diff-header";
+  if (line.startsWith("+")) return "diff-addition";
+  if (line.startsWith("-")) return "diff-deletion";
+  return "diff-context";
 }
 
 function toolStatusLabel(call: ToolCall): string {

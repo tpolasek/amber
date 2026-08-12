@@ -49,7 +49,7 @@ test("Write creates nested files and requires a fresh read before overwrite", as
   const filePath = join(directory, "nested", "sample.txt");
   const current = session();
   const created = await executeFileTool("Write", { file_path: filePath, content: "created\n" }, [directory], current);
-  assert.match(created.output, /^Created sample\.txt/);
+  assert.match(created.output, /^--- \/dev\/null\n\+\+\+ b\/.*\/nested\/sample\.txt\n@@ -0,0 \+1,1 @@\n\+created$/);
   assert.equal(await readFile(filePath, "utf8"), "created\n");
 
   await executeFileTool("Write", { file_path: filePath, content: "updated\n" }, [directory], current);
@@ -79,7 +79,8 @@ test("Edit requires exact uniqueness and preserves CRLF and file mode", async ()
     [directory],
     current,
   );
-  assert.match(edited.output, /^Updated script\.sh/);
+  assert.match(edited.output, /^--- a\/.*\/script\.sh\n\+\+\+ b\/.*\/script\.sh\n@@/);
+  assert.match(edited.output, /-two\n-two\n\+three\n\+three/);
   assert.equal(await readFile(filePath, "utf8"), "one\r\nthree\r\nthree\r\n");
   assert.equal((await stat(filePath)).mode & 0o777, 0o755);
 });
@@ -94,7 +95,7 @@ test("Edit with an empty old_string creates a missing file", async () => {
     [directory],
     current,
   );
-  assert.match(result.output, /^Created created\.txt/);
+  assert.match(result.output, /^--- \/dev\/null\n\+\+\+ b\/.*\/nested\/created\.txt\n@@/);
   assert.equal(await readFile(filePath, "utf8"), "created by edit\n");
 });
 

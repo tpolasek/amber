@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative } from "node:path";
+import { createTwoFilesPatch, FILE_HEADERS_ONLY } from "diff";
 import type { FileReadState, Session, ToolDefinition } from "./types.js";
 
 const MAX_LINES_TO_READ = 2_000;
@@ -132,10 +133,9 @@ async function writeTextFile(
   const oldContent = existing ? await readFile(filePath, "utf8") : "";
   await atomicWrite(filePath, input.content);
   await updateReadState(filePath, session);
-  const change = lineDelta(oldContent, input.content);
   return {
     filePath,
-    output: `${existing ? "Updated" : "Created"} ${basename(filePath)} · +${change.added} −${change.removed}`,
+    output: unifiedDiff(filePath, oldContent, input.content, !existing),
     resultText: existing
       ? `The file ${filePath} has been updated successfully.`
       : `File created successfully at: ${filePath}`,
@@ -160,10 +160,9 @@ async function editTextFile(
     if (input.old_string !== "") throw new Error(`File does not exist: ${filePath}`);
     await atomicWrite(filePath, input.new_string);
     await updateReadState(filePath, session);
-    const added = splitLines(input.new_string).length;
     return {
       filePath,
-      output: `Created ${basename(filePath)} · +${added} −0`,
+      output: unifiedDiff(filePath, "", input.new_string, true),
       resultText: `File created successfully at: ${filePath}`,
     };
   }
@@ -186,10 +185,9 @@ async function editTextFile(
   const updated = replaceAll ? original.replaceAll(oldString, input.new_string) : original.replace(oldString, input.new_string);
   await atomicWrite(filePath, usesCrlf ? updated.replaceAll("\n", "\r\n") : updated);
   await updateReadState(filePath, session);
-  const change = lineDelta(original, updated);
   return {
     filePath,
-    output: `Updated ${basename(filePath)} · +${change.added} −${change.removed}`,
+    output: unifiedDiff(filePath, original, updated),
     resultText: replaceAll
       ? `The file ${filePath} has been updated. All ${occurrences} occurrences were successfully replaced.`
       : `The file ${filePath} has been updated successfully.`,
@@ -306,15 +304,16 @@ async function atomicWrite(filePath: string, content: string): Promise<void> {
   }
 }
 
-function lineDelta(before: string, after: string): { added: number; removed: number } {
-  const beforeLines = splitLines(before);
-  const afterLines = splitLines(after);
-  let prefix = 0;
-  while (prefix < beforeLines.length && prefix < afterLines.length && beforeLines[prefix] === afterLines[prefix]) prefix += 1;
-  let suffix = 0;
-  while (suffix < beforeLines.length - prefix && suffix < afterLines.length - prefix
-    && beforeLines[beforeLines.length - 1 - suffix] === afterLines[afterLines.length - 1 - suffix]) suffix += 1;
-  return { added: afterLines.length - prefix - suffix, removed: beforeLines.length - prefix - suffix };
+function unifiedDiff(filePath: string, before: string, after: string, created = false): string {
+  return createTwoFilesPatch(
+    created ? "/dev/null" : `a${filePath}`,
+    `b${filePath}`,
+    before,
+    after,
+    undefined,
+    undefined,
+    { context: 3, headerOptions: FILE_HEADERS_ONLY },
+  ).trimEnd();
 }
 
 function isBlockedDevice(filePath: string): boolean {

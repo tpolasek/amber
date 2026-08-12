@@ -167,6 +167,13 @@ button { color: inherit; }
 .tool-output-details summary::before { content: "▸ "; color: var(--amber-dim); }
 .tool-output-details[open] summary::before { content: "▾ "; }
 .tool-output { max-height: 260px; overflow: auto; margin: 0; padding: 9px 10px; border: 0; border-top: 1px solid rgba(255,178,26,.12); background: #070705; color: #a99978; font: 10px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; scrollbar-width: thin; scrollbar-color: var(--amber-dim) transparent; }
+.tool-diff { padding: 7px 0; white-space: pre; overflow-wrap: normal; }
+.tool-diff > span { display: inline-block; min-width: 100%; padding: 0 10px; }
+.tool-diff .diff-header { color: #8ba7bd; font-weight: 600; }
+.tool-diff .diff-hunk { color: #83a9c7; background: rgba(83,143,184,.12); }
+.tool-diff .diff-addition { color: #b7e5a0; background: rgba(68,150,78,.18); }
+.tool-diff .diff-deletion { color: #ffaaa0; background: rgba(190,65,55,.19); }
+.tool-diff .diff-context { color: #9b927f; }
 .command-message .role-glyph, .command-message .role-name { color: #86704a; }
 .command-message .message-content { color: #a99670; }
 .fork-banner { display: block; padding-top: 16px; }
