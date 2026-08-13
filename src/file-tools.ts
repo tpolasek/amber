@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { chmod, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
@@ -318,10 +319,14 @@ async function resolveWritePath(filePath: string, allowedDirectories: string[]):
 
 function assertAllowed(filePath: string, allowedDirectories: string[]): void {
   const allowed = allowedDirectories.some((directory) => {
-    const child = relative(directory, filePath);
+    const child = relative(canonicalRoot(directory), filePath);
     return child === "" || (!child.startsWith("..") && !isAbsolute(child));
   });
   if (!allowed) throw new Error(`File is outside the project and added directories: ${filePath}`);
+}
+
+function canonicalRoot(directory: string): string {
+  try { return realpathSync(directory); } catch { return directory; }
 }
 
 function resolvedFilePath(value: unknown, currentDirectory: string): string {

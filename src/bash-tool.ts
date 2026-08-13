@@ -9,17 +9,25 @@ const MAX_OUTPUT_CHARACTERS = 200_000;
 
 export const BASH_TOOL: ToolDefinition = {
   name: "Bash",
-  description: "Run a bash command and wait for it to finish. Only one Bash call executes at a time within this session; other sessions may run concurrently. By default the command starts in the session CWD; use working_directory to select another authorized directory for this call.",
+  description: "Execute a bash command. Commands run in the foreground by default; set run_in_background to receive a task ID immediately and inspect or stop the command later. Foreground Bash calls execute one at a time within this session. By default the command starts in the session CWD; use working_directory to select another authorized directory for this call.",
   input_schema: {
     type: "object",
     properties: {
       command: { type: "string", description: "The bash command to execute." },
       working_directory: { type: "string", description: "Absolute path or a path relative to the session CWD. This changes only this Bash call." },
-      timeout_ms: {
+      timeout: {
         type: "integer",
         minimum: 100,
         maximum: MAX_BASH_TIMEOUT_MS,
         description: `Timeout in milliseconds. Defaults to ${DEFAULT_BASH_TIMEOUT_MS}.`,
+      },
+      description: {
+        type: "string",
+        description: "Clear, concise description of what this command does in active voice.",
+      },
+      run_in_background: {
+        type: "boolean",
+        description: "Set to true to run this command in the background and return a task ID. Use TaskOutput to read its output later.",
       },
     },
     required: ["command"],
@@ -31,6 +39,8 @@ export interface BashInput {
   command: string;
   workingDirectory?: string;
   timeoutMs: number;
+  description?: string;
+  runInBackground?: boolean;
 }
 
 export interface BashResult {
@@ -59,7 +69,7 @@ export class BashExecutor {
   ): Promise<BashResult> {
     const operation = this.#tail.then(async () => {
       if (signal.aborted) throw abortError();
-      const workingDirectory = await resolveWorkingDirectory(input.workingDirectory, allowedDirectories);
+      const workingDirectory = await resolveBashWorkingDirectory(input.workingDirectory, allowedDirectories);
       hooks.onRunning(workingDirectory, { text: "RUNNING", appendElapsed: true });
       return executeBash(input, workingDirectory, signal, hooks.onOutput);
     });
@@ -73,30 +83,41 @@ export function parseBashInput(input: Record<string, unknown>): BashInput {
   if (!command) throw new Error("Bash requires a non-empty command");
   if (command.length > 32_000) throw new Error("Bash command must be 32,000 characters or fewer");
 
-  const timeout = input.timeout_ms ?? DEFAULT_BASH_TIMEOUT_MS;
+  const timeout = input.timeout ?? input.timeout_ms ?? DEFAULT_BASH_TIMEOUT_MS;
   if (!Number.isInteger(timeout) || (timeout as number) < 100 || (timeout as number) > MAX_BASH_TIMEOUT_MS) {
-    throw new Error(`Bash timeout_ms must be an integer from 100 to ${MAX_BASH_TIMEOUT_MS}`);
+    throw new Error(`Bash timeout must be an integer from 100 to ${MAX_BASH_TIMEOUT_MS}`);
   }
   if (input.working_directory !== undefined && typeof input.working_directory !== "string") {
     throw new Error("Bash working_directory must be a string");
+  }
+  if (input.description !== undefined && typeof input.description !== "string") {
+    throw new Error("Bash description must be a string");
+  }
+  if (input.run_in_background !== undefined && typeof input.run_in_background !== "boolean") {
+    throw new Error("Bash run_in_background must be a boolean");
   }
 
   return {
     command,
     timeoutMs: timeout as number,
+    runInBackground: input.run_in_background === true,
     ...(typeof input.working_directory === "string" && input.working_directory.trim()
       ? { workingDirectory: input.working_directory.trim() }
+      : {}),
+    ...(typeof input.description === "string" && input.description.trim()
+      ? { description: input.description.trim() }
       : {}),
   };
 }
 
-async function resolveWorkingDirectory(requested: string | undefined, allowedDirectories: string[]): Promise<string> {
+export async function resolveBashWorkingDirectory(requested: string | undefined, allowedDirectories: string[]): Promise<string> {
   const defaultDirectory = allowedDirectories[0];
   if (!defaultDirectory) throw new Error("No Bash working directory is configured");
   const candidate = await realpath(requested
     ? (isAbsolute(requested) ? requested : resolve(defaultDirectory, requested))
     : defaultDirectory);
-  const allowed = allowedDirectories.some((directory) => {
+  const canonicalAllowedDirectories = await Promise.all(allowedDirectories.map((directory) => realpath(directory)));
+  const allowed = canonicalAllowedDirectories.some((directory) => {
     const child = relative(directory, candidate);
     return child === "" || (!child.startsWith("..") && !isAbsolute(child));
   });

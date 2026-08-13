@@ -10,6 +10,15 @@ import { buildProviderHistory, isModelMessage } from "./history.js";
 import { generateSessionTitle } from "./session-title.js";
 import { estimateHistoryTokens, formatCompactionBanner, generateCompactionSummary } from "./compaction.js";
 import { BASH_TOOL, BashExecutor, parseBashInput } from "./bash-tool.js";
+import { BackgroundTaskManager } from "./background-tasks.js";
+import {
+  TASK_OUTPUT_TOOL,
+  TASK_STOP_TOOL,
+  executeTaskOutput,
+  executeTaskStop,
+  parseTaskOutputInput,
+  parseTaskStopInput,
+} from "./task-tools.js";
 import { executeFileTool, FILE_TOOLS } from "./file-tools.js";
 import { completeDirectories } from "./directory-completion.js";
 import type { Message, Session, TokenUsage, ToolCall } from "./types.js";
@@ -27,6 +36,7 @@ const host = process.env.HOST ?? "127.0.0.1";
 const store = new SessionStore(dataDirectory);
 const provider = createProvider(process.env);
 const activeSessions = new Set<string>();
+const backgroundTasks = new BackgroundTaskManager();
 const SESSION_PATH_ID = "([a-z0-9.-]+)";
 
 await store.initialize();
@@ -45,6 +55,16 @@ server.listen(port, host, () => {
   console.log(`\n  AMBER agent online at http://${host}:${port}`);
   console.log(`  provider: ${provider.name} / ${provider.model} (${provider.mode})\n`);
 });
+
+let shuttingDown = false;
+const shutdown = () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  backgroundTasks.stopAll();
+  server.close();
+};
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
 
 async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const method = request.method ?? "GET";
@@ -74,6 +94,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   if (method === "DELETE" && sessionMatch?.[1]) {
     if (activeSessions.has(sessionMatch[1])) return json(response, 409, { error: "Wait for the current response to finish" });
     const removed = await store.remove(sessionMatch[1]);
+    if (removed) backgroundTasks.stopSession(sessionMatch[1]);
     return removed
       ? json(response, 200, { deletedSessionId: sessionMatch[1] })
       : json(response, 404, { error: "Session not found" });
@@ -87,6 +108,25 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   const commandMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/commands$`));
   if (method === "POST" && commandMatch?.[1]) {
     return executeCommand(request, response, commandMatch[1]);
+  }
+
+  const tasksMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/tasks$`));
+  if (method === "GET" && tasksMatch?.[1]) {
+    const session = await store.get(tasksMatch[1]);
+    return session
+      ? json(response, 200, { tasks: backgroundTasks.list(tasksMatch[1]) })
+      : json(response, 404, { error: "Session not found" });
+  }
+
+  const taskStopMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/tasks/([a-z0-9]+)/stop$`));
+  if (method === "POST" && taskStopMatch?.[1] && taskStopMatch[2]) {
+    const session = await store.get(taskStopMatch[1]);
+    if (!session) return json(response, 404, { error: "Session not found" });
+    try {
+      return json(response, 200, { task: backgroundTasks.stop(taskStopMatch[1], taskStopMatch[2]) });
+    } catch (error) {
+      return json(response, 400, { error: errorMessage(error) });
+    }
   }
 
   const completionMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/directory-completions$`));
@@ -150,7 +190,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       const toolDrafts = new Map<number, { call: ToolCall; inputJson: string }>();
       let usage: Partial<TokenUsage> = {};
       for await (const event of provider.stream(history, controller.signal, {
-        tools: [BASH_TOOL, ...FILE_TOOLS],
+        tools: [BASH_TOOL, ...FILE_TOOLS, TASK_OUTPUT_TOOL, TASK_STOP_TOOL],
         system: agentSystemPrompt(currentDirectory, allowedDirectories),
       })) {
         if (event.type === "delta") {
@@ -209,28 +249,47 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               const input = parseBashInput(call.input);
               await store.save(session);
               sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
-              const result = await bashExecutor.run(input, allowedDirectories, controller.signal, {
-                onRunning: (workingDirectory, statusDisplay) => {
-                  call.status = "running";
-                  call.startedAt = new Date().toISOString();
-                  call.workingDirectory = workingDirectory;
-                  call.timeoutMs = input.timeoutMs;
-                  call.statusDisplay = statusDisplay;
-                  sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
-                },
-                onOutput: (chunk) => {
-                  call.output += chunk;
-                  sendEvent(response, "tool_output", { messageId: assistantMessage.id, toolUseId: call.id, chunk });
-                },
-              });
-              call.status = result.status;
-              call.output = result.output;
-              call.exitCode = result.exitCode;
-              call.durationMs = result.durationMs;
-              call.workingDirectory = result.workingDirectory;
-              call.statusDisplay = result.statusDisplay;
-              call.completedAt = new Date().toISOString();
-              resultText = result.resultText;
+              if (input.runInBackground) {
+                const started = Date.now();
+                call.status = "running";
+                call.startedAt = new Date(started).toISOString();
+                call.timeoutMs = input.timeoutMs;
+                call.statusDisplay = { text: "STARTING", appendElapsed: true };
+                sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+                const task = await backgroundTasks.start(sessionId, input, allowedDirectories);
+                const message = `Command running in background with ID: ${task.id}. Use TaskOutput to read its output and status.`;
+                call.status = "complete";
+                call.output = message;
+                call.exitCode = 0;
+                call.durationMs = Date.now() - started;
+                call.workingDirectory = task.workingDirectory;
+                call.statusDisplay = { text: "BACKGROUND" };
+                call.completedAt = new Date().toISOString();
+                resultText = message;
+              } else {
+                const result = await bashExecutor.run(input, allowedDirectories, controller.signal, {
+                  onRunning: (workingDirectory, statusDisplay) => {
+                    call.status = "running";
+                    call.startedAt = new Date().toISOString();
+                    call.workingDirectory = workingDirectory;
+                    call.timeoutMs = input.timeoutMs;
+                    call.statusDisplay = statusDisplay;
+                    sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+                  },
+                  onOutput: (chunk) => {
+                    call.output += chunk;
+                    sendEvent(response, "tool_output", { messageId: assistantMessage.id, toolUseId: call.id, chunk });
+                  },
+                });
+                call.status = result.status;
+                call.output = result.output;
+                call.exitCode = result.exitCode;
+                call.durationMs = result.durationMs;
+                call.workingDirectory = result.workingDirectory;
+                call.statusDisplay = result.statusDisplay;
+                call.completedAt = new Date().toISOString();
+                resultText = result.resultText;
+              }
             } catch (error) {
               call.status = "error";
               call.output = errorMessage(error);
@@ -238,6 +297,46 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               resultText = call.output;
               if (error instanceof Error && error.name === "AbortError") abortAfterResult = error;
             }
+          } else if (call.name === TASK_OUTPUT_TOOL.name) {
+            const started = Date.now();
+            call.status = "running";
+            call.startedAt = new Date(started).toISOString();
+            sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+            try {
+              const result = await executeTaskOutput(
+                backgroundTasks,
+                sessionId,
+                parseTaskOutputInput(call.input),
+                controller.signal,
+              );
+              call.status = "complete";
+              call.output = result.output;
+              resultText = result.resultText;
+            } catch (error) {
+              call.status = "error";
+              call.output = errorMessage(error);
+              resultText = call.output;
+              if (error instanceof Error && error.name === "AbortError") abortAfterResult = error;
+            }
+            call.durationMs = Date.now() - started;
+            call.completedAt = new Date().toISOString();
+          } else if (call.name === TASK_STOP_TOOL.name) {
+            const started = Date.now();
+            call.status = "running";
+            call.startedAt = new Date(started).toISOString();
+            sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+            try {
+              const result = executeTaskStop(backgroundTasks, sessionId, parseTaskStopInput(call.input));
+              call.status = "complete";
+              call.output = result.output;
+              resultText = result.resultText;
+            } catch (error) {
+              call.status = "error";
+              call.output = errorMessage(error);
+              resultText = call.output;
+            }
+            call.durationMs = Date.now() - started;
+            call.completedAt = new Date().toISOString();
           } else if (FILE_TOOLS.some((tool) => tool.name === call.name)) {
             const started = Date.now();
             call.status = "running";
@@ -324,7 +423,7 @@ function directoryAllowed(directory: string, roots: string[]): boolean {
 function agentSystemPrompt(currentDirectory: string, directories: string[]): string {
   return [
     "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.",
-    "Use Read, Edit, and Write for text files; use Bash for commands and directory operations. Wait for each tool result before continuing. File content returned by Read remains available earlier in the conversation: never reread an already covered range unless Write or Edit has changed that file.",
+    "Use Read, Edit, and Write for text files; use Bash for commands and directory operations. Bash supports run_in_background for long-running commands; use TaskOutput with the returned task_id to inspect or wait for them, and TaskStop only when termination is needed. Foreground tools must finish before you can use their results. File content returned by Read remains available earlier in the conversation: never reread an already covered range unless Write or Edit has changed that file.",
     `Current working directory: ${currentDirectory}`,
     "The current working directory above is authoritative. Directory metadata in older Bash results describes where those individual calls started, not the current session CWD. A Bash working_directory override applies only to that call.",
     "Available working directories:",
@@ -420,6 +519,10 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
   }
 
   if (argument) return json(response, 400, { error: `${command} does not accept arguments` });
+
+  if (command === "/tasks" || command === "/bashes") {
+    return json(response, 200, { command: "tasks", tasks: backgroundTasks.list(sessionId), session });
+  }
 
   if (command === "/clear") {
     return json(response, 200, { command: "clear", session: await store.clear(session) });

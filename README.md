@@ -29,7 +29,8 @@ Environment variables are documented in `.env.example`. `.env` files are intenti
 - `src/server.ts` — static server and small JSON/SSE API built on `node:http`.
 - `src/provider.ts` — provider boundary for Anthropic-compatible APIs. Future tool-use, MCP, approvals, and alternative providers can be added behind this interface.
 - Anthropic-compatible text and thinking deltas stream live. Thinking and its opaque signature are stored separately, returned unchanged in subsequent model history, shown expanded while generating, and collapsed into a reopenable disclosure when the response completes.
-- `src/bash-tool.ts` — the first agent tool: a blocking Bash runner with streamed output, a 120-second default timeout, a 10-minute maximum, per-session serialization, and its own UI status presentation metadata. Different sessions may execute concurrently.
+- `src/bash-tool.ts` — the Bash runner supports streamed foreground execution and Claude Code-style background execution, with a 120-second default timeout and 10-minute maximum.
+- `src/background-tasks.ts` and `src/task-tools.ts` — session-scoped background process tracking plus `TaskOutput` and `TaskStop`. Tasks survive the HTTP response and later conversation turns while the Amber server remains running.
 - `src/file-tools.ts` — Claude Code-style `Read`, `Write`, and `Edit` tools for plain-text files. Images, PDFs, and notebooks are deliberately unsupported.
 - `src/store.ts` — atomic JSON persistence under `data/sessions`; sessions use three-word IDs drawn from the bundled [Basic English 2000 word list](https://people.sc.fsu.edu/~jburkardt/datasets/words/basic_english_2000.txt) and durable `/s/:sessionId` URLs.
 
@@ -42,6 +43,7 @@ Environment variables are documented in `.env.example`. `.env` files are intenti
 - `/compact` streams visible progress while replacing earlier model context with an LLM-generated continuation summary and retaining the complete transcript for browsing. Its persisted banner reports the estimated before/after context size and reduction; estimates use a provider-independent character heuristic. The summary and boundary are stored as session metadata, the banner is excluded from model context, and the summarization exchange is not added as chat messages.
 - `/fork` creates a new session with a copy of the complete transcript and its active compacted context, if present. It appends reciprocal provenance banners linking the fork to its source and the source to its fork. Fork banners persist in chat history but are excluded from model context.
 - `/name <session name>` changes the active session's title as shown in the session archive. Running `/name` without a title asks the configured LLM to generate one from the conversation; the naming prompt and response are not saved in chat history.
+- `/tasks` opens a Claude Code-style background-task manager. It lists the current session's running tasks newest first, opens the sole task directly, shows live command/output/runtime details, and supports stopping the selected task. `/bashes` is accepted as a compatibility alias.
 
 ## API
 
@@ -51,10 +53,14 @@ Environment variables are documented in `.env.example`. `.env` files are intenti
 - `DELETE /api/sessions/:id` permanently deletes a session.
 - `POST /api/sessions/:id/messages` appends a user message and streams agent events as server-sent events.
 - `POST /api/sessions/:id/commands` runs a supported slash command. Bare `/name` and `/compact` invoke the configured model without recording those command exchanges as chat messages.
+- `GET /api/sessions/:id/tasks` returns the current session's running background tasks for the live `/tasks` dialog.
+- `POST /api/sessions/:id/tasks/:taskId/stop` terminates a running background task selected in that dialog.
 
 ## Agent tools
 
-- `Bash` runs `/bin/bash -lc <command>` in the session CWD by default, or in an explicitly selected `working_directory` beneath the project or an `/add-dir` root. The model may override the 120-second timeout with `timeout_ms` up to 600,000 ms. Calls within one session execute in order and block the agent loop until completion or timeout; separate sessions can run Bash concurrently.
+- `Bash` runs `/bin/bash -lc <command>` in the session CWD by default, or in an explicitly selected `working_directory` beneath the project or an `/add-dir` root. Its Claude Code-style arguments include `timeout` (milliseconds), `description`, and `run_in_background`. Foreground calls within one session execute in order; background calls immediately return a `b`-prefixed task ID and continue independently. The parser still accepts the former `timeout_ms` spelling for saved-history compatibility.
+- `TaskOutput` accepts `task_id`, `block` (default `true`), and `timeout` (default 30 seconds, maximum 10 minutes). It returns the task status and currently captured stdout/stderr, waiting for completion when requested.
+- `TaskStop` accepts `task_id` and terminates a running background process group. The deprecated Claude Code `shell_id` spelling is accepted for transcript compatibility. Background tasks are isolated to their originating Amber session and are stopped when that session is deleted.
 - `Read` reads a plain-text path with numbered output. Relative paths resolve from the session CWD; absolute and `~/` paths are also accepted. It accepts a 1-based `offset` and a `limit` of up to 2,000 lines. Session-level range coverage prevents repeated and fully overlapping reads from duplicating file content in the model context; Write/Edit invalidate the affected file's coverage.
 - `Write` creates or completely replaces a plain-text file. Replacing an existing file requires one full `Read` first; successful changes show an expanded unified diff with red removals and green additions.
 - `Edit` performs an exact string replacement, requiring a unique match unless `replace_all` is set. Existing files require one full `Read`; an empty `old_string` may create a missing file. Successful changes use the same unified diff display.

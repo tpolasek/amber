@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -81,7 +82,11 @@ function completionParts(fragment: string, baseDirectory: string): {
 
 function pathAllowed(candidate: string, roots: string[]): boolean {
   return roots.some((root) => {
-    const child = relative(root, candidate);
+    const child = relative(canonicalRoot(root), candidate);
     return child === "" || (!child.startsWith("..") && !isAbsolute(child));
   });
+}
+
+function canonicalRoot(directory: string): string {
+  try { return realpathSync(directory); } catch { return directory; }
 }

@@ -1,19 +1,27 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BashExecutor, BASH_TOOL, parseBashInput } from "../src/bash-tool.js";
 
 test("defines the Bash tool and parses its input with the default timeout", () => {
   assert.equal(BASH_TOOL.name, "Bash");
-  assert.deepEqual(parseBashInput({ command: "  pwd  " }), { command: "pwd", timeoutMs: 120_000 });
-  assert.throws(() => parseBashInput({ command: "pwd", timeout_ms: 50 }), /timeout_ms/);
+  assert.deepEqual(parseBashInput({ command: "  pwd  " }), {
+    command: "pwd", timeoutMs: 120_000, runInBackground: false,
+  });
+  assert.deepEqual(parseBashInput({
+    command: "npm test", timeout: 5_000, description: "Run tests", run_in_background: true,
+  }), {
+    command: "npm test", timeoutMs: 5_000, description: "Run tests", runInBackground: true,
+  });
+  assert.throws(() => parseBashInput({ command: "pwd", timeout: 50 }), /timeout/);
   assert.throws(() => parseBashInput({ command: "" }), /non-empty command/);
 });
 
 test("runs Bash in an allowed directory and captures output", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-bash-"));
+  const canonicalDirectory = await realpath(directory);
   const executor = new BashExecutor();
   let runningDirectory = "";
   let runningStatus = {};
@@ -27,14 +35,14 @@ test("runs Bash in an allowed directory and captures output", async () => {
       onOutput: (chunk) => { streamed += chunk; },
     },
   );
-  assert.equal(runningDirectory, directory);
+  assert.equal(runningDirectory, canonicalDirectory);
   assert.deepEqual(runningStatus, { text: "RUNNING", appendElapsed: true });
   assert.equal(streamed, "amber");
   assert.equal(result.output, "amber");
   assert.equal(result.status, "complete");
   assert.equal(result.exitCode, 0);
-  assert.equal(result.workingDirectory, directory);
-  assert.match(result.resultText, new RegExp(`Bash starting directory for this call: ${directory}`));
+  assert.equal(result.workingDirectory, canonicalDirectory);
+  assert.match(result.resultText, new RegExp(`Bash starting directory for this call: ${canonicalDirectory}`));
   assert.match(result.statusDisplay.text, /^(?:\d+ms|\d+(?:\.\d)?s)$/);
 });
 

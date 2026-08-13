@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeFileTool, FILE_TOOLS } from "../src/file-tools.js";
@@ -25,13 +25,14 @@ test("Read returns numbered lines and records full-read state", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-files-"));
   const filePath = join(directory, "sample.txt");
   await writeFile(filePath, "first\nsecond\nthird\n", "utf8");
+  const canonicalFilePath = await realpath(filePath);
   const current = session();
   const result = await executeFileTool("Read", { file_path: filePath }, [directory], current);
 
-  assert.equal(result.filePath, filePath);
+  assert.equal(result.filePath, canonicalFilePath);
   assert.equal(result.output, "Read 3 lines");
   assert.equal(result.resultText, "     1→first\n     2→second\n     3→third");
-  assert.equal(current.fileReadState?.[filePath]?.full, true);
+  assert.equal(current.fileReadState?.[canonicalFilePath]?.full, true);
 });
 
 test("Read deduplicates ranges already present in conversation context", async () => {
@@ -80,9 +81,10 @@ test("partial Read does not authorize an existing-file write", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-files-"));
   const filePath = join(directory, "sample.txt");
   await writeFile(filePath, "first\nsecond\nthird\n", "utf8");
+  const canonicalFilePath = await realpath(filePath);
   const current = session();
   await executeFileTool("Read", { file_path: filePath, offset: 2, limit: 1 }, [directory], current);
-  assert.equal(current.fileReadState?.[filePath]?.full, false);
+  assert.equal(current.fileReadState?.[canonicalFilePath]?.full, false);
   await assert.rejects(
     executeFileTool("Write", { file_path: filePath, content: "replacement\n" }, [directory], current),
     /not been fully read/,
@@ -164,8 +166,9 @@ test("file tools resolve relative paths from CWD and reject binary and outside p
   const current = session();
 
   await writeFile(join(directory, "relative.txt"), "relative", "utf8");
+  const canonicalRelativePath = await realpath(join(directory, "relative.txt"));
   const relative = await executeFileTool("Read", { file_path: "relative.txt" }, [directory], current);
-  assert.equal(relative.filePath, join(directory, "relative.txt"));
+  assert.equal(relative.filePath, canonicalRelativePath);
   assert.equal(relative.resultText, "     1→relative");
   await assert.rejects(executeFileTool("Read", { file_path: binaryPath }, [directory], current), /only supports text/);
   await assert.rejects(executeFileTool("Read", { file_path: imagePath }, [directory], current), /images, PDFs, and notebooks/);
