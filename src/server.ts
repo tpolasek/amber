@@ -83,6 +83,9 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       workspaceRoot,
     });
   }
+  if (method === "POST" && url.pathname === "/api/run") {
+    return runPrompt(request, response);
+  }
   if (method === "GET" && url.pathname === "/api/sessions") {
     return json(response, 200, { sessions: await store.list() });
   }
@@ -154,6 +157,50 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return serveFile(response, join(publicDirectory, "index.html"), "text/html; charset=utf-8", "no-cache");
   }
   json(response, 404, { error: "Not found" });
+}
+
+async function runPrompt(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readJson(request);
+  const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+  if (!prompt || prompt.length > 32_000) {
+    return json(response, 400, { error: "Prompt must contain 1–32,000 characters" });
+  }
+
+  const requestedDirectory = typeof body.cwd === "string" ? body.cwd.trim() : "";
+  if (!requestedDirectory || !isAbsolute(requestedDirectory)) {
+    return json(response, 400, { error: "cwd must be an absolute directory path" });
+  }
+
+  let currentDirectory: string;
+  try {
+    currentDirectory = await realpath(requestedDirectory);
+    if (!(await stat(currentDirectory)).isDirectory()) {
+      return json(response, 400, { error: `Not a directory: ${currentDirectory}` });
+    }
+  } catch (error) {
+    return json(response, 400, { error: `Could not use cwd: ${errorMessage(error)}` });
+  }
+
+  const session = await store.create();
+  if (currentDirectory !== workspaceRoot) session.directories = [currentDirectory];
+  session.cwd = currentDirectory;
+  session.addDirInitialized = true;
+  await store.save(session);
+
+  const controller = new AbortController();
+  request.once("aborted", () => controller.abort());
+  response.on("close", () => {
+    if (!response.writableEnded) controller.abort();
+  });
+
+  try {
+    await runSessionPrompt(session.id, prompt, controller.signal);
+    if (!response.destroyed && !response.writableEnded) json(response, 200, { sessionId: session.id });
+  } catch (error) {
+    if (!response.destroyed && !response.writableEnded) {
+      json(response, 502, { error: errorMessage(error), sessionId: session.id });
+    }
+  }
 }
 
 async function streamMessage(request: IncomingMessage, response: ServerResponse, sessionId: string): Promise<void> {
@@ -526,7 +573,7 @@ async function executeAgentCall(
     call.agentType = input.subagentType;
     await persistParent();
     onUpdate(call);
-    resultText = await runAgentSession(child.id, input.prompt, signal);
+    resultText = await runSessionPrompt(child.id, input.prompt, signal);
     call.status = "complete";
     call.output = resultText;
     call.statusDisplay = { text: "AGENT COMPLETE" };
@@ -552,7 +599,7 @@ async function executeAgentCall(
   };
 }
 
-async function runAgentSession(sessionId: string, prompt: string, signal: AbortSignal): Promise<string> {
+async function runSessionPrompt(sessionId: string, prompt: string, signal: AbortSignal): Promise<string> {
   const loopbackHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host.includes(":") ? `[${host}]` : host;
   const response = await fetch(`http://${loopbackHost}:${port}/api/sessions/${sessionId}/messages`, {
     method: "POST",
@@ -560,8 +607,8 @@ async function runAgentSession(sessionId: string, prompt: string, signal: AbortS
     body: JSON.stringify({ content: prompt }),
     signal,
   });
-  if (!response.ok) throw new Error(`Agent session failed (${response.status}): ${await response.text()}`);
-  if (!response.body) throw new Error("Agent session returned no stream");
+  if (!response.ok) throw new Error(`Session failed (${response.status}): ${await response.text()}`);
+  if (!response.body) throw new Error("Session returned no stream");
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -583,15 +630,15 @@ async function runAgentSession(sessionId: string, prompt: string, signal: AbortS
         if (!data) continue;
         const payload = JSON.parse(data) as { error?: string; message?: Message };
         if (event === "done") result = payload.message?.content ?? "";
-        if (event === "error") throw new Error(payload.error ?? "Agent session failed");
+        if (event === "error") throw new Error(payload.error ?? "Session failed");
       }
       if (done) break;
     }
   } finally {
     reader.releaseLock();
   }
-  if (result === undefined) throw new Error("Agent session ended without a final response");
-  return result || "Agent completed without a text response.";
+  if (result === undefined) throw new Error("Session ended without a final response");
+  return result || "Session completed without a text response.";
 }
 
 async function listDirectoryCompletions(response: ServerResponse, sessionId: string, url: URL): Promise<void> {

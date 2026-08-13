@@ -15,12 +15,12 @@ Configure an Anthropic-compatible backend, then open `http://127.0.0.1:3000`:
 ```bash
 export ANTHROPIC_AUTH_TOKEN="your-key"
 export ANTHROPIC_BASE_URL="https://api.z.ai/api/anthropic"
-export ANTHROPIC_MODEL="glm-4.7" # optional for Z.AI
+export ANTHROPIC_MODEL="your-model" # required
 # export ANTHROPIC_THINKING_BUDGET_TOKENS=32768 # Z.AI default; set 0 to disable
 npm start
 ```
 
-Environment variables are documented in `.env.example`. `.env` files are intentionally not loaded by the app to avoid another dependency; export variables in the shell or use your process manager.
+`ANTHROPIC_MODEL` must always be specified; Amber does not choose a provider-specific default. `.env` files are intentionally not loaded by the app, so export variables in the shell or use your process manager.
 
 ## Architecture
 
@@ -47,6 +47,7 @@ Environment variables are documented in `.env.example`. `.env` files are intenti
 
 ## API
 
+- `POST /api/run` accepts `{ "prompt": string, "cwd": string }`, creates a persistent session, and blocks until the browser-equivalent agent turn finishes. `cwd` must be an absolute existing directory and is authorized as if `/add-dir` and `/cwd` were run first. A successful response is `{ "sessionId": "..." }`; execution errors retain the session and include its ID in the error response.
 - `POST /api/sessions` creates a session.
 - `GET /api/sessions` lists recent sessions.
 - `GET /api/sessions/:id` restores a transcript.
@@ -55,6 +56,16 @@ Environment variables are documented in `.env.example`. `.env` files are intenti
 - `POST /api/sessions/:id/commands` runs a supported slash command. Bare `/name` and `/compact` invoke the configured model without recording those command exchanges as chat messages.
 - `GET /api/sessions/:id/tasks` returns the current session's running background tasks for the live `/tasks` dialog.
 - `POST /api/sessions/:id/tasks/:taskId/stop` terminates a running background task selected in that dialog.
+
+For example, this blocks until the complete turn and all foreground tool calls finish:
+
+```bash
+curl --fail-with-body http://127.0.0.1:3000/api/run \
+  --header 'content-type: application/json' \
+  --data '{"prompt":"Inspect this directory and summarize it.","cwd":"/tmp"}'
+```
+
+The successful response is `{"sessionId":"..."}`. Invalid input returns `400` without creating a session. If execution fails after creation, the non-2xx JSON response includes both `error` and `sessionId`, and the failed transcript remains available for inspection.
 
 ## Agent tools
 

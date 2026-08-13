@@ -125,14 +125,14 @@ export function createProvider(environment: NodeJS.ProcessEnv): LlmProvider {
   if (!environment.ANTHROPIC_AUTH_TOKEN && !environment.ANTHROPIC_API_KEY) {
     throw new Error("Set ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY before starting AMBER");
   }
+  const model = environment.ANTHROPIC_MODEL?.trim();
+  if (!model) throw new Error("Set ANTHROPIC_MODEL before starting AMBER");
   const baseUrl = environment.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com";
   const thinkingBudgetTokens = parseThinkingBudget(environment.ANTHROPIC_THINKING_BUDGET_TOKENS, baseUrl);
   return new AnthropicProvider({
     ...(environment.ANTHROPIC_API_KEY ? { apiKey: environment.ANTHROPIC_API_KEY } : {}),
     ...(environment.ANTHROPIC_AUTH_TOKEN ? { authToken: environment.ANTHROPIC_AUTH_TOKEN } : {}),
-    model: environment.ANTHROPIC_MODEL
-      ?? environment.ANTHROPIC_DEFAULT_SONNET_MODEL
-      ?? (baseUrl.includes("api.z.ai") ? "glm-4.7" : "claude-sonnet-4-20250514"),
+    model,
     baseUrl,
     ...(thinkingBudgetTokens ? { thinkingBudgetTokens } : {}),
   });

@@ -75,16 +75,25 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
   ]);
 });
 
-test("requires credentials and selects the Z.AI model default", () => {
+test("requires credentials and an explicit model", () => {
   assert.throws(() => createProvider({}), /ANTHROPIC_AUTH_TOKEN/);
+  assert.throws(() => createProvider({
+    ANTHROPIC_AUTH_TOKEN: "test-token",
+  }), /ANTHROPIC_MODEL/);
+  assert.throws(() => createProvider({
+    ANTHROPIC_AUTH_TOKEN: "test-token",
+    ANTHROPIC_MODEL: "   ",
+  }), /ANTHROPIC_MODEL/);
   const provider = createProvider({
     ANTHROPIC_AUTH_TOKEN: "test-token",
     ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
+    ANTHROPIC_MODEL: "mimo-v2.5",
   });
-  assert.equal(provider.model, "glm-4.7");
+  assert.equal(provider.model, "mimo-v2.5");
   assert.equal(provider.mode, "live");
   assert.throws(() => createProvider({
     ANTHROPIC_AUTH_TOKEN: "test-token",
+    ANTHROPIC_MODEL: "mimo-v2.5",
     ANTHROPIC_THINKING_BUDGET_TOKENS: "512",
   }), /must be 0 or at least 1024/);
 });
