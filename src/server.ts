@@ -40,6 +40,7 @@ const store = new SessionStore(dataDirectory);
 const provider = createProvider(process.env);
 const activeSessions = new Set<string>();
 const backgroundTasks = new BackgroundTaskManager();
+const agentRunToken = randomUUID();
 const SESSION_PATH_ID = "([a-z0-9.-]+)";
 
 await store.initialize();
@@ -159,6 +160,9 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   if (activeSessions.has(sessionId)) return json(response, 409, { error: "A response is already streaming" });
   const session = await store.get(sessionId);
   if (!session) return json(response, 404, { error: "Session not found" });
+  if (session.parentSessionId && request.headers["x-amber-agent-token"] !== agentRunToken) {
+    return json(response, 403, { error: "Agent sub-sessions are read-only" });
+  }
 
   const body = await readJson(request);
   const content = typeof body.content === "string" ? body.content.trim() : "";
@@ -189,6 +193,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     const allowedDirectories = sessionDirectories(session);
     const currentDirectory = sessionWorkingDirectory(session);
     const toolLoopTracker = new ToolLoopTracker();
+    let lastAgentSnapshotAt = 0;
     for (;;) {
       const history = buildProviderHistory(session.messages, assistantMessage.id, session.compaction);
       const toolDrafts = new Map<number, { call: ToolCall; inputJson: string }>();
@@ -200,9 +205,17 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         if (event.type === "delta") {
           assistantMessage.content += event.text;
           sendEvent(response, "delta", { text: event.text });
+          if (session.parentSessionId && Date.now() - lastAgentSnapshotAt >= 500) {
+            lastAgentSnapshotAt = Date.now();
+            await store.save(session);
+          }
         } else if (event.type === "thinking_delta") {
           assistantMessage.thinking = (assistantMessage.thinking ?? "") + event.thinking;
           sendEvent(response, "thinking_delta", { thinking: event.thinking });
+          if (session.parentSessionId && Date.now() - lastAgentSnapshotAt >= 500) {
+            lastAgentSnapshotAt = Date.now();
+            await store.save(session);
+          }
         } else if (event.type === "thinking_signature_delta") {
           assistantMessage.thinkingSignature = (assistantMessage.thinkingSignature ?? "") + event.signature;
         } else if (event.type === "tool_use_start") {
@@ -240,6 +253,10 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       sendEvent(response, "assistant_complete", { message: assistantMessage });
 
       if (toolDrafts.size === 0) {
+        if (session.parentSessionId) {
+          session.agentStatus = "complete";
+          await store.save(session);
+        }
         sendEvent(response, "done", { message: assistantMessage, session });
         return;
       }
@@ -425,6 +442,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       assistantMessage.status = "error";
       if (!assistantMessage.content) assistantMessage.content = "Response interrupted.";
     }
+    if (session.parentSessionId) session.agentStatus = "error";
     await store.save(session);
     const message = error instanceof Error && error.name === "AbortError" ? "Generation stopped" : errorMessage(error);
     if (!response.writableEnded) sendEvent(response, "error", { error: message, message: assistantMessage });
@@ -489,7 +507,7 @@ async function runAgentSession(sessionId: string, prompt: string, signal: AbortS
   const loopbackHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host.includes(":") ? `[${host}]` : host;
   const response = await fetch(`http://${loopbackHost}:${port}/api/sessions/${sessionId}/messages`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-amber-agent-token": agentRunToken },
     body: JSON.stringify({ content: prompt }),
     signal,
   });
@@ -551,6 +569,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
   if (activeSessions.has(sessionId)) return json(response, 409, { error: "Wait for the current response to finish" });
   const session = await store.get(sessionId);
   if (!session) return json(response, 404, { error: "Session not found" });
+  if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
   const body = await readJson(request);
   const rawCommand = typeof body.command === "string" ? body.command.trim() : "";
   const firstWhitespace = rawCommand.search(/\s/);

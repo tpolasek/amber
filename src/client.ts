@@ -4,9 +4,9 @@ interface TokenUsage { input: number; output: number }
 type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
 interface ToolStatusDisplay { text: string; appendElapsed?: boolean }
 interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string; statusDisplay?: ToolStatusDisplay; agentSessionId?: string; agentType?: string }
-interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; streamingThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "compact-banner" | "tool-result"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean }
+interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; streamingThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "compact-banner" | "tool-result"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean }
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
-interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string }
+interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error" }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface Config { provider: string; model: string; mode: "live"; homeDirectory: string; workspaceRoot: string }
 interface BackgroundTask { id: string; type: "local_bash"; command: string; description: string; workingDirectory: string; status: "running" | "completed" | "failed" | "timed_out" | "killed"; stdout: string; stderr: string; exitCode: number | null; startedAt: string; completedAt?: string; durationMs?: number }
@@ -44,6 +44,8 @@ let tasksDialogSelection = 0;
 let tasksDialogDetailId: string | null = null;
 let tasksDialogSkippedList = false;
 let tasksDialogPollTimer: number | undefined;
+let agentSessionPollTimer: number | undefined;
+let agentSessionRefreshPending = false;
 
 const state: { session: Session | null; config: Config | null; streaming: boolean; controller: AbortController | null } = {
   session: null,
@@ -59,6 +61,7 @@ const elements = {
   transcript: required<HTMLElement>("transcript"),
   emptyState: required<HTMLElement>("empty-state"),
   composer: required<HTMLFormElement>("composer"),
+  composerShell: required<HTMLElement>("composer-shell"),
   commandMenu: required<HTMLElement>("command-menu"),
   historySearch: required<HTMLElement>("history-search"),
   historyQuery: required<HTMLInputElement>("history-query"),
@@ -225,6 +228,41 @@ async function loadSession(id: string): Promise<void> {
   renderSession();
   renderSessionList();
   document.body.classList.remove("sidebar-open");
+}
+
+function syncAgentSessionPolling(): void {
+  const session = state.session;
+  const shouldPoll = Boolean(session?.parentSessionId)
+    && (session!.agentStatus === "running" || session!.messages.some((message) => message.status === "streaming"));
+  if (shouldPoll && agentSessionPollTimer === undefined) {
+    agentSessionPollTimer = window.setInterval(() => void refreshAgentSession(), 750);
+  } else if (!shouldPoll && agentSessionPollTimer !== undefined) {
+    window.clearInterval(agentSessionPollTimer);
+    agentSessionPollTimer = undefined;
+  }
+}
+
+async function refreshAgentSession(): Promise<void> {
+  const current = state.session;
+  if (!current?.parentSessionId || agentSessionRefreshPending) return;
+  agentSessionRefreshPending = true;
+  try {
+    const { session } = await api<{ session: Session }>(`/api/sessions/${current.id}`);
+    if (state.session?.id !== current.id) return;
+    if (session.updatedAt !== current.updatedAt) {
+      const distanceFromBottom = elements.transcript.scrollHeight
+        - elements.transcript.scrollTop - elements.transcript.clientHeight;
+      state.session = session;
+      renderSession();
+      if (distanceFromBottom < 80) scrollTranscriptToBottom();
+    } else {
+      syncAgentSessionPolling();
+    }
+  } catch {
+    // Keep the current snapshot visible during a transient refresh failure.
+  } finally {
+    agentSessionRefreshPending = false;
+  }
 }
 
 let summaries: Summary[] = [];
@@ -668,6 +706,7 @@ function renderSession(): void {
   });
   const session = state.session;
   if (!session) return;
+  elements.composerShell.hidden = Boolean(session.parentSessionId);
   elements.emptyState.hidden = session.messages.length > 0;
   for (const message of session.messages) {
     if (message.kind !== "tool-result") appendMessage(message);
@@ -675,6 +714,7 @@ function renderSession(): void {
   resetPromptHistory();
   closeHistorySearch(false);
   renderHeader();
+  syncAgentSessionPolling();
 }
 
 function renderHeader(): void {
@@ -765,7 +805,7 @@ function appendMessage(message: Message, before: HTMLElement | null = null): HTM
   const article = document.createElement("article");
   const messageClass = message.kind === "command"
     ? " command-message"
-    : message.kind === "fork-banner"
+    : message.kind === "fork-banner" || message.kind === "agent-banner"
       ? " fork-banner"
       : message.kind === "compact-banner"
         ? " compact-banner"
@@ -822,9 +862,11 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
   } else {
     stopStreamingThinkingReveal(element);
   }
-  if (message.kind === "fork-banner") {
+  if (message.kind === "fork-banner" || message.kind === "agent-banner") {
     const linkedSessionId = message.sourceSessionId ?? message.forkedSessionId;
-    const label = message.sourceSessionId ? "Forked from session: " : "Forked to session: ";
+    const label = message.kind === "agent-banner"
+      ? "Agent sub-session of: "
+      : message.sourceSessionId ? "Forked from session: " : "Forked to session: ";
     content.replaceChildren(document.createTextNode(label));
     if (linkedSessionId) {
       const link = document.createElement("a");
