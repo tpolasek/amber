@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { AGENT_TOOL, getAgentDefinition, parseAgentInput } from "../src/agent-tool.js";
+import { AGENT_TOOL, getAgentDefinition, parseAgentInput, startAgentRuns } from "../src/agent-tool.js";
 
 test("uses the Claude Code Agent wire name and core input fields", () => {
   assert.equal(AGENT_TOOL.name, "Agent");
@@ -34,4 +34,23 @@ test("rejects unknown Agent types", () => {
     () => parseAgentInput({ description: "Do some work", prompt: "Work.", subagent_type: "explore" }),
     /Available agents: general-purpose, code-review/,
   );
+});
+
+test("starts every same-turn Agent call before awaiting results", async () => {
+  const started: string[] = [];
+  const releases = new Map<string, () => void>();
+  const calls = [{ id: "agent-1" }, { id: "agent-2" }, { id: "agent-3" }];
+  const runs = startAgentRuns(calls, async (call) => {
+    started.push(call.id);
+    await new Promise<void>((resolve) => releases.set(call.id, resolve));
+    return `${call.id} complete`;
+  });
+
+  assert.deepEqual(started, ["agent-1", "agent-2", "agent-3"]);
+  for (const call of calls) releases.get(call.id)!();
+  assert.deepEqual(await Promise.all(calls.map((call) => runs.get(call.id))), [
+    "agent-1 complete",
+    "agent-2 complete",
+    "agent-3 complete",
+  ]);
 });

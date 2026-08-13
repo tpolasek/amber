@@ -22,7 +22,7 @@ import {
 import { executeFileTool, FILE_TOOLS } from "./file-tools.js";
 import { completeDirectories } from "./directory-completion.js";
 import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
-import { AGENT_TOOL, getAgentDefinition, parseAgentInput } from "./agent-tool.js";
+import { AGENT_TOOL, getAgentDefinition, parseAgentInput, startAgentRuns } from "./agent-tool.js";
 import type { ToolDefinition } from "./types.js";
 import type { Message, Session, TokenUsage, ToolCall } from "./types.js";
 
@@ -261,38 +261,35 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         return;
       }
 
-      for (const { call } of toolDrafts.values()) {
+      const orderedCalls = [...toolDrafts.values()].map(({ call }) => call);
+      let agentLinkSaveChain = Promise.resolve();
+      const persistAgentLinks = (): Promise<void> => {
+        const pending = agentLinkSaveChain.then(() => store.save(session));
+        agentLinkSaveChain = pending.catch(() => undefined);
+        return pending;
+      };
+      const agentRuns = startAgentRuns(
+        orderedCalls.filter((call) => call.name === AGENT_TOOL.name && call.status !== "error"),
+        (call) => executeAgentCall(
+          session,
+          call,
+          controller.signal,
+          persistAgentLinks,
+          (updatedCall) => sendEvent(response, "tool_update", {
+            messageId: assistantMessage.id,
+            toolCall: updatedCall,
+          }),
+        ),
+      );
+
+      for (const call of orderedCalls) {
         let resultText = call.output;
         let abortAfterResult: Error | undefined;
         if (call.status !== "error") {
           if (call.name === AGENT_TOOL.name) {
-            const started = Date.now();
-            call.status = "running";
-            call.startedAt = new Date(started).toISOString();
-            call.statusDisplay = { text: "RUNNING AGENT", appendElapsed: true };
-            sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
-            try {
-              const input = parseAgentInput(call.input);
-              const child = await store.createAgentSession(session, input.subagentType, input.description);
-              call.agentSessionId = child.id;
-              call.agentType = input.subagentType;
-              call.statusDisplay = { text: "RUNNING AGENT", appendElapsed: true };
-              await store.save(session);
-              sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
-              const result = await runAgentSession(child.id, input.prompt, controller.signal);
-              call.status = "complete";
-              call.output = result;
-              call.statusDisplay = { text: "AGENT COMPLETE" };
-              resultText = result;
-            } catch (error) {
-              call.status = "error";
-              call.output = errorMessage(error);
-              call.statusDisplay = { text: "AGENT FAILED" };
-              resultText = call.output;
-              if (error instanceof Error && error.name === "AbortError") abortAfterResult = error;
-            }
-            call.durationMs = Date.now() - started;
-            call.completedAt = new Date().toISOString();
+            const result = await agentRuns.get(call.id)!;
+            resultText = result.resultText;
+            abortAfterResult = result.abortAfterResult;
           } else if (call.name === BASH_TOOL.name) {
             try {
               const input = parseBashInput(call.input);
@@ -501,6 +498,58 @@ function sessionSystemPrompt(session: Session, currentDirectory: string, directo
   const definition = getAgentDefinition(session.agentType as "general-purpose" | "code-review");
   const environment = agentSystemPrompt(currentDirectory, directories, definition.readOnly);
   return `${definition.systemPrompt}\n\nNotes:\n- Always use absolute paths because working directories can reset between Bash calls.\n- Your final response must use absolute paths when referring to files; include code snippets only when they are essential.\n- Do not use emojis.\n- Do not put a colon immediately before a tool call.\n\n${environment}`;
+}
+
+interface AgentExecutionResult {
+  resultText: string;
+  abortAfterResult?: Error;
+}
+
+async function executeAgentCall(
+  parent: Session,
+  call: ToolCall,
+  signal: AbortSignal,
+  persistParent: () => Promise<void>,
+  onUpdate: (call: ToolCall) => void,
+): Promise<AgentExecutionResult> {
+  const started = Date.now();
+  call.status = "running";
+  call.startedAt = new Date(started).toISOString();
+  call.statusDisplay = { text: "RUNNING AGENT", appendElapsed: true };
+  onUpdate(call);
+  let resultText = "";
+  let abortAfterResult: Error | undefined;
+  try {
+    const input = parseAgentInput(call.input);
+    const child = await store.createAgentSession(parent, input.subagentType, input.description);
+    call.agentSessionId = child.id;
+    call.agentType = input.subagentType;
+    await persistParent();
+    onUpdate(call);
+    resultText = await runAgentSession(child.id, input.prompt, signal);
+    call.status = "complete";
+    call.output = resultText;
+    call.statusDisplay = { text: "AGENT COMPLETE" };
+    await persistParent();
+  } catch (error) {
+    call.status = "error";
+    call.output = errorMessage(error);
+    call.statusDisplay = { text: "AGENT FAILED" };
+    resultText = call.output;
+    if (error instanceof Error && error.name === "AbortError") abortAfterResult = error;
+    try {
+      await persistParent();
+    } catch {
+      // Preserve the original agent failure in the tool result.
+    }
+  }
+  call.durationMs = Date.now() - started;
+  call.completedAt = new Date().toISOString();
+  onUpdate(call);
+  return {
+    resultText,
+    ...(abortAfterResult ? { abortAfterResult } : {}),
+  };
 }
 
 async function runAgentSession(sessionId: string, prompt: string, signal: AbortSignal): Promise<string> {

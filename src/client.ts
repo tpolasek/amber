@@ -1044,6 +1044,9 @@ function diffLineClass(line: string): string {
 }
 
 function toolStatusLabel(call: ToolCall): string {
+  if (call.name === "Agent" && call.status === "complete" && call.durationMs !== undefined) {
+    return `AGENT COMPLETE · ${formatDuration(call.durationMs)}`;
+  }
   if (call.statusDisplay) {
     const elapsed = call.statusDisplay.appendElapsed && call.startedAt
       ? ` ${formatDuration(Math.max(0, Date.now() - Date.parse(call.startedAt)))}`

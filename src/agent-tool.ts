@@ -72,6 +72,7 @@ export const AGENT_TOOL: ToolDefinition = {
     ...AGENT_DEFINITIONS.map((agent) => `- ${agent.type}: ${agent.whenToUse} (Tools: ${agent.readOnly ? "Bash, Read" : "All tools"})`),
     "",
     "Always include a short description (3-5 words). Brief the agent like a smart colleague who has not seen this conversation, and clearly say whether it should write code or only research.",
+    "Launch multiple agents concurrently whenever possible by returning multiple Agent tool uses in a single response. Amber starts all Agent calls from that response in parallel.",
     "Amber currently runs agents in the foreground on the configured model. The model and run_in_background fields are accepted for Claude Code wire compatibility; omit them unless needed by another compatible client.",
   ].join("\n"),
   input_schema: {
@@ -124,6 +125,13 @@ export function parseAgentInput(input: Record<string, unknown>): AgentInput {
 
 export function getAgentDefinition(type: AgentType): AgentDefinition {
   return AGENT_DEFINITIONS.find((agent) => agent.type === type)!;
+}
+
+export function startAgentRuns<T extends { id: string }, TResult>(
+  calls: readonly T[],
+  run: (call: T) => Promise<TResult>,
+): Map<string, Promise<TResult>> {
+  return new Map(calls.map((call) => [call.id, run(call)]));
 }
 
 function isAgentType(value: string): value is AgentType {
