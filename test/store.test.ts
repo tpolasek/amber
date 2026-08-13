@@ -139,3 +139,22 @@ test("rejects invalid session identifiers", async () => {
   await store.initialize();
   assert.equal(await store.get("../../secret"), null);
 });
+
+test("creates linked agent sub-sessions using the parent id and a short uuid", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const parent = await store.create();
+  parent.directories = ["/tmp/example-workspace"];
+  parent.cwd = "/tmp/example-workspace";
+  await store.save(parent);
+
+  const child = await store.createAgentSession(parent, "code-review", "Review latest diff");
+  assert.match(child.id, new RegExp(`^${parent.id.replaceAll(".", "\\.")}\\.[a-z0-9]{8}$`));
+  assert.equal(child.parentSessionId, parent.id);
+  assert.equal(child.agentType, "code-review");
+  assert.equal(child.title, "Review latest diff");
+  assert.deepEqual(child.directories, parent.directories);
+  assert.equal((await store.get(child.id))?.parentSessionId, parent.id);
+  assert.deepEqual((await store.list()).map((session) => session.id), [parent.id]);
+});

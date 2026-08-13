@@ -27,6 +27,8 @@ export interface ToolCall {
   timeoutMs?: number;
   filePath?: string;
   statusDisplay?: ToolStatusDisplay;
+  agentSessionId?: string;
+  agentType?: string;
 }
 
 export interface Message {
@@ -64,6 +66,9 @@ export interface Session {
   cwd?: string;
   addDirInitialized?: boolean;
   fileReadState?: Record<string, FileReadState>;
+  parentSessionId?: string;
+  agentType?: string;
+  agentDescription?: string;
 }
 
 export interface FileReadState {

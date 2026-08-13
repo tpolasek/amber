@@ -4,7 +4,8 @@ import { randomInt } from "node:crypto";
 import type { Message, Session, SessionSummary } from "./types.js";
 import { BASIC_ENGLISH_2000 } from "./basic-english-2000.js";
 
-const SESSION_ID = /^(?:[a-f0-9-]{36}|[a-z]+(?:\.[a-z]+){2})(?:\.[2-9]\d*)?$/;
+const SESSION_ID = /^(?:[a-f0-9-]{36}|[a-z]+(?:\.[a-z]+){2})(?:\.[2-9]\d*)?(?:\.[a-z0-9]{8})*$/;
+const SHORT_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 const SESSION_WORDS = [...new Set(
   BASIC_ENGLISH_2000
     .map((word) => word.toLowerCase().replace(/[^a-z]/g, ""))
@@ -27,6 +28,29 @@ export class SessionStore {
     do id = randomSessionId();
     while (await this.get(id));
     return this.#createWithId(id);
+  }
+
+  async createAgentSession(parent: Session, agentType: string, description: string): Promise<Session> {
+    let id = "";
+    do id = `${parent.id}.${randomShortId()}`;
+    while (await this.get(id));
+
+    const now = new Date().toISOString();
+    const session: Session = {
+      id,
+      title: description,
+      createdAt: now,
+      updatedAt: now,
+      messages: [],
+      parentSessionId: parent.id,
+      agentType,
+      agentDescription: description,
+      ...(parent.directories ? { directories: structuredClone(parent.directories) } : {}),
+      ...(parent.cwd ? { cwd: parent.cwd } : {}),
+      ...(parent.addDirInitialized !== undefined ? { addDirInitialized: parent.addDirInitialized } : {}),
+    };
+    await this.save(session);
+    return session;
   }
 
   async clear(session: Session): Promise<Session> {
@@ -119,6 +143,7 @@ export class SessionStore {
 
     return sessions
       .filter((session): session is Session => session !== null)
+      .filter((session) => !session.parentSessionId)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .slice(0, limit)
       .map((session) => {
@@ -143,4 +168,8 @@ function randomSessionId(): string {
   const words = new Set<string>();
   while (words.size < 3) words.add(SESSION_WORDS[randomInt(SESSION_WORDS.length)] ?? "amber");
   return [...words].join(".");
+}
+
+function randomShortId(): string {
+  return Array.from({ length: 8 }, () => SHORT_ID_ALPHABET[randomInt(SHORT_ID_ALPHABET.length)]).join("");
 }

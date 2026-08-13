@@ -178,6 +178,9 @@ button { color: inherit; }
 .tool-call.error .tool-call-status, .tool-call.timed_out .tool-call-status { color: #ff937c; }
 .tool-command { display: block; overflow-x: auto; padding: 6px 8px; background: rgba(255,178,26,.035); color: #d9b970; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool-call-meta { padding: 4px 8px; border-top: 1px solid rgba(255,178,26,.08); color: #67583c; font-size: 11px; }
+.agent-session-link { display: block; padding: 6px 8px; border-top: 1px solid rgba(255,178,26,.16); background: rgba(255,178,26,.05); color: var(--amber); font-size: 11px; font-weight: 600; letter-spacing: .07em; text-decoration: none; }
+.agent-session-link::before { content: "↗ "; color: var(--amber-dim); }
+.agent-session-link:hover { background: rgba(255,178,26,.12); color: var(--amber-hot); }
 .tool-output-details { border-top: 1px solid rgba(255,178,26,.12); }
 .tool-output-details summary { padding: 5px 8px; color: #776443; cursor: pointer; font-size: 12px; letter-spacing: .07em; list-style: none; user-select: none; }
 .tool-output-details summary::-webkit-details-marker { display: none; }

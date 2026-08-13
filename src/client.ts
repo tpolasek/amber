@@ -3,10 +3,10 @@ import { StreamingThinkingReveal } from "./streaming-thinking.js";
 interface TokenUsage { input: number; output: number }
 type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
 interface ToolStatusDisplay { text: string; appendElapsed?: boolean }
-interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string; statusDisplay?: ToolStatusDisplay }
+interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string; statusDisplay?: ToolStatusDisplay; agentSessionId?: string; agentType?: string }
 interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; streamingThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "compact-banner" | "tool-result"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean }
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
-interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean }
+interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface Config { provider: string; model: string; mode: "live"; homeDirectory: string; workspaceRoot: string }
 interface BackgroundTask { id: string; type: "local_bash"; command: string; description: string; workingDirectory: string; status: "running" | "completed" | "failed" | "timed_out" | "killed"; stdout: string; stderr: string; exitCode: number | null; startedAt: string; completedAt?: string; durationMs?: number }
@@ -917,6 +917,16 @@ function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
       card.append(command);
     }
 
+    if (call.name === "Agent" && call.agentSessionId) {
+      const link = document.createElement("a");
+      link.className = "agent-session-link";
+      link.href = `/s/${call.agentSessionId}`;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = `OPEN SUB-SESSION · ${call.agentSessionId}`;
+      card.append(link);
+    }
+
     const metadata = toolMetadata(call);
     if (metadata) {
       const meta = document.createElement("div");
@@ -1007,6 +1017,10 @@ function toolStatusLabel(call: ToolCall): string {
 
 function toolSubject(call: ToolCall): string {
   if (call.name === "Bash") return typeof call.input.command === "string" ? call.input.command : "Preparing tool input…";
+  if (call.name === "Agent") {
+    if (typeof call.input.description === "string") return call.input.description;
+    return typeof call.input.prompt === "string" ? call.input.prompt : "Preparing agent input…";
+  }
   if (call.name === "TaskOutput" || call.name === "TaskStop") {
     const taskId = call.input.task_id ?? call.input.shell_id;
     return typeof taskId === "string" ? taskId : "Preparing task ID…";
@@ -1020,6 +1034,10 @@ function shouldInlineToolSubject(subject: string): boolean {
 
 function toolMetadata(call: ToolCall): string {
   const values: string[] = [];
+  if (call.name === "Agent") {
+    values.push(call.agentType ?? (typeof call.input.subagent_type === "string" ? call.input.subagent_type : "general-purpose"));
+    if (typeof call.input.model === "string") values.push(call.input.model);
+  }
   if (call.name !== "Bash" && call.workingDirectory) values.push(call.workingDirectory);
   if (call.name === "Bash" && call.exitCode !== undefined && call.exitCode !== null && call.exitCode !== 0) {
     if (call.timeoutMs !== undefined) values.push(`timeout ${formatDuration(call.timeoutMs)}`);

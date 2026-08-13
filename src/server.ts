@@ -22,6 +22,8 @@ import {
 import { executeFileTool, FILE_TOOLS } from "./file-tools.js";
 import { completeDirectories } from "./directory-completion.js";
 import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
+import { AGENT_TOOL, getAgentDefinition, parseAgentInput } from "./agent-tool.js";
+import type { ToolDefinition } from "./types.js";
 import type { Message, Session, TokenUsage, ToolCall } from "./types.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
@@ -192,8 +194,8 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       const toolDrafts = new Map<number, { call: ToolCall; inputJson: string }>();
       let usage: Partial<TokenUsage> = {};
       for await (const event of provider.stream(history, controller.signal, {
-        tools: [BASH_TOOL, ...FILE_TOOLS, TASK_OUTPUT_TOOL, TASK_STOP_TOOL],
-        system: agentSystemPrompt(currentDirectory, allowedDirectories),
+        tools: sessionTools(session),
+        system: sessionSystemPrompt(session, currentDirectory, allowedDirectories),
       })) {
         if (event.type === "delta") {
           assistantMessage.content += event.text;
@@ -246,7 +248,35 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         let resultText = call.output;
         let abortAfterResult: Error | undefined;
         if (call.status !== "error") {
-          if (call.name === BASH_TOOL.name) {
+          if (call.name === AGENT_TOOL.name) {
+            const started = Date.now();
+            call.status = "running";
+            call.startedAt = new Date(started).toISOString();
+            call.statusDisplay = { text: "RUNNING AGENT", appendElapsed: true };
+            sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+            try {
+              const input = parseAgentInput(call.input);
+              const child = await store.createAgentSession(session, input.subagentType, input.description);
+              call.agentSessionId = child.id;
+              call.agentType = input.subagentType;
+              call.statusDisplay = { text: "RUNNING AGENT", appendElapsed: true };
+              await store.save(session);
+              sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+              const result = await runAgentSession(child.id, input.prompt, controller.signal);
+              call.status = "complete";
+              call.output = result;
+              call.statusDisplay = { text: "AGENT COMPLETE" };
+              resultText = result;
+            } catch (error) {
+              call.status = "error";
+              call.output = errorMessage(error);
+              call.statusDisplay = { text: "AGENT FAILED" };
+              resultText = call.output;
+              if (error instanceof Error && error.name === "AbortError") abortAfterResult = error;
+            }
+            call.durationMs = Date.now() - started;
+            call.completedAt = new Date().toISOString();
+          } else if (call.name === BASH_TOOL.name) {
             try {
               const input = parseBashInput(call.input);
               await store.save(session);
@@ -428,15 +458,73 @@ function directoryAllowed(directory: string, roots: string[]): boolean {
   });
 }
 
-function agentSystemPrompt(currentDirectory: string, directories: string[]): string {
+function agentSystemPrompt(currentDirectory: string, directories: string[], readOnly = false): string {
   return [
     "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.",
-    "Use Read, Edit, and Write for text files; use Bash for commands and directory operations. Bash supports run_in_background for long-running commands; use TaskOutput with the returned task_id to inspect or wait for them, and TaskStop only when termination is needed. Foreground tools must finish before you can use their results. File content returned by Read remains available earlier in the conversation: never reread an already covered range unless Write or Edit has changed that file.",
+    readOnly
+      ? "Use Read for text files and Bash for git diff and other read-only inspection commands. Do not modify the repository. File content returned by Read remains available earlier in the conversation: never reread an already covered range."
+      : "Use Read, Edit, and Write for text files; use Bash for commands and directory operations. Bash supports run_in_background for long-running commands; use TaskOutput with the returned task_id to inspect or wait for them, and TaskStop only when termination is needed. Foreground tools must finish before you can use their results. File content returned by Read remains available earlier in the conversation: never reread an already covered range unless Write or Edit has changed that file.",
     `Current working directory: ${currentDirectory}`,
     "The current working directory above is authoritative. Directory metadata in older Bash results describes where those individual calls started, not the current session CWD. A Bash working_directory override applies only to that call.",
     "Available working directories:",
     ...directories.map((directory) => `- ${directory}`),
   ].join("\n");
+}
+
+function sessionTools(session: Session): ToolDefinition[] {
+  if (session.agentType && getAgentDefinition(session.agentType as "general-purpose" | "code-review").readOnly) {
+    return [BASH_TOOL, ...FILE_TOOLS.filter((tool) => tool.name === "Read")];
+  }
+  return [BASH_TOOL, ...FILE_TOOLS, TASK_OUTPUT_TOOL, TASK_STOP_TOOL, AGENT_TOOL];
+}
+
+function sessionSystemPrompt(session: Session, currentDirectory: string, directories: string[]): string {
+  if (!session.agentType) return agentSystemPrompt(currentDirectory, directories);
+  const definition = getAgentDefinition(session.agentType as "general-purpose" | "code-review");
+  const environment = agentSystemPrompt(currentDirectory, directories, definition.readOnly);
+  return `${definition.systemPrompt}\n\nNotes:\n- Always use absolute paths because working directories can reset between Bash calls.\n- Your final response must use absolute paths when referring to files; include code snippets only when they are essential.\n- Do not use emojis.\n- Do not put a colon immediately before a tool call.\n\n${environment}`;
+}
+
+async function runAgentSession(sessionId: string, prompt: string, signal: AbortSignal): Promise<string> {
+  const loopbackHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host.includes(":") ? `[${host}]` : host;
+  const response = await fetch(`http://${loopbackHost}:${port}/api/sessions/${sessionId}/messages`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content: prompt }),
+    signal,
+  });
+  if (!response.ok) throw new Error(`Agent session failed (${response.status}): ${await response.text()}`);
+  if (!response.body) throw new Error("Agent session returned no stream");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: string | undefined;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        let event = "message";
+        let data = "";
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          else if (line.startsWith("data:")) data += line.slice(5).trim();
+        }
+        if (!data) continue;
+        const payload = JSON.parse(data) as { error?: string; message?: Message };
+        if (event === "done") result = payload.message?.content ?? "";
+        if (event === "error") throw new Error(payload.error ?? "Agent session failed");
+      }
+      if (done) break;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (result === undefined) throw new Error("Agent session ended without a final response");
+  return result || "Agent completed without a text response.";
 }
 
 async function listDirectoryCompletions(response: ServerResponse, sessionId: string, url: URL): Promise<void> {
