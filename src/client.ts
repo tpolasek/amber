@@ -717,7 +717,7 @@ function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
 }
 
 function shouldRenderToolOutput(call: ToolCall): boolean {
-  return Boolean(call.output) && !(call.name === "Shell" && call.output === "(no output)");
+  return Boolean(call.output) && !(call.name === "Bash" && call.output === "(no output)");
 }
 
 function shouldExpandToolOutput(call: ToolCall, isDiff: boolean): boolean {
@@ -773,7 +773,7 @@ function toolStatusLabel(call: ToolCall): string {
 }
 
 function toolSubject(call: ToolCall): string {
-  if (call.name === "Shell") return typeof call.input.command === "string" ? call.input.command : "Preparing tool input…";
+  if (call.name === "Bash") return typeof call.input.command === "string" ? call.input.command : "Preparing tool input…";
   return call.filePath ?? (typeof call.input.file_path === "string" ? call.input.file_path : "Preparing file path…");
 }
 
@@ -783,8 +783,8 @@ function shouldInlineToolSubject(subject: string): boolean {
 
 function toolMetadata(call: ToolCall): string {
   const values: string[] = [];
-  if (call.name !== "Shell" && call.workingDirectory) values.push(call.workingDirectory);
-  if (call.name === "Shell" && call.exitCode !== undefined && call.exitCode !== null && call.exitCode !== 0) {
+  if (call.name !== "Bash" && call.workingDirectory) values.push(call.workingDirectory);
+  if (call.name === "Bash" && call.exitCode !== undefined && call.exitCode !== null && call.exitCode !== 0) {
     if (call.timeoutMs !== undefined) values.push(`timeout ${formatDuration(call.timeoutMs)}`);
     values.push(`exit ${call.exitCode}`);
   }

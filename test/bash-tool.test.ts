@@ -3,17 +3,18 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseShellInput, ShellExecutor } from "../src/shell-tool.js";
+import { BashExecutor, BASH_TOOL, parseBashInput } from "../src/bash-tool.js";
 
-test("parses Shell input and applies its default timeout", () => {
-  assert.deepEqual(parseShellInput({ command: "  pwd  " }), { command: "pwd", timeoutMs: 120_000 });
-  assert.throws(() => parseShellInput({ command: "pwd", timeout_ms: 50 }), /timeout_ms/);
-  assert.throws(() => parseShellInput({ command: "" }), /non-empty command/);
+test("defines the Bash tool and parses its input with the default timeout", () => {
+  assert.equal(BASH_TOOL.name, "Bash");
+  assert.deepEqual(parseBashInput({ command: "  pwd  " }), { command: "pwd", timeoutMs: 120_000 });
+  assert.throws(() => parseBashInput({ command: "pwd", timeout_ms: 50 }), /timeout_ms/);
+  assert.throws(() => parseBashInput({ command: "" }), /non-empty command/);
 });
 
-test("runs Shell in an allowed directory and captures output", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "amber-shell-"));
-  const executor = new ShellExecutor();
+test("runs Bash in an allowed directory and captures output", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-bash-"));
+  const executor = new BashExecutor();
   let runningDirectory = "";
   let runningStatus = {};
   let streamed = "";
@@ -33,13 +34,13 @@ test("runs Shell in an allowed directory and captures output", async () => {
   assert.equal(result.status, "complete");
   assert.equal(result.exitCode, 0);
   assert.equal(result.workingDirectory, directory);
-  assert.match(result.resultText, new RegExp(`Shell starting directory for this call: ${directory}`));
+  assert.match(result.resultText, new RegExp(`Bash starting directory for this call: ${directory}`));
   assert.match(result.statusDisplay.text, /^(?:\d+ms|\d+(?:\.\d)?s)$/);
 });
 
-test("times Shell out and serializes concurrent calls within one executor", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "amber-shell-"));
-  const executor = new ShellExecutor();
+test("times Bash out and serializes concurrent calls within one executor", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-bash-"));
+  const executor = new BashExecutor();
   const starts: string[] = [];
   const first = executor.run(
     { command: "sleep 0.15", timeoutMs: 2_000 }, [directory], new AbortController().signal,
@@ -62,9 +63,9 @@ test("times Shell out and serializes concurrent calls within one executor", asyn
 });
 
 test("separate session executors run concurrently", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "amber-shell-"));
-  const firstExecutor = new ShellExecutor();
-  const secondExecutor = new ShellExecutor();
+  const directory = await mkdtemp(join(tmpdir(), "amber-bash-"));
+  const firstExecutor = new BashExecutor();
+  const secondExecutor = new BashExecutor();
   let firstCompleted = false;
   let secondStartedBeforeFirstCompleted = false;
   const first = firstExecutor.run(
@@ -86,8 +87,8 @@ test("separate session executors run concurrently", async () => {
 });
 
 test("rejects a working directory outside the allowed roots", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "amber-shell-"));
-  const executor = new ShellExecutor();
+  const directory = await mkdtemp(join(tmpdir(), "amber-bash-"));
+  const executor = new BashExecutor();
   await assert.rejects(
     executor.run(
       { command: "pwd", workingDirectory: tmpdir(), timeoutMs: 2_000 },

@@ -3,23 +3,23 @@ import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { ToolDefinition, ToolStatus, ToolStatusDisplay } from "./types.js";
 
-export const DEFAULT_SHELL_TIMEOUT_MS = 120_000;
-export const MAX_SHELL_TIMEOUT_MS = 600_000;
+export const DEFAULT_BASH_TIMEOUT_MS = 120_000;
+export const MAX_BASH_TIMEOUT_MS = 600_000;
 const MAX_OUTPUT_CHARACTERS = 200_000;
 
-export const SHELL_TOOL: ToolDefinition = {
-  name: "Shell",
-  description: "Run a shell command and wait for it to finish. Only one Shell call executes at a time within this session; other sessions may run concurrently. By default the command starts in the session CWD; use working_directory to select another authorized directory for this call.",
+export const BASH_TOOL: ToolDefinition = {
+  name: "Bash",
+  description: "Run a bash command and wait for it to finish. Only one Bash call executes at a time within this session; other sessions may run concurrently. By default the command starts in the session CWD; use working_directory to select another authorized directory for this call.",
   input_schema: {
     type: "object",
     properties: {
-      command: { type: "string", description: "The shell command to execute." },
-      working_directory: { type: "string", description: "Absolute path or a path relative to the session CWD. This changes only this Shell call." },
+      command: { type: "string", description: "The bash command to execute." },
+      working_directory: { type: "string", description: "Absolute path or a path relative to the session CWD. This changes only this Bash call." },
       timeout_ms: {
         type: "integer",
         minimum: 100,
-        maximum: MAX_SHELL_TIMEOUT_MS,
-        description: `Timeout in milliseconds. Defaults to ${DEFAULT_SHELL_TIMEOUT_MS}.`,
+        maximum: MAX_BASH_TIMEOUT_MS,
+        description: `Timeout in milliseconds. Defaults to ${DEFAULT_BASH_TIMEOUT_MS}.`,
       },
     },
     required: ["command"],
@@ -27,13 +27,13 @@ export const SHELL_TOOL: ToolDefinition = {
   },
 };
 
-export interface ShellInput {
+export interface BashInput {
   command: string;
   workingDirectory?: string;
   timeoutMs: number;
 }
 
-export interface ShellResult {
+export interface BashResult {
   output: string;
   resultText: string;
   status: Extract<ToolStatus, "complete" | "error" | "timed_out">;
@@ -43,42 +43,42 @@ export interface ShellResult {
   statusDisplay: ToolStatusDisplay;
 }
 
-export interface ShellHooks {
+export interface BashHooks {
   onRunning: (workingDirectory: string, statusDisplay: ToolStatusDisplay) => void;
   onOutput: (chunk: string) => void;
 }
 
-export class ShellExecutor {
+export class BashExecutor {
   #tail: Promise<void> = Promise.resolve();
 
   run(
-    input: ShellInput,
+    input: BashInput,
     allowedDirectories: string[],
     signal: AbortSignal,
-    hooks: ShellHooks,
-  ): Promise<ShellResult> {
+    hooks: BashHooks,
+  ): Promise<BashResult> {
     const operation = this.#tail.then(async () => {
       if (signal.aborted) throw abortError();
       const workingDirectory = await resolveWorkingDirectory(input.workingDirectory, allowedDirectories);
       hooks.onRunning(workingDirectory, { text: "RUNNING", appendElapsed: true });
-      return executeShell(input, workingDirectory, signal, hooks.onOutput);
+      return executeBash(input, workingDirectory, signal, hooks.onOutput);
     });
     this.#tail = operation.then(() => undefined, () => undefined);
     return operation;
   }
 }
 
-export function parseShellInput(input: Record<string, unknown>): ShellInput {
+export function parseBashInput(input: Record<string, unknown>): BashInput {
   const command = typeof input.command === "string" ? input.command.trim() : "";
-  if (!command) throw new Error("Shell requires a non-empty command");
-  if (command.length > 32_000) throw new Error("Shell command must be 32,000 characters or fewer");
+  if (!command) throw new Error("Bash requires a non-empty command");
+  if (command.length > 32_000) throw new Error("Bash command must be 32,000 characters or fewer");
 
-  const timeout = input.timeout_ms ?? DEFAULT_SHELL_TIMEOUT_MS;
-  if (!Number.isInteger(timeout) || (timeout as number) < 100 || (timeout as number) > MAX_SHELL_TIMEOUT_MS) {
-    throw new Error(`Shell timeout_ms must be an integer from 100 to ${MAX_SHELL_TIMEOUT_MS}`);
+  const timeout = input.timeout_ms ?? DEFAULT_BASH_TIMEOUT_MS;
+  if (!Number.isInteger(timeout) || (timeout as number) < 100 || (timeout as number) > MAX_BASH_TIMEOUT_MS) {
+    throw new Error(`Bash timeout_ms must be an integer from 100 to ${MAX_BASH_TIMEOUT_MS}`);
   }
   if (input.working_directory !== undefined && typeof input.working_directory !== "string") {
-    throw new Error("Shell working_directory must be a string");
+    throw new Error("Bash working_directory must be a string");
   }
 
   return {
@@ -92,7 +92,7 @@ export function parseShellInput(input: Record<string, unknown>): ShellInput {
 
 async function resolveWorkingDirectory(requested: string | undefined, allowedDirectories: string[]): Promise<string> {
   const defaultDirectory = allowedDirectories[0];
-  if (!defaultDirectory) throw new Error("No Shell working directory is configured");
+  if (!defaultDirectory) throw new Error("No Bash working directory is configured");
   const candidate = await realpath(requested
     ? (isAbsolute(requested) ? requested : resolve(defaultDirectory, requested))
     : defaultDirectory);
@@ -104,12 +104,12 @@ async function resolveWorkingDirectory(requested: string | undefined, allowedDir
   return candidate;
 }
 
-function executeShell(
-  input: ShellInput,
+function executeBash(
+  input: BashInput,
   workingDirectory: string,
   signal: AbortSignal,
   onOutput: (chunk: string) => void,
-): Promise<ShellResult> {
+): Promise<BashResult> {
   return new Promise((resolveResult, reject) => {
     const started = Date.now();
     const child = spawn("/bin/bash", ["-lc", input.command], {
@@ -179,7 +179,7 @@ function executeShell(
       const durationMs = Date.now() - started;
       const status = timedOut ? "timed_out" : exitCode === 0 ? "complete" : "error";
       const sections = [
-        `Shell starting directory for this call: ${workingDirectory}`,
+        `Bash starting directory for this call: ${workingDirectory}`,
         timedOut ? `Timed out after ${input.timeoutMs} ms` : `Exit code: ${exitCode ?? `signal ${closeSignal ?? "unknown"}`}`,
         ...(stdout ? [`stdout:\n${truncate(stdout)}`] : []),
         ...(stderr ? [`stderr:\n${truncate(stderr)}`] : []),
@@ -191,19 +191,19 @@ function executeShell(
         exitCode,
         durationMs,
         workingDirectory,
-        statusDisplay: shellFinishedStatus(status, durationMs, input.timeoutMs),
+        statusDisplay: bashFinishedStatus(status, durationMs, input.timeoutMs),
       });
     });
   });
 }
 
-function shellFinishedStatus(status: ShellResult["status"], durationMs: number, timeoutMs: number): ToolStatusDisplay {
-  if (status === "complete") return { text: formatShellDuration(durationMs) };
-  if (status === "timed_out") return { text: `TIMED OUT ${formatShellDuration(timeoutMs)}` };
+function bashFinishedStatus(status: BashResult["status"], durationMs: number, timeoutMs: number): ToolStatusDisplay {
+  if (status === "complete") return { text: formatBashDuration(durationMs) };
+  if (status === "timed_out") return { text: `TIMED OUT ${formatBashDuration(timeoutMs)}` };
   return { text: "FAILED" };
 }
 
-function formatShellDuration(milliseconds: number): string {
+function formatBashDuration(milliseconds: number): string {
   return milliseconds < 1000 ? `${milliseconds}ms` : `${(milliseconds / 1000).toFixed(milliseconds < 10_000 ? 1 : 0)}s`;
 }
 
@@ -212,7 +212,7 @@ function truncate(value: string): string {
 }
 
 function abortError(): Error {
-  const error = new Error("Shell execution aborted");
+  const error = new Error("Bash execution aborted");
   error.name = "AbortError";
   return error;
 }

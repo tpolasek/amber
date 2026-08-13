@@ -9,7 +9,7 @@ import { createProvider } from "./provider.js";
 import { buildProviderHistory, isModelMessage } from "./history.js";
 import { generateSessionTitle } from "./session-title.js";
 import { estimateHistoryTokens, formatCompactionBanner, generateCompactionSummary } from "./compaction.js";
-import { parseShellInput, SHELL_TOOL, ShellExecutor } from "./shell-tool.js";
+import { BASH_TOOL, BashExecutor, parseBashInput } from "./bash-tool.js";
 import { executeFileTool, FILE_TOOLS } from "./file-tools.js";
 import { completeDirectories } from "./directory-completion.js";
 import type { Message, Session, TokenUsage, ToolCall } from "./types.js";
@@ -135,7 +135,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   });
   sendEvent(response, "start", { userMessage, assistantMessage });
   activeSessions.add(sessionId);
-  const shellExecutor = new ShellExecutor();
+  const bashExecutor = new BashExecutor();
   const controller = new AbortController();
   request.on("aborted", () => controller.abort());
   response.on("close", () => {
@@ -150,7 +150,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       const toolDrafts = new Map<number, { call: ToolCall; inputJson: string }>();
       let usage: Partial<TokenUsage> = {};
       for await (const event of provider.stream(history, controller.signal, {
-        tools: [SHELL_TOOL, ...FILE_TOOLS],
+        tools: [BASH_TOOL, ...FILE_TOOLS],
         system: agentSystemPrompt(currentDirectory, allowedDirectories),
       })) {
         if (event.type === "delta") {
@@ -204,12 +204,12 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         let resultText = call.output;
         let abortAfterResult: Error | undefined;
         if (call.status !== "error") {
-          if (call.name === SHELL_TOOL.name) {
+          if (call.name === BASH_TOOL.name) {
             try {
-              const input = parseShellInput(call.input);
+              const input = parseBashInput(call.input);
               await store.save(session);
               sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
-              const result = await shellExecutor.run(input, allowedDirectories, controller.signal, {
+              const result = await bashExecutor.run(input, allowedDirectories, controller.signal, {
                 onRunning: (workingDirectory, statusDisplay) => {
                   call.status = "running";
                   call.startedAt = new Date().toISOString();
@@ -324,9 +324,9 @@ function directoryAllowed(directory: string, roots: string[]): boolean {
 function agentSystemPrompt(currentDirectory: string, directories: string[]): string {
   return [
     "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.",
-    "Use Read, Edit, and Write for text files; use Shell for commands and directory operations. Wait for each tool result before continuing. File content returned by Read remains available earlier in the conversation: never reread an already covered range unless Write or Edit has changed that file.",
+    "Use Read, Edit, and Write for text files; use Bash for commands and directory operations. Wait for each tool result before continuing. File content returned by Read remains available earlier in the conversation: never reread an already covered range unless Write or Edit has changed that file.",
     `Current working directory: ${currentDirectory}`,
-    "The current working directory above is authoritative. Directory metadata in older Shell results describes where those individual calls started, not the current session CWD. A Shell working_directory override applies only to that call.",
+    "The current working directory above is authoritative. Directory metadata in older Bash results describes where those individual calls started, not the current session CWD. A Bash working_directory override applies only to that call.",
     "Available working directories:",
     ...directories.map((directory) => `- ${directory}`),
   ].join("\n");

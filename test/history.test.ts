@@ -87,8 +87,8 @@ test("provider history preserves tool calls and groups their results", () => {
       createdAt: now,
       status: "complete",
       toolCalls: [
-        { id: "tool-1", name: "Shell", input: { command: "pwd" }, status: "complete", output: "/tmp" },
-        { id: "tool-2", name: "Shell", input: { command: "false" }, status: "error", output: "" },
+        { id: "tool-1", name: "Bash", input: { command: "pwd" }, status: "complete", output: "/tmp" },
+        { id: "tool-2", name: "Bash", input: { command: "false" }, status: "error", output: "" },
       ],
     },
     {
@@ -106,8 +106,8 @@ test("provider history preserves tool calls and groups their results", () => {
       role: "assistant",
       content: [
         { type: "text", text: "I'll inspect both." },
-        { type: "tool_use", id: "tool-1", name: "Shell", input: { command: "pwd" } },
-        { type: "tool_use", id: "tool-2", name: "Shell", input: { command: "false" } },
+        { type: "tool_use", id: "tool-1", name: "Bash", input: { command: "pwd" } },
+        { type: "tool_use", id: "tool-2", name: "Bash", input: { command: "false" } },
       ],
     },
     {
