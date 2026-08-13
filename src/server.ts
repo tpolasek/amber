@@ -21,6 +21,7 @@ import {
 } from "./task-tools.js";
 import { executeFileTool, FILE_TOOLS } from "./file-tools.js";
 import { completeDirectories } from "./directory-completion.js";
+import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
 import type { Message, Session, TokenUsage, ToolCall } from "./types.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
@@ -185,7 +186,8 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   try {
     const allowedDirectories = sessionDirectories(session);
     const currentDirectory = sessionWorkingDirectory(session);
-    for (let round = 0; round < 8; round += 1) {
+    const toolLoopTracker = new ToolLoopTracker();
+    for (;;) {
       const history = buildProviderHistory(session.messages, assistantMessage.id, session.compaction);
       const toolDrafts = new Map<number, { call: ToolCall; inputJson: string }>();
       let usage: Partial<TokenUsage> = {};
@@ -376,7 +378,13 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         if (abortAfterResult) throw abortAfterResult;
       }
 
-      if (round === 7) throw new Error("Agent stopped after 8 tool rounds");
+      const loop = toolLoopTracker.record([...toolDrafts.values()].map(({ call }) => ({
+        name: call.name,
+        input: call.input,
+        status: call.status,
+        output: call.output,
+      })));
+      if (loop) throw new Error(formatToolLoopError(loop));
       assistantMessage = createAssistantMessage();
       session.messages.push(assistantMessage);
       await store.save(session);
