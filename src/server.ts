@@ -24,6 +24,12 @@ import { completeDirectories } from "./directory-completion.js";
 import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
 import { AGENT_TOOL, getAgentDefinition, parseAgentInput, startAgentRuns } from "./agent-tool.js";
 import {
+  ASK_USER_QUESTION_TOOL_NAME,
+  AskUserQuestionManager,
+  formatAskUserQuestionResult,
+  parseAskUserQuestionInput,
+} from "./ask-user-question-tool.js";
+import {
   buildClaudeCodeAgentSystemPrompt,
   buildClaudeCodeSystemPrompt,
   CLAUDE_CODE_AGENT_TOOLS,
@@ -48,6 +54,7 @@ const store = new SessionStore(dataDirectory);
 const provider = createProvider(process.env);
 const activeSessions = new Set<string>();
 const backgroundTasks = new BackgroundTaskManager();
+const askUserQuestions = new AskUserQuestionManager();
 const agentRunToken = randomUUID();
 const SESSION_PATH_ID = "([a-z0-9.-]+)";
 
@@ -73,6 +80,7 @@ const shutdown = () => {
   if (shuttingDown) return;
   shuttingDown = true;
   backgroundTasks.stopAll();
+  askUserQuestions.stopAll();
   server.close();
 };
 process.once("SIGINT", shutdown);
@@ -133,6 +141,26 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       : json(response, 404, { error: "Session not found" });
   }
 
+  const questionAnswerMatch = url.pathname.match(
+    new RegExp(`^/api/sessions/${SESSION_PATH_ID}/questions/([^/]+)/answers$`),
+  );
+  if (method === "POST" && questionAnswerMatch?.[1] && questionAnswerMatch[2]) {
+    const session = await store.get(questionAnswerMatch[1]);
+    if (!session) return json(response, 404, { error: "Session not found" });
+    const body = await readJson(request);
+    const toolUseId = decodeURIComponent(questionAnswerMatch[2]);
+    try {
+      if (body.cancelled === true) {
+        askUserQuestions.decline(questionAnswerMatch[1], toolUseId);
+        return json(response, 200, { cancelled: true });
+      }
+      const answers = askUserQuestions.answer(questionAnswerMatch[1], toolUseId, body.answers);
+      return json(response, 200, { answers });
+    } catch (error) {
+      return json(response, 400, { error: errorMessage(error) });
+    }
+  }
+
   const taskStopMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/tasks/([a-z0-9]+)/stop$`));
   if (method === "POST" && taskStopMatch?.[1] && taskStopMatch[2]) {
     const session = await store.get(taskStopMatch[1]);
@@ -159,7 +187,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return serveFile(response, markdownScript, "text/javascript; charset=utf-8", "public, max-age=31536000, immutable");
   }
   if (method === "GET" && url.pathname === "/styles.css") {
-    return serveFile(response, join(publicDirectory, "styles.css"), "text/css; charset=utf-8");
+    return serveFile(response, join(publicDirectory, "styles.css"), "text/css; charset=utf-8", "no-cache");
   }
   if (method === "GET" && (url.pathname === "/" || /^\/s\/[a-z0-9.-]+$/.test(url.pathname))) {
     return serveFile(response, join(publicDirectory, "index.html"), "text/html; charset=utf-8", "no-cache");
@@ -348,6 +376,31 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             const result = await agentRuns.get(call.id)!;
             resultText = result.resultText;
             abortAfterResult = result.abortAfterResult;
+          } else if (call.name === ASK_USER_QUESTION_TOOL_NAME) {
+            const started = Date.now();
+            call.status = "running";
+            call.startedAt = new Date(started).toISOString();
+            call.statusDisplay = { text: "AWAITING ANSWER" };
+            await store.save(session);
+            sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+            try {
+              const { questions } = parseAskUserQuestionInput(call.input);
+              const answersPromise = askUserQuestions.waitForAnswers(sessionId, call.id, questions, controller.signal);
+              sendEvent(response, "ask_user_question", { toolUseId: call.id, questions });
+              const answers = await answersPromise;
+              call.status = "complete";
+              call.output = JSON.stringify({ answers });
+              call.statusDisplay = { text: "ANSWERED" };
+              resultText = formatAskUserQuestionResult(answers);
+            } catch (error) {
+              call.status = "error";
+              call.output = errorMessage(error);
+              call.statusDisplay = { text: "NOT ANSWERED" };
+              resultText = call.output;
+              if (error instanceof Error && error.name === "AbortError") abortAfterResult = error;
+            }
+            call.durationMs = Date.now() - started;
+            call.completedAt = new Date().toISOString();
           } else if (call.name === BASH_TOOL.name) {
             try {
               const input = parseBashInput(call.input);

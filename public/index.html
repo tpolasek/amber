@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#100b03">
     <meta name="description" content="AMBER — browser terminal for persistent LLM agent sessions">
     <title>AMBER // Agent Terminal</title>
-    <link rel="stylesheet" href="/styles.css?v=34">
+    <link rel="stylesheet" href="/styles.css?v=37">
   </head>
   <body>
     <div class="noise" aria-hidden="true"></div>
@@ -89,6 +89,20 @@
         <footer class="tasks-dialog-footer">
           <span id="tasks-dialog-hints">↑/↓ select · Enter details · x stop · Esc close</span>
           <button id="tasks-stop" class="tasks-stop-button" type="button" hidden>STOP TASK</button>
+        </footer>
+      </section>
+    </div>
+    <div id="question-dialog" class="tasks-overlay" hidden>
+      <section class="tasks-dialog question-dialog" role="dialog" aria-modal="true" aria-labelledby="question-dialog-title">
+        <header class="tasks-dialog-header question-dialog-header">
+          <span aria-hidden="true">?</span>
+          <strong id="question-dialog-title">Claude has a question</strong>
+          <button id="question-close" class="tasks-dialog-button" type="button" aria-label="Decline to answer">×</button>
+        </header>
+        <div id="question-dialog-body" class="tasks-dialog-body question-dialog-body"></div>
+        <footer class="tasks-dialog-footer">
+          <span id="question-dialog-hints">↑/↓ focus · Enter select · Esc decline</span>
+          <button id="question-submit" class="question-submit-button" type="button">SUBMIT ANSWERS</button>
         </footer>
       </section>
     </div>
