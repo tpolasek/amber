@@ -252,7 +252,7 @@ function wireEvents(): void {
   elements.modeNormal.addEventListener("change", () => {
     if (elements.modeNormal.checked) void changePlanMode(false);
   });
-  elements.planModeClose.addEventListener("click", () => void submitPlanModeDecision(false));
+  elements.planModeClose.addEventListener("click", () => void cancelPlanModeRequest());
   elements.planModeDecline.addEventListener("click", () => void submitPlanModeDecision(false));
   elements.planModeApprove.addEventListener("click", () => void submitPlanModeDecision(true));
   elements.tasksDialog.addEventListener("click", (event) => {
@@ -958,6 +958,12 @@ function selectQuestionOption(index: number): void {
   selection.focusIndex = index;
   const option = question.options[index];
   if (!option) {
+    if (question.multiSelect && selection.otherSelected) {
+      selection.otherSelected = false;
+      renderQuestionDialog();
+      focusCurrentQuestionOption();
+      return;
+    }
     selection.otherSelected = true;
     if (!question.multiSelect) selection.labels.clear();
     renderQuestionDialog();
@@ -1141,7 +1147,7 @@ function openPlanModeDialog(request: PlanModeRequest): void {
   elements.planModeApprove.textContent = request.kind === "enter" ? "ENTER PLAN MODE" : "APPROVE & IMPLEMENT";
   elements.planModeDialogHints.textContent = request.kind === "enter"
     ? "Ctrl/Cmd+Enter approve · Esc decline"
-    : "Ctrl/Cmd+Enter approve · Esc keep planning";
+    : "Feedback enables Keep Planning · Ctrl/Cmd+Enter approve · Esc close and wait";
 
   if (request.kind === "enter") {
     const content = document.createElement("section");
@@ -1189,12 +1195,13 @@ function openPlanModeDialog(request: PlanModeRequest): void {
 
     const feedback = document.createElement("label");
     feedback.className = "plan-mode-feedback";
-    feedback.append(document.createTextNode("OPTIONAL FEEDBACK IF YOU KEEP PLANNING"));
+    feedback.append(document.createTextNode("FEEDBACK REQUIRED TO KEEP PLANNING"));
     const input = document.createElement("textarea");
     input.id = "plan-mode-feedback";
     input.rows = 3;
     input.maxLength = 32_000;
     input.placeholder = "What should change in the plan?";
+    input.addEventListener("input", updatePlanModeDialogState);
     feedback.append(input);
     elements.planModeDialogBody.append(feedback);
   }
@@ -1210,26 +1217,41 @@ function closePlanModeDialog(): void {
 }
 
 function updatePlanModeDialogState(): void {
+  const feedback = elements.planModeDialogBody
+    .querySelector<HTMLTextAreaElement>("#plan-mode-feedback")?.value.trim() ?? "";
+  const feedbackRequired = planModeRequest?.kind === "exit";
+  const canKeepPlanning = !feedbackRequired || Boolean(feedback);
   elements.planModeClose.disabled = planModeSubmitting;
-  elements.planModeDecline.disabled = planModeSubmitting;
+  elements.planModeDecline.disabled = planModeSubmitting || !canKeepPlanning;
+  elements.planModeDecline.classList.toggle("ready", feedbackRequired && canKeepPlanning && !planModeSubmitting);
   elements.planModeApprove.disabled = planModeSubmitting;
 }
 
-async function submitPlanModeDecision(approved: boolean): Promise<void> {
+async function cancelPlanModeRequest(): Promise<void> {
+  const request = planModeRequest;
+  if (!request) return;
+  await submitPlanModeDecision(false, request.kind === "exit");
+}
+
+async function submitPlanModeDecision(approved: boolean, cancelled = false): Promise<void> {
   const session = state.session;
   const request = planModeRequest;
   if (!session || !request || planModeSubmitting) return;
-  planModeSubmitting = true;
-  updatePlanModeDialogState();
   const feedback = request.kind === "exit"
     ? elements.planModeDialogBody.querySelector<HTMLTextAreaElement>("#plan-mode-feedback")?.value.trim()
     : undefined;
+  if (!approved && !cancelled && request.kind === "exit" && !feedback) {
+    elements.planModeDialogBody.querySelector<HTMLTextAreaElement>("#plan-mode-feedback")?.focus();
+    return;
+  }
+  planModeSubmitting = true;
+  updatePlanModeDialogState();
   try {
     await api<{ decision: { approved: boolean; feedback?: string } }>(
       `/api/sessions/${session.id}/plan-mode/${encodeURIComponent(request.toolUseId)}/decision`,
       {
         method: "POST",
-        body: JSON.stringify({ approved, ...(feedback ? { feedback } : {}) }),
+        body: JSON.stringify({ approved, ...(feedback ? { feedback } : {}), ...(cancelled ? { cancelled: true } : {}) }),
       },
     );
     if (approved && request.kind === "exit" && session.planMode) {
@@ -1248,7 +1270,7 @@ function handlePlanModeDialogKeydown(event: KeyboardEvent): boolean {
   if (elements.planModeDialog.hidden) return false;
   if (event.key === "Escape") {
     event.preventDefault();
-    void submitPlanModeDecision(false);
+    void cancelPlanModeRequest();
   } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();
     void submitPlanModeDecision(true);

@@ -114,6 +114,7 @@ export interface ExitPlanModeInput {
 export interface PlanModeDecision {
   approved: boolean;
   feedback?: string;
+  cancelled?: boolean;
 }
 
 export interface PlanModeToggleInput {
@@ -158,16 +159,26 @@ export function parsePlanModeDecision(value: unknown): PlanModeDecision {
     throw new Error("Plan mode decision must be an object");
   }
   const input = value as Record<string, unknown>;
-  if (Object.keys(input).some((key) => key !== "approved" && key !== "feedback")) {
+  if (Object.keys(input).some((key) => key !== "approved" && key !== "feedback" && key !== "cancelled")) {
     throw new Error("Plan mode decision contains an unknown field");
   }
   if (typeof input.approved !== "boolean") throw new Error("approved must be a boolean");
   if (input.feedback !== undefined && typeof input.feedback !== "string") {
     throw new Error("feedback must be a string");
   }
+  if (input.cancelled !== undefined && typeof input.cancelled !== "boolean") {
+    throw new Error("cancelled must be a boolean");
+  }
+  if (input.approved === true && input.cancelled === true) {
+    throw new Error("An approved plan mode decision cannot also be cancelled");
+  }
   const feedback = typeof input.feedback === "string" ? input.feedback.trim() : "";
   if (feedback.length > 32_000) throw new Error("feedback must be 32,000 characters or fewer");
-  return { approved: input.approved, ...(feedback ? { feedback } : {}) };
+  return {
+    approved: input.approved,
+    ...(feedback ? { feedback } : {}),
+    ...(input.cancelled === true ? { cancelled: true } : {}),
+  };
 }
 
 export function parsePlanModeToggleInput(value: unknown): PlanModeToggleInput {
@@ -223,6 +234,10 @@ export function formatExitPlanModeRejectedResult(feedback?: string): string {
   return feedback
     ? `The user chose to keep planning and provided this feedback:\n\n${feedback}\n\nRevise the plan file and call ExitPlanMode again when it is ready.`
     : "The user chose to keep planning. Revise the plan file as needed and call ExitPlanMode again when it is ready.";
+}
+
+export function formatExitPlanModeCancelledResult(): string {
+  return "The user closed the plan review without exiting plan mode. Stop now and wait for the user to send another prompt.";
 }
 
 export function planModeSystemBlock(planPath: string, childAgent = false): ProviderSystemBlock {

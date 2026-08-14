@@ -49,6 +49,7 @@ import {
   formatEnterPlanModeDeclinedResult,
   formatEnterPlanModeResult,
   formatExitPlanModeApprovedResult,
+  formatExitPlanModeCancelledResult,
   formatExitPlanModeRejectedResult,
   parseEnterPlanModeInput,
   parseExitPlanModeInput,
@@ -609,6 +610,12 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                 call.output = "";
                 call.statusDisplay = { text: "APPROVED" };
                 resultText = formatExitPlanModeApprovedResult(plan);
+              } else if (decision.cancelled) {
+                call.status = "error";
+                call.output = "";
+                call.statusDisplay = { text: "PLAN MODE" };
+                resultText = formatExitPlanModeCancelledResult();
+                endTurnAfterResult = true;
               } else {
                 call.status = "error";
                 call.output = "";

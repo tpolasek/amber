@@ -9,6 +9,7 @@ import {
   MAX_PLAN_CHARACTERS,
   PlanModeApprovalManager,
   formatExitPlanModeApprovedResult,
+  formatExitPlanModeCancelledResult,
   formatExitPlanModeRejectedResult,
   parseEnterPlanModeInput,
   parseExitPlanModeInput,
@@ -50,6 +51,11 @@ test("strictly parses entry and optional exit allowed prompts", () => {
   assert.throws(() => parseExitPlanModeInput({ allowedPrompts: [{ tool: "Bash", prompt: "" }] }), /non-empty/);
   assert.throws(() => parseExitPlanModeInput({ allowedPrompts: [{ tool: "Bash", prompt: "Test", extra: true }] }), /unknown field/);
   assert.throws(() => parsePlanModeDecision({ approved: true, extra: true }), /unknown field/);
+  assert.deepEqual(parsePlanModeDecision({ approved: false, cancelled: true }), {
+    approved: false,
+    cancelled: true,
+  });
+  assert.throws(() => parsePlanModeDecision({ approved: true, cancelled: true }), /cannot also be cancelled/);
   assert.deepEqual(parsePlanModeToggleInput({ active: true }), { active: true });
   assert.deepEqual(parsePlanModeToggleInput({ active: false }), { active: false });
   assert.throws(() => parsePlanModeToggleInput({ active: "yes" }), /boolean/);
@@ -95,6 +101,7 @@ test("holds one matching approval request per session and retains rejection feed
   assert.deepEqual(await rejected, { approved: false, feedback: "Add rollback steps." });
   assert.match(formatExitPlanModeRejectedResult("Add rollback steps."), /Add rollback steps/);
   assert.match(formatExitPlanModeApprovedResult("# Reviewed"), /# Reviewed/);
+  assert.match(formatExitPlanModeCancelledResult(), /Stop now and wait/);
 });
 
 test("cleans up pending plan approvals when a run aborts or the manager stops", async () => {

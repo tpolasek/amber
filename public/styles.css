@@ -396,6 +396,8 @@ button { color: inherit; }
 .plan-mode-dialog-footer > div { display: flex; gap: 8px; }
 .plan-mode-decline-button { padding: 7px 11px; border: 1px solid rgba(255,178,26,.25); background: transparent; color: #a68c60; cursor: pointer; font: inherit; font-size: 11px; letter-spacing: .08em; }
 .plan-mode-decline-button:hover:not(:disabled) { border-color: var(--amber-dim); background: var(--amber-faint); }
+.plan-mode-decline-button.ready { border-color: var(--amber-dim); background: var(--amber-faint); color: var(--amber-hot); }
+.plan-mode-decline-button.ready:hover { border-color: var(--amber); background: rgba(255,178,26,.18); }
 .plan-mode-decline-button:disabled, .plan-mode-dialog-header button:disabled { opacity: .4; cursor: not-allowed; }
 .sidebar-scrim { display: none; }
 
