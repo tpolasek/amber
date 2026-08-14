@@ -78,7 +78,7 @@ export function shouldInlineToolSubject(subject: string): boolean {
 export function toolMetadata(call: ToolCall): string {
   const values: string[] = [];
   if (call.name === "Agent") {
-    values.push(call.agentType ?? (typeof call.input.subagent_type === "string" ? call.input.subagent_type : "general-purpose"));
+    values.push(call.agentType ?? (typeof call.input.subagent_type === "string" ? call.input.subagent_type : "default"));
     if (typeof call.input.model === "string") values.push(call.input.model);
   }
   if (call.name !== "Bash" && call.workingDirectory) values.push(call.workingDirectory);

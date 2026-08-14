@@ -136,17 +136,20 @@ export class AnthropicProvider implements LlmProvider {
   }
 }
 
-export function createProvider(environment: NodeJS.ProcessEnv, settings: AmberSettings = {}): LlmProvider {
+export function createProvider(
+  environment: NodeJS.ProcessEnv,
+  settings: Pick<AmberSettings, "auth_key" | "auth_url" | "default_model"> = {},
+): LlmProvider {
   const hasEnvironmentCredentials = environment.ANTHROPIC_AUTH_TOKEN !== undefined
     || environment.ANTHROPIC_API_KEY !== undefined;
   const apiKey = configuredSetting(environment.ANTHROPIC_API_KEY);
   const authToken = configuredSetting(environment.ANTHROPIC_AUTH_TOKEN)
     ?? (!hasEnvironmentCredentials ? configuredSetting(settings.auth_key) : undefined);
   if (!authToken && !apiKey) {
-    throw new Error("Set auth_key in ~/.amber/settings.json, ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_API_KEY before starting AMBER");
+    throw new Error("Set auth_key in ~/.amber/settings.toml, ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_API_KEY before starting AMBER");
   }
   const model = configuredSetting(environment.ANTHROPIC_MODEL ?? settings.default_model);
-  if (!model) throw new Error("Set default_model in ~/.amber/settings.json or ANTHROPIC_MODEL before starting AMBER");
+  if (!model) throw new Error("Set default_model in ~/.amber/settings.toml or ANTHROPIC_MODEL before starting AMBER");
   const baseUrl = configuredSetting(environment.ANTHROPIC_BASE_URL ?? settings.auth_url)
     ?? "https://api.anthropic.com";
   return new AnthropicProvider({

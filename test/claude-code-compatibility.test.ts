@@ -4,11 +4,14 @@ import {
   buildClaudeCodeAgentSystemPrompt,
   buildClaudeCodeSystemPrompt,
   CLAUDE_CODE_AGENT_TOOLS,
-  CLAUDE_CODE_TOOLS,
+  createClaudeCodeTools,
   injectClaudeCodeUserContext,
   structureClaudeCodeUserMessages,
 } from "../src/claude-code-compatibility.js";
 import { getAgentDefinition } from "../src/agent-tool.js";
+import { SETTINGS_TEMPLATE } from "../src/settings.js";
+
+const CLAUDE_CODE_TOOLS = createClaudeCodeTools(SETTINGS_TEMPLATE.agents);
 
 test("builds the verified four-block Claude Code system prompt", () => {
   const system = buildClaudeCodeSystemPrompt("/tmp/amber-not-a-repository", "mimo-v2.5");
@@ -58,13 +61,14 @@ test("advertises the twelve Amber tools in Claude Code order", () => {
     assert.equal(tool.input_schema.type, "object");
     assert.equal(tool.input_schema.additionalProperties, false);
   }
+  assert.equal(createClaudeCodeTools([]).some((tool) => tool.name === "Agent"), false);
 });
 
 test("builds the verified three-block general agent prompt", () => {
   const system = buildClaudeCodeAgentSystemPrompt(
     "/Users/thomas/code/xude",
     "mimo-v2.5",
-    getAgentDefinition("general-purpose").systemPrompt,
+    getAgentDefinition(SETTINGS_TEMPLATE.agents, "general-purpose").systemPrompt,
   );
   assert.equal(system.length, 3);
   assert.equal(system[0]?.text, "x-anthropic-billing-header: cc_version=2.1.88.516; cc_entrypoint=sdk-cli;");

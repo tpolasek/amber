@@ -10,17 +10,29 @@ npm run build
 npm start
 ```
 
-On its first start, Amber creates `~/.amber/settings.json`:
+On its first start, Amber creates `~/.amber/settings.toml`:
 
-```json
-{
-  "auth_key": "<INSERT_AUTH_KEY_HERE>",
-  "auth_url": "<INSERT_AUTH_URL_HERE>",
-  "default_model": "<INSERT_DEFAULT_MODEL_HERE>"
-}
+```toml
+auth_key = "<INSERT_AUTH_KEY_HERE>"
+auth_url = "<INSERT_AUTH_URL_HERE>"
+default_model = "<INSERT_DEFAULT_MODEL_HERE>"
+
+[[agents]]
+type = "general-purpose"
+whenToUse = "General-purpose agent for researching complex questions..."
+systemPrompt = "You are an agent for Claude Code..."
+readOnly = false
+
+[[agents]]
+type = "code-review"
+whenToUse = "Review the most recent working-tree change..."
+systemPrompt = "You are a code-review agent..."
+readOnly = true
 ```
 
-Replace the placeholders with the bearer auth key, Anthropic-compatible endpoint, and model, then open `http://127.0.0.1:3000`. The endpoint defaults to `https://api.anthropic.com` when `auth_url` is left as its placeholder.
+The generated agent entries contain the complete built-in prompts; the shortened strings above are only illustrative. Replace the placeholders with the bearer auth key, Anthropic-compatible endpoint, and model, then open `http://127.0.0.1:3000`. The endpoint defaults to `https://api.anthropic.com` when `auth_url` is left as its placeholder.
+
+Agent types, selection guidance, system prompts, and read-only permissions come from the `agents` array. The first entry is used when an Agent call omits `subagent_type`. Read-only agents receive only the `Bash` and `Read` tools; other agents receive all child-agent tools. An absent or empty `agents` array disables the Agent tool.
 
 Environment variables override the corresponding file settings:
 

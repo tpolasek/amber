@@ -24,7 +24,7 @@ import { executePlanningTaskTool, PLANNING_TASK_TOOLS } from "./planning-task-to
 import { executeFileTool, FILE_TOOLS } from "./file-tools.js";
 import { completeDirectories } from "./directory-completion.js";
 import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
-import { AGENT_TOOL, getAgentDefinition, parseAgentInput, startAgentRuns } from "./agent-tool.js";
+import { AGENT_TOOL_NAME, getAgentDefinition, parseAgentInput, startAgentRuns } from "./agent-tool.js";
 import { ActiveSessionRuns, abortSessionOperations } from "./session-aborts.js";
 import {
   ASK_USER_QUESTION_TOOL_NAME,
@@ -36,7 +36,7 @@ import {
   buildClaudeCodeAgentSystemPrompt,
   buildClaudeCodeSystemPrompt,
   CLAUDE_CODE_AGENT_TOOLS,
-  CLAUDE_CODE_TOOLS,
+  createClaudeCodeTools,
   injectClaudeCodeUserContext,
   structureClaudeCodeUserMessages,
 } from "./claude-code-compatibility.js";
@@ -58,6 +58,8 @@ const host = process.env.HOST ?? "127.0.0.1";
 const store = new SessionStore(dataDirectory);
 const settings = await loadSettings();
 const provider = createProvider(process.env, settings);
+const agentDefinitions = settings.agents;
+const claudeCodeTools = createClaudeCodeTools(agentDefinitions);
 const activeSessions = new ActiveSessionRuns();
 const backgroundTasks = new BackgroundTaskManager();
 const askUserQuestions = new AskUserQuestionManager();
@@ -437,7 +439,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         return pending;
       };
       const agentRuns = startAgentRuns(
-        orderedCalls.filter((call) => call.name === AGENT_TOOL.name && call.status !== "error"),
+        orderedCalls.filter((call) => call.name === AGENT_TOOL_NAME && call.status !== "error"),
         (call) => executeAgentCall(
           session,
           call,
@@ -455,7 +457,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         let resultText = call.output;
         let abortAfterResult: Error | undefined;
         if (call.status !== "error") {
-          if (call.name === AGENT_TOOL.name) {
+          if (call.name === AGENT_TOOL_NAME) {
             const result = await agentRuns.get(call.id)!;
             resultText = result.resultText;
             abortAfterResult = result.abortAfterResult;
@@ -768,12 +770,12 @@ function sessionContextTokens(session: Session): number {
 
 function sessionTools(session: Session): ToolDefinition[] {
   if (session.agentType) {
-    const definition = getAgentDefinition(session.agentType as "general-purpose" | "code-review");
+    const definition = getAgentDefinition(agentDefinitions, session.agentType);
     return definition.readOnly
       ? CLAUDE_CODE_AGENT_TOOLS.filter((tool) => tool.name === "Bash" || tool.name === "Read")
       : CLAUDE_CODE_AGENT_TOOLS;
   }
-  return CLAUDE_CODE_TOOLS;
+  return claudeCodeTools;
 }
 
 function sessionSystemPrompt(
@@ -781,7 +783,7 @@ function sessionSystemPrompt(
   currentDirectory: string,
 ): string | import("./types.js").ProviderSystemBlock[] {
   if (!session.agentType) return buildClaudeCodeSystemPrompt(currentDirectory, provider.model);
-  const definition = getAgentDefinition(session.agentType as "general-purpose" | "code-review");
+  const definition = getAgentDefinition(agentDefinitions, session.agentType);
   return buildClaudeCodeAgentSystemPrompt(currentDirectory, provider.model, definition.systemPrompt);
 }
 
@@ -807,7 +809,7 @@ async function executeAgentCall(
   let child: Session | undefined;
   try {
     throwIfSessionAborted(signal);
-    const input = parseAgentInput(call.input);
+    const input = parseAgentInput(call.input, agentDefinitions);
     child = await store.createAgentSession(parent, input.subagentType, input.description);
     throwIfSessionAborted(signal);
     call.agentSessionId = child.id;
