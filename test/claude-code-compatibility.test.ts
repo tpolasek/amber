@@ -38,15 +38,19 @@ test("injects the verified reminders before only the first user prompt", () => {
   assert.equal(messages[2]?.content, "again");
 });
 
-test("advertises the eight Amber tools in Claude Code order", () => {
+test("advertises the twelve Amber tools in Claude Code order", () => {
   assert.deepEqual(CLAUDE_CODE_TOOLS.map((tool) => tool.name), [
     "Agent",
     "AskUserQuestion",
     "Bash",
     "Edit",
     "Read",
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
     "TaskOutput",
     "TaskStop",
+    "TaskUpdate",
     "Write",
   ]);
   for (const tool of CLAUDE_CODE_TOOLS) {

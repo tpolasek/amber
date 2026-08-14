@@ -19,6 +19,7 @@ import {
   parseTaskOutputInput,
   parseTaskStopInput,
 } from "./task-tools.js";
+import { executePlanningTaskTool, PLANNING_TASK_TOOLS } from "./planning-task-tools.js";
 import { executeFileTool, FILE_TOOLS } from "./file-tools.js";
 import { completeDirectories } from "./directory-completion.js";
 import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
@@ -484,6 +485,23 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
             try {
               const result = executeTaskStop(backgroundTasks, sessionId, parseTaskStopInput(call.input));
+              call.status = "complete";
+              call.output = result.output;
+              resultText = result.resultText;
+            } catch (error) {
+              call.status = "error";
+              call.output = errorMessage(error);
+              resultText = call.output;
+            }
+            call.durationMs = Date.now() - started;
+            call.completedAt = new Date().toISOString();
+          } else if (PLANNING_TASK_TOOLS.some((tool) => tool.name === call.name)) {
+            const started = Date.now();
+            call.status = "running";
+            call.startedAt = new Date(started).toISOString();
+            sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+            try {
+              const result = executePlanningTaskTool(call.name, call.input, session);
               call.status = "complete";
               call.output = result.output;
               resultText = result.resultText;

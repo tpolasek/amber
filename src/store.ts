@@ -104,6 +104,10 @@ export class SessionStore {
       ...(session.cwd ? { cwd: session.cwd } : {}),
       ...(session.addDirInitialized !== undefined ? { addDirInitialized: session.addDirInitialized } : {}),
       ...(session.fileReadState ? { fileReadState: structuredClone(session.fileReadState) } : {}),
+      ...(session.planningTasks ? { planningTasks: structuredClone(session.planningTasks) } : {}),
+      ...(session.planningTaskHighWaterMark !== undefined
+        ? { planningTaskHighWaterMark: session.planningTaskHighWaterMark }
+        : {}),
     };
     await this.save(fork);
     return fork;

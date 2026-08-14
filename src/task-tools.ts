@@ -1,6 +1,31 @@
 import type { ToolDefinition } from "./types.js";
 import type { BackgroundTask, BackgroundTaskManager } from "./background-tasks.js";
 
+export {
+  PLANNING_TASK_TOOLS,
+  TASK_CREATE_TOOL,
+  TASK_GET_TOOL,
+  TASK_LIST_TOOL,
+  TASK_UPDATE_TOOL,
+  executePlanningTaskTool,
+  executeTaskCreate,
+  executeTaskGet,
+  executeTaskList,
+  executeTaskUpdate,
+  parseTaskCreateInput,
+  parseTaskGetInput,
+  parseTaskListInput,
+  parseTaskUpdateInput,
+} from "./planning-task-tools.js";
+export type {
+  PlanningTask,
+  PlanningTaskResponse,
+  PlanningTaskStatus,
+  PlanningTaskSummary,
+  TaskCreateInput,
+  TaskUpdateInput,
+} from "./planning-task-tools.js";
+
 export const TASK_OUTPUT_TOOL: ToolDefinition = {
   name: "TaskOutput",
   description: "Retrieve output and status from a background task. Use block=true to wait for completion or block=false to check its current state.",

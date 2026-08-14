@@ -4,10 +4,28 @@ import { platform, release, type } from "node:os";
 import compatibility from "./claude-code-compatibility.json" with { type: "json" };
 import toolCatalog from "./claude-code-tools.json" with { type: "json" };
 import { ASK_USER_QUESTION_TOOL } from "./ask-user-question-tool.js";
+import {
+  TASK_CREATE_TOOL,
+  TASK_GET_TOOL,
+  TASK_LIST_TOOL,
+  TASK_UPDATE_TOOL,
+} from "./planning-task-tools.js";
 import type { ProviderMessage, ProviderSystemBlock, ToolDefinition } from "./types.js";
 
 const catalogTools = toolCatalog.tools as unknown as ToolDefinition[];
-export const CLAUDE_CODE_TOOLS = [catalogTools[0]!, ASK_USER_QUESTION_TOOL, ...catalogTools.slice(1)];
+const taskOutputIndex = catalogTools.findIndex((tool) => tool.name === "TaskOutput");
+const writeIndex = catalogTools.findIndex((tool) => tool.name === "Write");
+export const CLAUDE_CODE_TOOLS = [
+  catalogTools[0]!,
+  ASK_USER_QUESTION_TOOL,
+  ...catalogTools.slice(1, taskOutputIndex),
+  TASK_CREATE_TOOL,
+  TASK_GET_TOOL,
+  TASK_LIST_TOOL,
+  ...catalogTools.slice(taskOutputIndex, writeIndex),
+  TASK_UPDATE_TOOL,
+  ...catalogTools.slice(writeIndex),
+];
 export const CLAUDE_CODE_AGENT_TOOLS = CLAUDE_CODE_TOOLS.filter((tool) =>
   tool.name === "Bash" || tool.name === "Edit" || tool.name === "Read" || tool.name === "Write"
 );

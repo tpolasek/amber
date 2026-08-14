@@ -70,6 +70,8 @@ export interface Session {
   agentType?: string;
   agentDescription?: string;
   agentStatus?: "running" | "complete" | "error";
+  planningTasks?: import("./planning-task-tools.js").PlanningTask[];
+  planningTaskHighWaterMark?: number;
 }
 
 export interface FileReadState {
