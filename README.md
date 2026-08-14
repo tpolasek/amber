@@ -16,7 +16,6 @@ Configure an Anthropic-compatible backend, then open `http://127.0.0.1:3000`:
 export ANTHROPIC_AUTH_TOKEN="your-key"
 export ANTHROPIC_BASE_URL="https://api.z.ai/api/anthropic"
 export ANTHROPIC_MODEL="your-model" # required
-# export ANTHROPIC_THINKING_BUDGET_TOKENS=32768 # Z.AI default; set 0 to disable
 npm start
 ```
 
@@ -28,6 +27,7 @@ npm start
 - Agent responses are rendered inline with `markdown-it`, including tables, fenced code, lists, links, blockquotes, and other CommonMark formatting. Raw HTML is disabled.
 - `src/server.ts` — static server and small JSON/SSE API built on `node:http`.
 - `src/provider.ts` — provider boundary for Anthropic-compatible APIs. Future tool-use, MCP, approvals, and alternative providers can be added behind this interface.
+- Top-level agent requests reproduce the captured Claude Code 2.1.88 wire contract: beta endpoint and flags, client headers, adaptive thinking, 32,000 output tokens, structured system/reminder blocks, and matching definitions for Amber's seven shared tools.
 - Anthropic-compatible text and thinking deltas stream live. Thinking and its opaque signature are stored separately, returned unchanged in subsequent model history, shown expanded while generating, and collapsed into a reopenable disclosure when the response completes.
 - `src/bash-tool.ts` — the Bash runner supports streamed foreground execution and Claude Code-style background execution, with a 120-second default timeout and 10-minute maximum.
 - `src/background-tasks.ts` and `src/task-tools.ts` — session-scoped background process tracking plus `TaskOutput` and `TaskStop`. Tasks survive the HTTP response and later conversation turns while the Amber server remains running.

@@ -115,7 +115,12 @@ export interface ToolDefinition {
 
 export interface StreamOptions {
   tools?: ToolDefinition[];
-  system?: string;
+  system?: string | ProviderSystemBlock[];
+}
+
+export interface ProviderSystemBlock {
+  type: "text";
+  text: string;
 }
 
 export interface ProviderMessage {

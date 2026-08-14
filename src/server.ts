@@ -23,6 +23,11 @@ import { executeFileTool, FILE_TOOLS } from "./file-tools.js";
 import { completeDirectories } from "./directory-completion.js";
 import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
 import { AGENT_TOOL, getAgentDefinition, parseAgentInput, startAgentRuns } from "./agent-tool.js";
+import {
+  buildClaudeCodeSystemPrompt,
+  CLAUDE_CODE_TOOLS,
+  injectClaudeCodeUserContext,
+} from "./claude-code-compatibility.js";
 import type { ToolDefinition } from "./types.js";
 import type { Message, Session, TokenUsage, ToolCall } from "./types.js";
 
@@ -242,7 +247,8 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     const toolLoopTracker = new ToolLoopTracker();
     let lastAgentSnapshotAt = 0;
     for (;;) {
-      const history = buildProviderHistory(session.messages, assistantMessage.id, session.compaction);
+      const baseHistory = buildProviderHistory(session.messages, assistantMessage.id, session.compaction);
+      const history = session.agentType ? baseHistory : injectClaudeCodeUserContext(baseHistory);
       const toolDrafts = new Map<number, { call: ToolCall; inputJson: string }>();
       let usage: Partial<TokenUsage> = {};
       for await (const event of provider.stream(history, controller.signal, {
@@ -537,11 +543,15 @@ function sessionTools(session: Session): ToolDefinition[] {
   if (session.agentType && getAgentDefinition(session.agentType as "general-purpose" | "code-review").readOnly) {
     return [BASH_TOOL, ...FILE_TOOLS.filter((tool) => tool.name === "Read")];
   }
-  return [BASH_TOOL, ...FILE_TOOLS, TASK_OUTPUT_TOOL, TASK_STOP_TOOL, AGENT_TOOL];
+  return CLAUDE_CODE_TOOLS;
 }
 
-function sessionSystemPrompt(session: Session, currentDirectory: string, directories: string[]): string {
-  if (!session.agentType) return agentSystemPrompt(currentDirectory, directories);
+function sessionSystemPrompt(
+  session: Session,
+  currentDirectory: string,
+  directories: string[],
+): string | import("./types.js").ProviderSystemBlock[] {
+  if (!session.agentType) return buildClaudeCodeSystemPrompt(currentDirectory, provider.model);
   const definition = getAgentDefinition(session.agentType as "general-purpose" | "code-review");
   const environment = agentSystemPrompt(currentDirectory, directories, definition.readOnly);
   return `${definition.systemPrompt}\n\nNotes:\n- Always use absolute paths because working directories can reset between Bash calls.\n- Your final response must use absolute paths when referring to files; include code snippets only when they are essential.\n- Do not use emojis.\n- Do not put a colon immediately before a tool call.\n\n${environment}`;

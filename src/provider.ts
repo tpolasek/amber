@@ -5,8 +5,16 @@ interface AnthropicProviderOptions {
   authToken?: string;
   model: string;
   baseUrl: string;
-  thinkingBudgetTokens?: number;
 }
+
+const CLAUDE_CODE_BETAS = [
+  "claude-code-20250219",
+  "context-1m-2025-08-07",
+  "interleaved-thinking-2025-05-14",
+  "context-management-2025-06-27",
+  "prompt-caching-scope-2026-01-05",
+  "effort-2025-11-24",
+].join(",");
 
 interface AnthropicEvent {
   type?: string;
@@ -25,33 +33,32 @@ export class AnthropicProvider implements LlmProvider {
   readonly #apiKey: string | undefined;
   readonly #authToken: string | undefined;
   readonly #baseUrl: string;
-  readonly #thinkingBudgetTokens: number | undefined;
 
   constructor(options: AnthropicProviderOptions) {
     this.#apiKey = options.apiKey;
     this.#authToken = options.authToken;
     this.model = options.model;
     this.#baseUrl = options.baseUrl.replace(/\/$/, "");
-    this.#thinkingBudgetTokens = options.thinkingBudgetTokens;
   }
 
   async *stream(messages: ProviderMessage[], signal: AbortSignal, options?: StreamOptions): AsyncGenerator<StreamEvent> {
-    const response = await fetch(`${this.#baseUrl}/v1/messages`, {
+    const response = await fetch(`${this.#baseUrl}/v1/messages?beta=true`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         "anthropic-version": "2023-06-01",
+        "anthropic-beta": CLAUDE_CODE_BETAS,
+        "user-agent": "claude-cli/2.1.88 (undefined, sdk-cli)",
+        "x-stainless-package-version": "0.74.0",
         ...(this.#apiKey ? { "x-api-key": this.#apiKey } : {}),
         ...(this.#authToken ? { authorization: `Bearer ${this.#authToken}` } : {}),
       },
       body: JSON.stringify({
         model: this.model,
-        max_tokens: Math.max(4096, (this.#thinkingBudgetTokens ?? 0) + 8192),
+        max_tokens: 32_000,
         stream: true,
         ...(options?.tools?.length ? { tools: options.tools } : {}),
-        ...(this.#thinkingBudgetTokens
-          ? { thinking: { type: "enabled", budget_tokens: this.#thinkingBudgetTokens } }
-          : {}),
+        thinking: { type: "adaptive" },
         system: options?.system
           ?? "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.",
         messages,
@@ -128,26 +135,12 @@ export function createProvider(environment: NodeJS.ProcessEnv): LlmProvider {
   const model = environment.ANTHROPIC_MODEL?.trim();
   if (!model) throw new Error("Set ANTHROPIC_MODEL before starting AMBER");
   const baseUrl = environment.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com";
-  const thinkingBudgetTokens = parseThinkingBudget(environment.ANTHROPIC_THINKING_BUDGET_TOKENS, baseUrl);
   return new AnthropicProvider({
     ...(environment.ANTHROPIC_API_KEY ? { apiKey: environment.ANTHROPIC_API_KEY } : {}),
     ...(environment.ANTHROPIC_AUTH_TOKEN ? { authToken: environment.ANTHROPIC_AUTH_TOKEN } : {}),
     model,
     baseUrl,
-    ...(thinkingBudgetTokens ? { thinkingBudgetTokens } : {}),
   });
-}
-
-function parseThinkingBudget(value: string | undefined, baseUrl: string): number | undefined {
-  if (value === undefined) return baseUrl.includes("api.z.ai") ? 32_768 : undefined;
-  const budget = Number(value);
-  if (!Number.isInteger(budget) || budget < 0) {
-    throw new Error("ANTHROPIC_THINKING_BUDGET_TOKENS must be a non-negative integer");
-  }
-  if (budget > 0 && budget < 1024) {
-    throw new Error("ANTHROPIC_THINKING_BUDGET_TOKENS must be 0 or at least 1024");
-  }
-  return budget || undefined;
 }
 
 function mapUsage(usage: { input_tokens?: number; output_tokens?: number }): Partial<TokenUsage> {

@@ -7,6 +7,9 @@ import { AnthropicProvider, createProvider } from "../src/provider.js";
 test("uses bearer auth and parses Anthropic-compatible streaming events", async (context) => {
   let receivedAuthorization = "";
   let receivedPath = "";
+  let receivedBetas = "";
+  let receivedUserAgent = "";
+  let receivedSdkVersion = "";
   let receivedModel = "";
   let receivedThinking: unknown;
   let receivedTools: unknown;
@@ -14,6 +17,9 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
   const gateway = createServer(async (request, response) => {
     receivedAuthorization = request.headers.authorization ?? "";
     receivedPath = request.url ?? "";
+    receivedBetas = String(request.headers["anthropic-beta"] ?? "");
+    receivedUserAgent = request.headers["user-agent"] ?? "";
+    receivedSdkVersion = String(request.headers["x-stainless-package-version"] ?? "");
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
@@ -45,7 +51,6 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
     authToken: "test-token",
     model: "glm-test",
     baseUrl: `http://127.0.0.1:${address.port}`,
-    thinkingBudgetTokens: 2048,
   });
   const events = [];
   const tools = [{ name: "Bash", description: "Run a command", input_schema: { type: "object" as const, properties: {} } }];
@@ -58,10 +63,13 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
   }
 
   assert.equal(receivedAuthorization, "Bearer test-token");
-  assert.equal(receivedPath, "/v1/messages");
+  assert.equal(receivedPath, "/v1/messages?beta=true");
+  assert.equal(receivedBetas, "claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24");
+  assert.equal(receivedUserAgent, "claude-cli/2.1.88 (undefined, sdk-cli)");
+  assert.equal(receivedSdkVersion, "0.74.0");
   assert.equal(receivedModel, "glm-test");
-  assert.equal(receivedMaxTokens, 10_240);
-  assert.deepEqual(receivedThinking, { type: "enabled", budget_tokens: 2048 });
+  assert.equal(receivedMaxTokens, 32_000);
+  assert.deepEqual(receivedThinking, { type: "adaptive" });
   assert.deepEqual(receivedTools, tools);
   assert.deepEqual(events, [
     { type: "usage", usage: { input: 9 } },
@@ -91,9 +99,4 @@ test("requires credentials and an explicit model", () => {
   });
   assert.equal(provider.model, "mimo-v2.5");
   assert.equal(provider.mode, "live");
-  assert.throws(() => createProvider({
-    ANTHROPIC_AUTH_TOKEN: "test-token",
-    ANTHROPIC_MODEL: "mimo-v2.5",
-    ANTHROPIC_THINKING_BUDGET_TOKENS: "512",
-  }), /must be 0 or at least 1024/);
 });
