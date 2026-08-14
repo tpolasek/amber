@@ -21,9 +21,16 @@ interface AnthropicEvent {
   index?: number;
   delta?: { type?: string; text?: string; thinking?: string; signature?: string; stop_reason?: string };
   content_block?: { type?: string; id?: string; name?: string };
-  message?: { usage?: { input_tokens?: number; output_tokens?: number } };
-  usage?: { input_tokens?: number; output_tokens?: number };
+  message?: { usage?: AnthropicUsage };
+  usage?: AnthropicUsage;
   error?: { message?: string };
+}
+
+interface AnthropicUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
 }
 
 export class AnthropicProvider implements LlmProvider {
@@ -143,9 +150,16 @@ export function createProvider(environment: NodeJS.ProcessEnv): LlmProvider {
   });
 }
 
-function mapUsage(usage: { input_tokens?: number; output_tokens?: number }): Partial<TokenUsage> {
+function mapUsage(usage: AnthropicUsage): Partial<TokenUsage> {
+  const hasInput = usage.input_tokens !== undefined
+    || usage.cache_creation_input_tokens !== undefined
+    || usage.cache_read_input_tokens !== undefined;
   return {
-    ...(usage.input_tokens !== undefined ? { input: usage.input_tokens } : {}),
+    ...(hasInput ? {
+      input: (usage.input_tokens ?? 0)
+        + (usage.cache_creation_input_tokens ?? 0)
+        + (usage.cache_read_input_tokens ?? 0),
+    } : {}),
     ...(usage.output_tokens !== undefined ? { output: usage.output_tokens } : {}),
   };
 }

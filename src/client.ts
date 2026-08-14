@@ -6,7 +6,9 @@ interface ToolStatusDisplay { text: string; appendElapsed?: boolean }
 interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string; statusDisplay?: ToolStatusDisplay; agentSessionId?: string; agentType?: string }
 interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; streamingThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "compact-banner" | "tool-result"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean }
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
-interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error" }
+type PlanningTaskStatus = "pending" | "in_progress" | "completed";
+interface PlanningTask { id: string; subject: string; description: string; activeForm: string; status: PlanningTaskStatus; owner: string; blocks: string[]; blockedBy: string[]; metadata: Record<string, unknown> }
+interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error"; planningTasks?: PlanningTask[]; planningTaskArchiveHighWaterMark?: number }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface Config { provider: string; model: string; mode: "live"; homeDirectory: string; workspaceRoot: string }
 interface BackgroundTask { id: string; type: "local_bash"; command: string; description: string; workingDirectory: string; status: "running" | "completed" | "failed" | "timed_out" | "killed"; stdout: string; stderr: string; exitCode: number | null; startedAt: string; completedAt?: string; durationMs?: number }
@@ -48,6 +50,8 @@ let tasksDialogSelection = 0;
 let tasksDialogDetailId: string | null = null;
 let tasksDialogSkippedList = false;
 let tasksDialogPollTimer: number | undefined;
+let sessionDialogSelection = 0;
+let sessionDialogQuery = "";
 let questionRequest: AskUserQuestionRequest | null = null;
 let questionIndex = 0;
 let questionSelections = new Map<string, QuestionSelection>();
@@ -66,6 +70,7 @@ const elements = {
   app: required<HTMLElement>("app"),
   terminal: required<HTMLElement>("terminal"),
   sessionList: required<HTMLElement>("session-list"),
+  planningTaskList: required<HTMLElement>("planning-task-list"),
   transcript: required<HTMLElement>("transcript"),
   emptyState: required<HTMLElement>("empty-state"),
   composer: required<HTMLFormElement>("composer"),
@@ -77,6 +82,7 @@ const elements = {
   prompt: required<HTMLTextAreaElement>("prompt"),
   submit: required<HTMLButtonElement>("submit-button"),
   newSession: required<HTMLButtonElement>("new-session"),
+  selectSession: required<HTMLButtonElement>("select-session"),
   toggleSidebar: required<HTMLButtonElement>("toggle-sidebar"),
   closeSidebar: required<HTMLButtonElement>("close-sidebar"),
   sessionTitle: required<HTMLElement>("session-title"),
@@ -85,6 +91,12 @@ const elements = {
   provider: required<HTMLElement>("provider-label"),
   providerDot: required<HTMLElement>("provider-dot"),
   modeBanner: required<HTMLElement>("mode-banner"),
+  contextMeter: required<HTMLElement>("context-meter"),
+  contextMeterBar: required<HTMLElement>("context-meter-bar"),
+  contextMeterValue: required<HTMLElement>("context-meter-value"),
+  sessionDialog: required<HTMLElement>("session-dialog"),
+  sessionDialogClose: required<HTMLButtonElement>("session-dialog-close"),
+  sessionSearch: required<HTMLInputElement>("session-search"),
   tasksDialog: required<HTMLElement>("tasks-dialog"),
   tasksDialogTitle: required<HTMLElement>("tasks-dialog-title"),
   tasksDialogBody: required<HTMLElement>("tasks-dialog-body"),
@@ -124,6 +136,7 @@ function wireEvents(): void {
   document.addEventListener("keydown", (event) => {
     if (handleQuestionDialogKeydown(event)) return;
     if (handleTasksDialogKeydown(event)) return;
+    if (handleSessionDialogKeydown(event)) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "r"
       && document.activeElement !== elements.prompt && document.activeElement !== elements.historyQuery) {
       event.preventDefault();
@@ -131,6 +144,13 @@ function wireEvents(): void {
     }
   });
   elements.newSession.addEventListener("click", () => void createSession(false));
+  elements.selectSession.addEventListener("click", openSessionDialog);
+  elements.sessionDialogClose.addEventListener("click", closeSessionDialog);
+  elements.sessionSearch.addEventListener("input", () => {
+    sessionDialogQuery = elements.sessionSearch.value;
+    sessionDialogSelection = 0;
+    renderSessionList();
+  });
   elements.tasksClose.addEventListener("click", closeTasksDialog);
   elements.tasksBack.addEventListener("click", showTasksList);
   elements.tasksStop.addEventListener("click", () => void stopSelectedTask());
@@ -138,6 +158,9 @@ function wireEvents(): void {
   elements.questionSubmit.addEventListener("click", advanceOrSubmitQuestions);
   elements.tasksDialog.addEventListener("click", (event) => {
     if (event.target === elements.tasksDialog) closeTasksDialog();
+  });
+  elements.sessionDialog.addEventListener("click", (event) => {
+    if (event.target === elements.sessionDialog) closeSessionDialog();
   });
   elements.questionDialog.addEventListener("click", (event) => {
     if (event.target === elements.questionDialog) void declineQuestions();
@@ -289,7 +312,77 @@ let summaries: Summary[] = [];
 async function loadSessionList(): Promise<void> {
   const response = await api<{ sessions: Summary[] }>("/api/sessions");
   summaries = response.sessions;
+  sessionDialogSelection = Math.min(sessionDialogSelection, Math.max(0, filteredSessionSummaries().length - 1));
   renderSessionList();
+}
+
+function openSessionDialog(): void {
+  sessionDialogQuery = "";
+  elements.sessionSearch.value = "";
+  const currentIndex = filteredSessionSummaries().findIndex((summary) => summary.id === state.session?.id);
+  sessionDialogSelection = currentIndex >= 0 ? currentIndex : 0;
+  renderSessionList();
+  elements.sessionDialog.hidden = false;
+  document.body.classList.remove("sidebar-open");
+  elements.sessionList.focus();
+  elements.sessionList.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
+}
+
+function closeSessionDialog(): void {
+  elements.sessionDialog.hidden = true;
+  elements.prompt.focus();
+}
+
+async function selectArchivedSession(summary: Summary): Promise<void> {
+  if (state.streaming) return notify("Wait for the current response to finish");
+  if (summary.id === state.session?.id) return closeSessionDialog();
+  history.pushState({}, "", `/s/${summary.id}`);
+  try {
+    await loadSession(summary.id);
+    closeSessionDialog();
+  } catch (error) {
+    notify(messageFrom(error));
+  }
+}
+
+function handleSessionDialogKeydown(event: KeyboardEvent): boolean {
+  if (elements.sessionDialog.hidden) return false;
+  const filtered = filteredSessionSummaries();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeSessionDialog();
+  } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+    event.preventDefault();
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    sessionDialogSelection = Math.max(0, Math.min(filtered.length - 1, sessionDialogSelection + direction));
+    renderSessionList();
+    elements.sessionList.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
+  } else if (event.key === "Enter"
+    && document.activeElement !== elements.sessionDialogClose
+    && !document.activeElement?.classList.contains("session-delete")) {
+    const summary = filtered[sessionDialogSelection];
+    if (summary) {
+      event.preventDefault();
+      void selectArchivedSession(summary);
+    }
+  } else if (document.activeElement !== elements.sessionSearch
+    && !event.ctrlKey && !event.metaKey && !event.altKey
+    && /^[\p{L}\p{N}]$/u.test(event.key)) {
+    event.preventDefault();
+    elements.sessionSearch.focus();
+    elements.sessionSearch.value += event.key;
+    sessionDialogQuery = elements.sessionSearch.value;
+    sessionDialogSelection = 0;
+    renderSessionList();
+  } else if (document.activeElement !== elements.sessionSearch && event.key === "Backspace" && sessionDialogQuery) {
+    event.preventDefault();
+    elements.sessionSearch.focus();
+    elements.sessionSearch.value = sessionDialogQuery.slice(0, -1);
+    sessionDialogQuery = elements.sessionSearch.value;
+    sessionDialogSelection = 0;
+    renderSessionList();
+  }
+  return true;
 }
 
 async function sendMessage(): Promise<void> {
@@ -349,10 +442,16 @@ async function sendMessage(): Promise<void> {
         const index = session.messages.findIndex((candidate) => candidate.id === message.id);
         if (index >= 0) session.messages[index] = message;
         updateMessage(assistantElement, message);
+        renderContextMeter();
       } else if (event === "tool_update") {
         applyToolUpdate(session, data as { messageId: string; toolCall: ToolCall });
       } else if (event === "tool_output") {
         applyToolOutput(session, data as { messageId: string; toolUseId: string; chunk: string });
+      } else if (event === "planning_tasks_update") {
+        const payload = data as { tasks: PlanningTask[]; archiveHighWaterMark: number };
+        session.planningTasks = payload.tasks;
+        session.planningTaskArchiveHighWaterMark = payload.archiveHighWaterMark;
+        renderPlanningTasks();
       } else if (event === "ask_user_question") {
         openQuestionDialog(data as AskUserQuestionRequest);
       } else if (event === "continuation") {
@@ -1094,6 +1193,8 @@ function renderSession(): void {
   resetPromptHistory();
   closeHistorySearch(false);
   renderHeader();
+  renderPlanningTasks();
+  renderContextMeter();
   syncAgentSessionPolling();
 }
 
@@ -1129,25 +1230,99 @@ function displayHomeRelativePath(path: string, homeDirectory: string): string {
   return path.startsWith(`${homeDirectory}/`) ? `~/${path.slice(homeDirectory.length + 1)}` : path;
 }
 
+function renderPlanningTasks(): void {
+  elements.planningTaskList.replaceChildren();
+  const session = state.session;
+  const archiveHighWaterMark = session?.planningTaskArchiveHighWaterMark ?? 0;
+  const allTasks = (session?.planningTasks ?? [])
+    .filter((task) => Number(task.id) > archiveHighWaterMark)
+    .sort((left, right) => Number(left.id) - Number(right.id));
+  const tasks = allTasks.length > 0 && allTasks.every((task) => task.status === "completed") ? [] : allTasks;
+  if (tasks.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "planning-task-empty";
+    empty.textContent = "No active tasks in this session";
+    elements.planningTaskList.append(empty);
+    return;
+  }
+  const completedIds = new Set(allTasks.filter((task) => task.status === "completed").map((task) => task.id));
+  for (const task of tasks) {
+    const item = document.createElement("div");
+    item.className = `planning-task-item ${task.status}`;
+    item.title = task.description;
+    const marker = document.createElement("span");
+    marker.className = "planning-task-marker";
+    marker.textContent = task.status === "completed" ? "[✓]" : task.status === "in_progress" ? "[~]" : "[ ]";
+    const copy = document.createElement("span");
+    copy.className = "planning-task-copy";
+    const subject = document.createElement("strong");
+    subject.textContent = task.status === "in_progress" ? task.activeForm : task.subject;
+    const meta = document.createElement("small");
+    const status = task.status.replace("_", " ");
+    const activeBlockers = task.blockedBy.filter((id) => !completedIds.has(id));
+    const blockedBy = activeBlockers.length > 0 ? ` · blocked by ${activeBlockers.map((id) => `#${id}`).join(", ")}` : "";
+    const owner = task.owner ? ` · ${task.owner}` : "";
+    meta.textContent = `#${task.id} · ${status}${blockedBy}${owner}`;
+    copy.append(subject, meta);
+    item.append(marker, copy);
+    elements.planningTaskList.append(item);
+  }
+}
+
+function renderContextMeter(): void {
+  const latestUsage = state.session?.messages.slice().reverse().find((message) => message.usage)?.usage;
+  const tokens = (latestUsage?.input ?? 0) + (latestUsage?.output ?? 0);
+  const level = tokens < 100_000 ? "green" : tokens <= 150_000 ? "yellow" : "red";
+  elements.contextMeter.classList.remove("context-green", "context-yellow", "context-red");
+  elements.contextMeter.classList.add(`context-${level}`);
+  elements.contextMeterBar.style.width = `${Math.min(100, tokens / 2_000)}%`;
+  elements.contextMeterValue.textContent = `${formatTokenCountInThousands(tokens)}k`;
+  elements.contextMeter.title = `${tokens.toLocaleString()} tokens in the current context`;
+}
+
+function formatTokenCountInThousands(tokens: number): string {
+  if (tokens === 0) return "0";
+  const thousands = tokens / 1_000;
+  const display = thousands < 100 ? Math.floor(thousands * 10) / 10 : Math.round(thousands);
+  return display.toLocaleString(undefined, { maximumFractionDigits: 1 });
+}
+
 function renderSessionList(): void {
   elements.sessionList.replaceChildren();
-  for (const summary of summaries) {
+  const filtered = filteredSessionSummaries();
+  if (filtered.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "session-archive-empty";
+    empty.textContent = sessionDialogQuery.trim() ? "No matching sessions" : "No archived sessions";
+    elements.sessionList.append(empty);
+    return;
+  }
+  filtered.forEach((summary, index) => {
     const item = document.createElement("div");
     item.className = "session-item";
     item.classList.toggle("active", summary.id === state.session?.id);
+    item.classList.toggle("selected", index === sessionDialogSelection);
     const openButton = document.createElement("button");
     openButton.type = "button";
     openButton.className = "session-item-open";
+    openButton.setAttribute("aria-label", `Open session ${summary.title}`);
     openButton.innerHTML = `<span class="session-item-title"></span><span class="session-item-meta"><span></span><span></span></span>`;
     requiredWithin(openButton, ".session-item-title").textContent = summary.title;
     const meta = openButton.querySelectorAll(".session-item-meta span");
     if (meta[0]) meta[0].textContent = `${summary.messageCount} msg`;
     if (meta[1]) meta[1].textContent = relativeTime(summary.updatedAt);
-    openButton.addEventListener("click", () => {
-      if (summary.id === state.session?.id) return document.body.classList.remove("sidebar-open");
-      history.pushState({}, "", `/s/${summary.id}`);
-      void loadSession(summary.id);
+    openButton.addEventListener("mouseenter", () => {
+      if (sessionDialogSelection === index) return;
+      sessionDialogSelection = index;
+      renderSessionList();
     });
+    item.addEventListener("focusin", () => {
+      if (sessionDialogSelection === index) return;
+      elements.sessionList.querySelector(".session-item.selected")?.classList.remove("selected");
+      sessionDialogSelection = index;
+      item.classList.add("selected");
+    });
+    openButton.addEventListener("click", () => void selectArchivedSession(summary));
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
     deleteButton.className = "session-delete";
@@ -1156,7 +1331,14 @@ function renderSessionList(): void {
     deleteButton.addEventListener("click", () => void deleteSession(summary));
     item.append(openButton, deleteButton);
     elements.sessionList.append(item);
-  }
+  });
+}
+
+function filteredSessionSummaries(): Summary[] {
+  const query = sessionDialogQuery.trim().toLocaleLowerCase();
+  if (!query) return summaries;
+  return summaries.filter((summary) => [summary.title, summary.id, summary.preview, String(summary.messageCount)]
+    .some((value) => value.toLocaleLowerCase().includes(query)));
 }
 
 async function deleteSession(summary: Summary): Promise<void> {

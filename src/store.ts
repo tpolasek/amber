@@ -108,6 +108,9 @@ export class SessionStore {
       ...(session.planningTaskHighWaterMark !== undefined
         ? { planningTaskHighWaterMark: session.planningTaskHighWaterMark }
         : {}),
+      ...(session.planningTaskArchiveHighWaterMark !== undefined
+        ? { planningTaskArchiveHighWaterMark: session.planningTaskArchiveHighWaterMark }
+        : {}),
     };
     await this.save(fork);
     return fork;

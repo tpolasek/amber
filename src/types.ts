@@ -72,6 +72,7 @@ export interface Session {
   agentStatus?: "running" | "complete" | "error";
   planningTasks?: import("./planning-task-tools.js").PlanningTask[];
   planningTaskHighWaterMark?: number;
+  planningTaskArchiveHighWaterMark?: number;
 }
 
 export interface FileReadState {

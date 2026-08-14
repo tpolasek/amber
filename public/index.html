@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#100b03">
     <meta name="description" content="AMBER — browser terminal for persistent LLM agent sessions">
     <title>AMBER // Agent Terminal</title>
-    <link rel="stylesheet" href="/styles.css?v=37">
+    <link rel="stylesheet" href="/styles.css?v=38">
   </head>
   <body>
     <div class="noise" aria-hidden="true"></div>
@@ -18,12 +18,14 @@
           <div><strong>AMBER</strong><small>AGENT TERMINAL</small></div>
           <button id="close-sidebar" class="icon-button close-sidebar" aria-label="Close sidebar">×</button>
         </div>
-        <button id="new-session" class="new-session"><span>＋</span> NEW SESSION <kbd>⌘N</kbd></button>
-        <div class="sidebar-label"><span>SESSION ARCHIVE</span><span class="line"></span></div>
-        <nav id="session-list" class="session-list" aria-label="Previous sessions"></nav>
+        <div class="session-actions">
+          <button id="new-session" class="new-session"><span>＋</span> NEW SESSION <kbd>⌘N</kbd></button>
+          <button id="select-session" class="new-session select-session"><span>≡</span> SELECT SESSION</button>
+        </div>
+        <div class="sidebar-label"><span>ACTIVE TASKS</span><span class="line"></span></div>
+        <nav id="planning-task-list" class="session-list planning-task-list" aria-label="Tasks for this session"></nav>
         <footer class="sidebar-footer">
-          <div class="system-meter"><span>MEM</span><i><b style="width: 24%"></b></i><span>24%</span></div>
-          <div class="system-meter"><span>CTX</span><i><b style="width: 8%"></b></i><span>08%</span></div>
+          <div id="context-meter" class="system-meter context-meter context-green"><span>CTX</span><i><b id="context-meter-bar"></b></i><span id="context-meter-value">0k</span></div>
           <div class="version"><span class="pulse-dot"></span> SYSTEM NOMINAL <span>v0.1.0</span></div>
         </footer>
       </aside>
@@ -77,6 +79,22 @@
           <div class="composer-meta"><span class="secure">◇ SESSION URL PERSISTED</span></div>
         </footer>
       </main>
+    </div>
+    <div id="session-dialog" class="tasks-overlay" hidden>
+      <section class="tasks-dialog session-dialog" role="dialog" aria-modal="true" aria-labelledby="session-dialog-title">
+        <header class="tasks-dialog-header">
+          <span class="session-dialog-icon" aria-hidden="true">≡</span>
+          <strong id="session-dialog-title">Session archive</strong>
+          <button id="session-dialog-close" class="tasks-dialog-button" type="button" aria-label="Close session archive">×</button>
+        </header>
+        <div class="tasks-dialog-body session-dialog-body">
+          <label class="session-search" for="session-search"><span>SEARCH</span><input id="session-search" type="search" autocomplete="off" spellcheck="false" placeholder="Type to filter sessions…"></label>
+          <nav id="session-list" class="session-list session-archive-list" aria-label="Previous sessions" tabindex="-1"></nav>
+        </div>
+        <footer class="tasks-dialog-footer">
+          <span>Type to search · ↑/↓ select · Enter open · Esc close</span>
+        </footer>
+      </section>
     </div>
     <div id="tasks-dialog" class="tasks-overlay" hidden>
       <section class="tasks-dialog" role="dialog" aria-modal="true" aria-labelledby="tasks-dialog-title">

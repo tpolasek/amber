@@ -33,7 +33,7 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
     receivedThinking = body.thinking;
     receivedTools = body.tools;
     response.writeHead(200, { "content-type": "text/event-stream" });
-    response.write('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":9}}}\n\n');
+    response.write('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":9,"cache_creation_input_tokens":40,"cache_read_input_tokens":100}}}\n\n');
     response.write('event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"Working it out"}}\n\n');
     response.write('event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"signature_delta","signature":"signed-thought"}}\n\n');
     response.write('event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}\n\n');
@@ -72,7 +72,7 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
   assert.deepEqual(receivedThinking, { type: "adaptive" });
   assert.deepEqual(receivedTools, tools);
   assert.deepEqual(events, [
-    { type: "usage", usage: { input: 9 } },
+    { type: "usage", usage: { input: 149 } },
     { type: "thinking_delta", thinking: "Working it out" },
     { type: "thinking_signature_delta", signature: "signed-thought" },
     { type: "delta", text: "Hello" },

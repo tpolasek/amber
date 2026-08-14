@@ -501,7 +501,9 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             call.startedAt = new Date(started).toISOString();
             sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
             try {
+              archiveCompletedPlanningTasks(session);
               const result = executePlanningTaskTool(call.name, call.input, session);
+              archiveCompletedPlanningTasks(session);
               call.status = "complete";
               call.output = result.output;
               resultText = result.resultText;
@@ -512,6 +514,10 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             }
             call.durationMs = Date.now() - started;
             call.completedAt = new Date().toISOString();
+            sendEvent(response, "planning_tasks_update", {
+              tasks: session.planningTasks ?? [],
+              archiveHighWaterMark: session.planningTaskArchiveHighWaterMark ?? 0,
+            });
           } else if (FILE_TOOLS.some((tool) => tool.name === call.name)) {
             const started = Date.now();
             call.status = "running";
@@ -600,6 +606,17 @@ function directoryAllowed(directory: string, roots: string[]): boolean {
     const child = relative(root, directory);
     return child === "" || (!child.startsWith("..") && !isAbsolute(child));
   });
+}
+
+function archiveCompletedPlanningTasks(session: Session): void {
+  const tasks = session.planningTasks ?? [];
+  if (tasks.length === 0 || tasks.some((task) => task.status !== "completed")) return;
+  const highestTaskId = tasks.reduce((highest, task) => Math.max(highest, Number(task.id) || 0), 0);
+  session.planningTaskArchiveHighWaterMark = Math.max(
+    session.planningTaskArchiveHighWaterMark ?? 0,
+    session.planningTaskHighWaterMark ?? 0,
+    highestTaskId,
+  );
 }
 
 function sessionTools(session: Session): ToolDefinition[] {
