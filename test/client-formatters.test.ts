@@ -1,0 +1,33 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  compactHeaderPath,
+  formatDuration,
+  formatTokenCountInThousands,
+  messageFrom,
+  taskRuntime,
+} from "../src/client-formatters.js";
+
+test("compacts header paths while preserving useful trailing directories", () => {
+  assert.equal(compactHeaderPath("/Users/amber", "/Users/amber"), "~");
+  assert.equal(compactHeaderPath("/Users/amber/code/project", "/Users/amber"), "~/code/project");
+  assert.equal(
+    compactHeaderPath("/Users/amber/a-very-long-directory-name/another-long-directory/packages/client", "/Users/amber"),
+    "~/…/packages/client",
+  );
+  assert.equal(
+    compactHeaderPath("/srv/a-very-long-directory-name/another-long-directory/packages/server", "/Users/amber"),
+    "/…/packages/server",
+  );
+});
+
+test("formats client counts, durations, runtimes, and errors", () => {
+  assert.equal(formatTokenCountInThousands(0), "0");
+  assert.equal(formatTokenCountInThousands(12_345), "12.3");
+  assert.equal(formatDuration(750), "750ms");
+  assert.equal(formatDuration(1_250), "1.3s");
+  assert.equal(taskRuntime({ startedAt: "2026-01-01T00:00:00.000Z" }, Date.parse("2026-01-01T00:00:02.000Z")), 2_000);
+  assert.equal(taskRuntime({ startedAt: "2026-01-01T00:00:00.000Z", durationMs: 500 }, 0), 500);
+  assert.equal(messageFrom(new Error("Broken")), "Broken");
+  assert.equal(messageFrom("Broken"), "Something went wrong");
+});
