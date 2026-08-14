@@ -82,9 +82,7 @@ button { color: inherit; }
 .context-meter.context-yellow b { background: var(--amber); box-shadow: 0 0 5px rgba(255,178,26,.5); }
 .context-meter.context-red { color: #ff684d; }
 .context-meter.context-red b { background: #ff684d; box-shadow: 0 0 5px rgba(255,104,77,.5); }
-.version { display: flex; align-items: center; gap: 6px; margin-top: 9px; padding-top: 8px; border-top: 1px solid rgba(255,178,26,.1); color: #6e5b3c; font-size: 11px; }
-.version span:last-child { margin-left: auto; }
-.pulse-dot, .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 8px var(--amber); animation: pulse 2.2s infinite; }
+.status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 8px var(--amber); animation: pulse 2.2s infinite; }
 
 .terminal { min-width: 0; min-height: 0; max-height: 100%; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; }
 .topbar { grid-row: 1; position: relative; z-index: 7; height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; border-bottom: 1px solid var(--amber-line); background: var(--surface); }

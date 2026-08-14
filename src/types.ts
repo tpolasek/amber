@@ -73,6 +73,7 @@ export interface Session {
   planningTasks?: import("./planning-task-tools.js").PlanningTask[];
   planningTaskHighWaterMark?: number;
   planningTaskArchiveHighWaterMark?: number;
+  contextTokens?: number;
 }
 
 export interface FileReadState {

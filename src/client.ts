@@ -8,7 +8,7 @@ interface Message { id: string; role: "user" | "assistant"; content: string; thi
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
 type PlanningTaskStatus = "pending" | "in_progress" | "completed";
 interface PlanningTask { id: string; subject: string; description: string; activeForm: string; status: PlanningTaskStatus; owner: string; blocks: string[]; blockedBy: string[]; metadata: Record<string, unknown> }
-interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error"; planningTasks?: PlanningTask[]; planningTaskArchiveHighWaterMark?: number }
+interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error"; planningTasks?: PlanningTask[]; planningTaskArchiveHighWaterMark?: number; contextTokens?: number }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface Config { provider: string; model: string; mode: "live"; homeDirectory: string; workspaceRoot: string }
 interface BackgroundTask { id: string; type: "local_bash"; command: string; description: string; workingDirectory: string; status: "running" | "completed" | "failed" | "timed_out" | "killed"; stdout: string; stderr: string; exitCode: number | null; startedAt: string; completedAt?: string; durationMs?: number }
@@ -441,6 +441,7 @@ async function sendMessage(): Promise<void> {
         assistantMessage = message;
         const index = session.messages.findIndex((candidate) => candidate.id === message.id);
         if (index >= 0) session.messages[index] = message;
+        if (message.usage) session.contextTokens = message.usage.input;
         updateMessage(assistantElement, message);
         renderContextMeter();
       } else if (event === "tool_update") {
@@ -1270,14 +1271,16 @@ function renderPlanningTasks(): void {
 }
 
 function renderContextMeter(): void {
-  const latestUsage = state.session?.messages.slice().reverse().find((message) => message.usage)?.usage;
-  const tokens = (latestUsage?.input ?? 0) + (latestUsage?.output ?? 0);
+  const session = state.session;
+  const tokens = session?.contextTokens
+    ?? session?.messages.reduce((largest, message) => Math.max(largest, message.usage?.input ?? 0), 0)
+    ?? 0;
   const level = tokens < 100_000 ? "green" : tokens <= 150_000 ? "yellow" : "red";
   elements.contextMeter.classList.remove("context-green", "context-yellow", "context-red");
   elements.contextMeter.classList.add(`context-${level}`);
   elements.contextMeterBar.style.width = `${Math.min(100, tokens / 2_000)}%`;
   elements.contextMeterValue.textContent = `${formatTokenCountInThousands(tokens)}k`;
-  elements.contextMeter.title = `${tokens.toLocaleString()} tokens in the current context`;
+  elements.contextMeter.title = `${tokens.toLocaleString()} cached + uncached input tokens`;
 }
 
 function formatTokenCountInThousands(tokens: number): string {

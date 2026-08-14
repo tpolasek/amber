@@ -66,6 +66,7 @@ export class SessionStore {
     session.messages = [];
     delete session.compaction;
     delete session.fileReadState;
+    delete session.contextTokens;
     await this.save(session);
     return session;
   }
@@ -111,6 +112,7 @@ export class SessionStore {
       ...(session.planningTaskArchiveHighWaterMark !== undefined
         ? { planningTaskArchiveHighWaterMark: session.planningTaskArchiveHighWaterMark }
         : {}),
+      ...(session.contextTokens !== undefined ? { contextTokens: session.contextTokens } : {}),
     };
     await this.save(fork);
     return fork;

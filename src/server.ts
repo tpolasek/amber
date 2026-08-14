@@ -325,7 +325,10 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       }
 
       assistantMessage.status = "complete";
-      if (usage.input !== undefined && usage.output !== undefined) assistantMessage.usage = usage as TokenUsage;
+      if (usage.input !== undefined && usage.output !== undefined) {
+        assistantMessage.usage = usage as TokenUsage;
+        session.contextTokens = usage.input;
+      }
       for (const draft of toolDrafts.values()) {
         try {
           const parsed = JSON.parse(draft.inputJson || "{}") as unknown;
@@ -617,6 +620,11 @@ function archiveCompletedPlanningTasks(session: Session): void {
     session.planningTaskHighWaterMark ?? 0,
     highestTaskId,
   );
+}
+
+function sessionContextTokens(session: Session): number {
+  if (session.contextTokens !== undefined) return session.contextTokens;
+  return session.messages.reduce((largest, message) => Math.max(largest, message.usage?.input ?? 0), 0);
 }
 
 function sessionTools(session: Session): ToolDefinition[] {
@@ -924,7 +932,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     const latestUsage = assistantMessages.slice().reverse().find((message) => message.usage)?.usage;
     const totalInput = assistantMessages.reduce((total, message) => total + (message.usage?.input ?? 0), 0);
     const totalOutput = assistantMessages.reduce((total, message) => total + (message.usage?.output ?? 0), 0);
-    const currentTokens = (latestUsage?.input ?? 0) + (latestUsage?.output ?? 0);
+    const currentTokens = sessionContextTokens(session);
     const now = new Date().toISOString();
     const userMessage: Message = {
       id: randomUUID(), role: "user", content: command, createdAt: now, status: "complete", kind: "command",
@@ -936,7 +944,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
         `**Context · ${session.id}**`,
         "",
         `- Model: \`${provider.model}\``,
-        `- Active context: **${currentTokens.toLocaleString()} tokens** (latest measured turn)`,
+        `- Active context: **${currentTokens.toLocaleString()} tokens** (cached + uncached input)`,
         `- Latest input / output: **${(latestUsage?.input ?? 0).toLocaleString()} / ${(latestUsage?.output ?? 0).toLocaleString()}**`,
         `- Session input: **${totalInput.toLocaleString()} tokens**`,
         `- Session output: **${totalOutput.toLocaleString()} tokens**`,
