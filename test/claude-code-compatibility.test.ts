@@ -7,6 +7,7 @@ import {
   createClaudeCodeTools,
   injectClaudeCodeUserContext,
   structureClaudeCodeUserMessages,
+  toolsForPlanMode,
 } from "../src/claude-code-compatibility.js";
 import { getAgentDefinition } from "../src/agent-tool.js";
 import { SETTINGS_TEMPLATE } from "../src/settings.js";
@@ -83,4 +84,17 @@ test("structures an agent prompt as one text block and uses the shared child too
   const messages = structureClaudeCodeUserMessages([{ role: "user", content: "Find the PID" }]);
   assert.deepEqual(messages, [{ role: "user", content: [{ type: "text", text: "Find the PID" }] }]);
   assert.deepEqual(CLAUDE_CODE_AGENT_TOOLS.map((tool) => tool.name), ["Bash", "Edit", "Read", "Write"]);
+});
+
+test("advertises exactly one browser plan control for the active mode", () => {
+  const normal = toolsForPlanMode(CLAUDE_CODE_TOOLS, false);
+  assert.equal(normal.at(-1)?.name, "EnterPlanMode");
+  assert.equal(normal.some((tool) => tool.name === "ExitPlanMode"), false);
+
+  const planning = toolsForPlanMode(CLAUDE_CODE_TOOLS, true);
+  assert.equal(planning.at(-1)?.name, "ExitPlanMode");
+  assert.equal(planning.some((tool) => tool.name === "EnterPlanMode"), false);
+
+  const headless = toolsForPlanMode(CLAUDE_CODE_TOOLS, true, false);
+  assert.deepEqual(headless.map((tool) => tool.name), CLAUDE_CODE_TOOLS.map((tool) => tool.name));
 });

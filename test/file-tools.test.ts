@@ -231,3 +231,59 @@ test("file tools resolve relative paths from CWD and reject binary and outside p
   );
   await assert.rejects(executeFileTool("Read", { file_path: outsidePath }, [directory], current), /outside the project/);
 });
+
+test("plan mode permits only its plan file through Write and Edit", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-plan-files-"));
+  const planPath = join(directory, "plans", "quiet.river.stone.md");
+  const sourcePath = join(directory, "source.ts");
+  const current = session();
+  const policy = { onlyMutationPath: planPath };
+
+  await executeFileTool(
+    "Write",
+    { file_path: planPath, content: "# Plan\n" },
+    [directory],
+    current,
+    directory,
+    undefined,
+    policy,
+  );
+  assert.equal(await readFile(planPath, "utf8"), "# Plan\n");
+  await executeFileTool(
+    "Edit",
+    { file_path: planPath, old_string: "# Plan", new_string: "# Revised plan" },
+    [directory],
+    current,
+    directory,
+    undefined,
+    policy,
+  );
+  assert.equal(await readFile(planPath, "utf8"), "# Revised plan\n");
+  await assert.rejects(
+    executeFileTool(
+      "Write",
+      { file_path: sourcePath, content: "changed\n" },
+      [directory],
+      current,
+      directory,
+      undefined,
+      policy,
+    ),
+    /only permits Write or Edit for the active plan file/,
+  );
+  await assert.rejects(
+    executeFileTool(
+      "Edit",
+      { file_path: sourcePath, old_string: "", new_string: "changed\n" },
+      [directory],
+      current,
+      directory,
+      undefined,
+      policy,
+    ),
+    /only permits Write or Edit for the active plan file/,
+  );
+
+  await executeFileTool("Write", { file_path: sourcePath, content: "normal mode\n" }, [directory], current, directory);
+  assert.equal(await readFile(sourcePath, "utf8"), "normal mode\n");
+});

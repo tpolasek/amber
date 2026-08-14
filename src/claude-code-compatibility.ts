@@ -5,6 +5,7 @@ import compatibility from "./claude-code-compatibility.json" with { type: "json"
 import toolCatalog from "./claude-code-tools.json" with { type: "json" };
 import { ASK_USER_QUESTION_TOOL } from "./ask-user-question-tool.js";
 import { createAgentTool, type AgentDefinition } from "./agent-tool.js";
+import { ENTER_PLAN_MODE_TOOL, EXIT_PLAN_MODE_TOOL } from "./plan-mode.js";
 import {
   TASK_CREATE_TOOL,
   TASK_GET_TOOL,
@@ -28,6 +29,15 @@ export function createClaudeCodeTools(agentDefinitions: readonly AgentDefinition
     TASK_UPDATE_TOOL,
     ...catalogTools.slice(writeIndex),
   ];
+}
+
+export function toolsForPlanMode(
+  tools: readonly ToolDefinition[],
+  active: boolean,
+  approvalCapable = true,
+): ToolDefinition[] {
+  if (!approvalCapable) return [...tools];
+  return [...tools, active ? EXIT_PLAN_MODE_TOOL : ENTER_PLAN_MODE_TOOL];
 }
 
 export const CLAUDE_CODE_AGENT_TOOLS = catalogTools.filter((tool) =>

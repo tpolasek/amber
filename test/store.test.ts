@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionStore } from "../src/store.js";
@@ -177,4 +177,46 @@ test("resolves a complete root session family from the root or a nested agent", 
   assert.deepEqual(new Set((await store.family(nestedAgent.id)).map((session) => session.id)), expected);
   assert.equal((await store.family(root.id)).some((session) => session.id === unrelated.id), false);
   assert.deepEqual(await store.family("missing.session.id"), []);
+});
+
+test("persists, forks, inherits, clears, and deletes plan mode state and files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "amber-store-plan-"));
+  const sessionDirectory = join(root, "sessions");
+  const planDirectory = join(root, "plans");
+  const store = new SessionStore(sessionDirectory, planDirectory);
+  await store.initialize();
+  const session = await store.create();
+  const sourcePlanPath = join(planDirectory, `${session.id}.md`);
+  session.planMode = { active: true, planFilePath: sourcePlanPath };
+  await writeFile(sourcePlanPath, "# Source plan\n", "utf8");
+  await store.save(session);
+
+  assert.deepEqual((await store.get(session.id))?.planMode, session.planMode);
+  const child = await store.createAgentSession(session, "general-purpose", "Explore plan");
+  assert.deepEqual(child.planMode, session.planMode);
+  assert.notEqual(child.planMode, session.planMode);
+
+  const banner = {
+    id: "banner-plan",
+    role: "assistant" as const,
+    content: `Forked from session: ${session.id}`,
+    createdAt: new Date().toISOString(),
+    status: "complete" as const,
+    kind: "fork-banner" as const,
+    sourceSessionId: session.id,
+  };
+  const fork = await store.createFork(session, banner);
+  assert.equal(fork.planMode?.active, true);
+  assert.notEqual(fork.planMode?.planFilePath, sourcePlanPath);
+  assert.equal(await readFile(fork.planMode!.planFilePath, "utf8"), "# Source plan\n");
+  await writeFile(fork.planMode!.planFilePath, "# Fork plan\n", "utf8");
+  assert.equal(await readFile(sourcePlanPath, "utf8"), "# Source plan\n");
+
+  const forkPlanPath = fork.planMode!.planFilePath;
+  await store.clear(fork);
+  assert.equal(fork.planMode, undefined);
+  await assert.rejects(stat(forkPlanPath), { code: "ENOENT" });
+
+  assert.equal(await store.remove(session.id), true);
+  await assert.rejects(stat(sourcePlanPath), { code: "ENOENT" });
 });

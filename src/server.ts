@@ -39,7 +39,24 @@ import {
   createClaudeCodeTools,
   injectClaudeCodeUserContext,
   structureClaudeCodeUserMessages,
+  toolsForPlanMode,
 } from "./claude-code-compatibility.js";
+import {
+  ENTER_PLAN_MODE_TOOL_NAME,
+  EXIT_PLAN_MODE_TOOL_NAME,
+  PlanModeApprovalManager,
+  ensurePlanFile,
+  formatEnterPlanModeDeclinedResult,
+  formatEnterPlanModeResult,
+  formatExitPlanModeApprovedResult,
+  formatExitPlanModeRejectedResult,
+  parseEnterPlanModeInput,
+  parseExitPlanModeInput,
+  parsePlanModeToggleInput,
+  planFilePath,
+  planModeSystemBlock,
+  readPlanSnapshot,
+} from "./plan-mode.js";
 import type { ToolDefinition } from "./types.js";
 import type { Message, Session, TokenUsage, ToolCall } from "./types.js";
 
@@ -53,9 +70,10 @@ const streamingThinkingScript = join(sourceDirectory, "streaming-thinking.js");
 const toolDisplayScript = join(sourceDirectory, "tool-display.js");
 const markdownScript = join(projectRoot, "node_modules", "markdown-it", "dist", "browser", "markdown-it.umd.min.js");
 const dataDirectory = resolve(process.env.DATA_DIR ?? join(projectRoot, "data", "sessions"));
+const planDirectory = join(homedir(), ".amber", "plans");
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "127.0.0.1";
-const store = new SessionStore(dataDirectory);
+const store = new SessionStore(dataDirectory, planDirectory);
 const settings = await loadSettings();
 const provider = createProvider(process.env, settings);
 const agentDefinitions = settings.agents;
@@ -63,6 +81,7 @@ const claudeCodeTools = createClaudeCodeTools(agentDefinitions);
 const activeSessions = new ActiveSessionRuns();
 const backgroundTasks = new BackgroundTaskManager();
 const askUserQuestions = new AskUserQuestionManager();
+const planModeApprovals = new PlanModeApprovalManager();
 const agentRunToken = randomUUID();
 const SESSION_PATH_ID = "([a-z0-9.-]+)";
 
@@ -99,6 +118,7 @@ const shutdown = () => {
   activeSessions.abortAll();
   backgroundTasks.stopAll();
   askUserQuestions.stopAll();
+  planModeApprovals.stopAll();
   for (const run of automaticNameRuns.values()) run.controller.abort();
   automaticNameRuns.clear();
   server.close();
@@ -189,6 +209,30 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     });
   }
 
+  const planModeToggleMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/plan-mode$`));
+  if (method === "POST" && planModeToggleMatch?.[1]) {
+    if (activeSessions.has(planModeToggleMatch[1])) {
+      return json(response, 409, { error: "Plan mode can only be changed when the session is ready for a new prompt" });
+    }
+    const session = await store.get(planModeToggleMatch[1]);
+    if (!session) return json(response, 404, { error: "Session not found" });
+    if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
+    try {
+      const { active } = parsePlanModeToggleInput(await readJson(request));
+      if (active) {
+        const filePath = session.planMode?.planFilePath ?? planFilePath(planDirectory, session.id);
+        await ensurePlanFile(filePath);
+        session.planMode = { active: true, planFilePath: filePath };
+      } else if (session.planMode) {
+        session.planMode.active = false;
+      }
+      await store.save(session);
+      return json(response, 200, { session });
+    } catch (error) {
+      return json(response, 400, { error: errorMessage(error) });
+    }
+  }
+
   const messageMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/messages$`));
   if (method === "POST" && messageMatch?.[1]) {
     return streamMessage(request, response, messageMatch[1]);
@@ -222,6 +266,23 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       }
       const answers = askUserQuestions.answer(questionAnswerMatch[1], toolUseId, body.answers);
       return json(response, 200, { answers });
+    } catch (error) {
+      return json(response, 400, { error: errorMessage(error) });
+    }
+  }
+
+  const planModeDecisionMatch = url.pathname.match(
+    new RegExp(`^/api/sessions/${SESSION_PATH_ID}/plan-mode/([^/]+)/decision$`),
+  );
+  if (method === "POST" && planModeDecisionMatch?.[1] && planModeDecisionMatch[2]) {
+    const session = await store.get(planModeDecisionMatch[1]);
+    if (!session) return json(response, 404, { error: "Session not found" });
+    if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
+    const body = await readJson(request);
+    const toolUseId = decodeURIComponent(planModeDecisionMatch[2]);
+    try {
+      const decision = planModeApprovals.decide(planModeDecisionMatch[1], toolUseId, body);
+      return json(response, 200, { decision });
     } catch (error) {
       return json(response, 400, { error: errorMessage(error) });
     }
@@ -318,6 +379,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   if (session.parentSessionId && request.headers["x-amber-agent-token"] !== agentRunToken) {
     return json(response, 403, { error: "Agent sub-sessions are read-only" });
   }
+  const approvalCapable = request.headers["x-amber-agent-token"] !== agentRunToken;
 
   const body = await readJson(request);
   const content = typeof body.content === "string" ? body.content.trim() : "";
@@ -353,7 +415,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   else if (shouldAutoName) startAutomaticSessionName(session, onAutomaticName);
 
   try {
-    const allowedDirectories = sessionDirectories(session);
+    let allowedDirectories = sessionDirectories(session);
     const currentDirectory = sessionWorkingDirectory(session);
     const toolLoopTracker = new ToolLoopTracker();
     let lastAgentSnapshotAt = 0;
@@ -365,7 +427,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       const toolDrafts = new Map<number, { call: ToolCall; inputJson: string }>();
       let usage: Partial<TokenUsage> = {};
       for await (const event of provider.stream(history, controller.signal, {
-        tools: sessionTools(session),
+        tools: sessionTools(session, approvalCapable),
         system: sessionSystemPrompt(session, currentDirectory),
       })) {
         if (event.type === "delta") {
@@ -432,6 +494,17 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       }
 
       const orderedCalls = [...toolDrafts.values()].map(({ call }) => call);
+      const planModeCalls = orderedCalls.filter((call) => isPlanModeTool(call.name));
+      if (planModeCalls.length > 0 && orderedCalls.length !== 1) {
+        for (const call of orderedCalls) {
+          if (call.status === "error") continue;
+          call.status = "error";
+          call.output = isPlanModeTool(call.name)
+            ? `${call.name} must be the sole tool call in its model response`
+            : "Tool not executed because plan mode controls must be the sole tool call in a model response";
+          call.statusDisplay = { text: "NOT RUN" };
+        }
+      }
       let agentLinkSaveChain = Promise.resolve();
       const persistAgentLinks = (): Promise<void> => {
         const pending = agentLinkSaveChain.then(() => store.save(session));
@@ -456,8 +529,101 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         throwIfSessionAborted(controller.signal);
         let resultText = call.output;
         let abortAfterResult: Error | undefined;
+        let endTurnAfterResult = false;
         if (call.status !== "error") {
-          if (call.name === AGENT_TOOL_NAME) {
+          if (call.name === ENTER_PLAN_MODE_TOOL_NAME) {
+            const started = Date.now();
+            try {
+              if (!approvalCapable || session.agentType) throw new Error("EnterPlanMode is unavailable in this session");
+              parseEnterPlanModeInput(call.input);
+              if (session.planMode?.active) throw new Error("Plan mode is already active");
+              call.status = "running";
+              call.startedAt = new Date(started).toISOString();
+              call.statusDisplay = { text: "AWAITING APPROVAL" };
+              await store.save(session);
+              sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+              const decisionPromise = planModeApprovals.waitForDecision(
+                sessionId,
+                call.id,
+                "enter",
+                controller.signal,
+              );
+              sendEvent(response, "plan_mode_request", { toolUseId: call.id, kind: "enter" });
+              const decision = await decisionPromise;
+              if (decision.approved) {
+                const filePath = session.planMode?.planFilePath ?? planFilePath(planDirectory, session.id);
+                await ensurePlanFile(filePath);
+                session.planMode = { active: true, planFilePath: filePath };
+                allowedDirectories = sessionDirectories(session);
+                sendEvent(response, "plan_mode_state", { planMode: session.planMode });
+                call.status = "complete";
+                call.output = "";
+                call.statusDisplay = { text: "PLAN MODE" };
+                resultText = formatEnterPlanModeResult(filePath);
+              } else {
+                call.status = "error";
+                call.output = "";
+                call.statusDisplay = { text: "DECLINED" };
+                resultText = formatEnterPlanModeDeclinedResult();
+                endTurnAfterResult = true;
+              }
+            } catch (error) {
+              call.status = "error";
+              call.output = errorMessage(error);
+              resultText = call.output;
+              if (error instanceof Error && error.name === "AbortError") abortAfterResult = error;
+            }
+            call.durationMs = Date.now() - started;
+            call.completedAt = new Date().toISOString();
+          } else if (call.name === EXIT_PLAN_MODE_TOOL_NAME) {
+            const started = Date.now();
+            try {
+              if (!approvalCapable || session.agentType) throw new Error("ExitPlanMode is unavailable in this session");
+              const { allowedPrompts } = parseExitPlanModeInput(call.input);
+              if (!session.planMode?.active) throw new Error("ExitPlanMode can only be used while plan mode is active");
+              const plan = await readPlanSnapshot(session.planMode.planFilePath);
+              call.status = "running";
+              call.startedAt = new Date(started).toISOString();
+              call.statusDisplay = { text: "AWAITING APPROVAL" };
+              await store.save(session);
+              sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+              const decisionPromise = planModeApprovals.waitForDecision(
+                sessionId,
+                call.id,
+                "exit",
+                controller.signal,
+              );
+              sendEvent(response, "plan_mode_request", {
+                toolUseId: call.id,
+                kind: "exit",
+                plan,
+                planFilePath: session.planMode.planFilePath,
+                allowedPrompts,
+              });
+              const decision = await decisionPromise;
+              if (decision.approved) {
+                session.planMode.active = false;
+                allowedDirectories = sessionDirectories(session);
+                sendEvent(response, "plan_mode_state", { planMode: session.planMode });
+                call.status = "complete";
+                call.output = "";
+                call.statusDisplay = { text: "APPROVED" };
+                resultText = formatExitPlanModeApprovedResult(plan);
+              } else {
+                call.status = "error";
+                call.output = "";
+                call.statusDisplay = { text: "REVISE PLAN" };
+                resultText = formatExitPlanModeRejectedResult(decision.feedback);
+              }
+            } catch (error) {
+              call.status = "error";
+              call.output = errorMessage(error);
+              resultText = call.output;
+              if (error instanceof Error && error.name === "AbortError") abortAfterResult = error;
+            }
+            call.durationMs = Date.now() - started;
+            call.completedAt = new Date().toISOString();
+          } else if (call.name === AGENT_TOOL_NAME) {
             const result = await agentRuns.get(call.id)!;
             resultText = result.resultText;
             abortAfterResult = result.abortAfterResult;
@@ -618,6 +784,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                 session,
                 currentDirectory,
                 controller.signal,
+                session.planMode?.active ? { onlyMutationPath: session.planMode.planFilePath } : undefined,
               );
               call.status = "complete";
               call.filePath = result.filePath;
@@ -649,14 +816,18 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         await store.save(session);
         if (abortAfterResult) throw abortAfterResult;
         throwIfSessionAborted(controller.signal);
+        if (endTurnAfterResult) {
+          sendEvent(response, "done", { message: assistantMessage, session });
+          return;
+        }
       }
 
-      const loop = toolLoopTracker.record([...toolDrafts.values()].map(({ call }) => ({
-        name: call.name,
-        input: call.input,
-        status: call.status,
-        output: call.output,
-      })));
+      const loop = planModeCalls.length > 0 ? null : toolLoopTracker.record([...toolDrafts.values()].map(({ call }) => ({
+          name: call.name,
+          input: call.input,
+          status: call.status,
+          output: call.output,
+        })));
       if (loop) throw new Error(formatToolLoopError(loop));
       assistantMessage = createAssistantMessage();
       session.messages.push(assistantMessage);
@@ -733,7 +904,11 @@ function createAssistantMessage(createdAt = new Date().toISOString()): Message {
 }
 
 function sessionDirectories(session: Session): string[] {
-  return [...new Set([sessionWorkingDirectory(session), ...sessionDirectoryRoots(session)])];
+  return [...new Set([
+    sessionWorkingDirectory(session),
+    ...sessionDirectoryRoots(session),
+    ...(session.planMode?.active ? [dirname(session.planMode.planFilePath)] : []),
+  ])];
 }
 
 function sessionDirectoryRoots(session: Session): string[] {
@@ -768,23 +943,33 @@ function sessionContextTokens(session: Session): number {
   return session.messages.reduce((largest, message) => Math.max(largest, message.usage?.input ?? 0), 0);
 }
 
-function sessionTools(session: Session): ToolDefinition[] {
+function sessionTools(session: Session, approvalCapable = true): ToolDefinition[] {
   if (session.agentType) {
     const definition = getAgentDefinition(agentDefinitions, session.agentType);
-    return definition.readOnly
+    return session.planMode?.active || definition.readOnly
       ? CLAUDE_CODE_AGENT_TOOLS.filter((tool) => tool.name === "Bash" || tool.name === "Read")
       : CLAUDE_CODE_AGENT_TOOLS;
   }
-  return claudeCodeTools;
+  return toolsForPlanMode(claudeCodeTools, session.planMode?.active === true, approvalCapable);
 }
 
 function sessionSystemPrompt(
   session: Session,
   currentDirectory: string,
 ): string | import("./types.js").ProviderSystemBlock[] {
-  if (!session.agentType) return buildClaudeCodeSystemPrompt(currentDirectory, provider.model);
-  const definition = getAgentDefinition(agentDefinitions, session.agentType);
-  return buildClaudeCodeAgentSystemPrompt(currentDirectory, provider.model, definition.systemPrompt);
+  const system = !session.agentType
+    ? buildClaudeCodeSystemPrompt(currentDirectory, provider.model)
+    : buildClaudeCodeAgentSystemPrompt(
+        currentDirectory,
+        provider.model,
+        getAgentDefinition(agentDefinitions, session.agentType).systemPrompt,
+      );
+  if (session.planMode?.active) system.push(planModeSystemBlock(session.planMode.planFilePath, Boolean(session.agentType)));
+  return system;
+}
+
+function isPlanModeTool(name: string): boolean {
+  return name === ENTER_PLAN_MODE_TOOL_NAME || name === EXIT_PLAN_MODE_TOOL_NAME;
 }
 
 interface AgentExecutionResult {

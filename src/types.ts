@@ -74,6 +74,12 @@ export interface Session {
   planningTaskHighWaterMark?: number;
   planningTaskArchiveHighWaterMark?: number;
   contextTokens?: number;
+  planMode?: SessionPlanMode;
+}
+
+export interface SessionPlanMode {
+  active: boolean;
+  planFilePath: string;
 }
 
 export interface FileReadState {

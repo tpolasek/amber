@@ -28,13 +28,18 @@ interface Message { id: string; role: "user" | "assistant"; content: string; thi
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
 type PlanningTaskStatus = "pending" | "in_progress" | "completed";
 interface PlanningTask { id: string; subject: string; description: string; activeForm: string; status: PlanningTaskStatus; owner: string; blocks: string[]; blockedBy: string[]; metadata: Record<string, unknown> }
-interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error"; planningTasks?: PlanningTask[]; planningTaskArchiveHighWaterMark?: number; contextTokens?: number }
+interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error"; planningTasks?: PlanningTask[]; planningTaskArchiveHighWaterMark?: number; contextTokens?: number; planMode?: SessionPlanMode }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface Config { provider: string; model: string; mode: "live"; homeDirectory: string; workspaceRoot: string }
 interface BackgroundTask { id: string; type: "local_bash"; command: string; description: string; workingDirectory: string; status: "running" | "completed" | "failed" | "timed_out" | "killed"; stdout: string; stderr: string; exitCode: number | null; startedAt: string; completedAt?: string; durationMs?: number }
 interface AskUserQuestionOption { label: string; description: string; preview?: string }
 interface AskUserQuestion { question: string; header: string; options: AskUserQuestionOption[]; multiSelect: boolean }
 interface AskUserQuestionRequest { toolUseId: string; questions: AskUserQuestion[] }
+interface SessionPlanMode { active: boolean; planFilePath: string }
+interface AllowedPlanPrompt { tool: "Bash"; prompt: string }
+type PlanModeRequest =
+  | { toolUseId: string; kind: "enter" }
+  | { toolUseId: string; kind: "exit"; plan: string; planFilePath: string; allowedPrompts: AllowedPlanPrompt[] };
 interface QuestionSelection { labels: Set<string>; other: string; otherSelected: boolean; focusIndex: number }
 interface CommandDefinition { name: "/add-dir" | "/cwd" | "/context" | "/clear" | "/compact" | "/fork" | "/name" | "/tasks"; description: string }
 interface DirectoryCompletion { value: string; absolutePath: string }
@@ -82,6 +87,8 @@ let questionRequest: AskUserQuestionRequest | null = null;
 let questionIndex = 0;
 let questionSelections = new Map<string, QuestionSelection>();
 let questionSubmitting = false;
+let planModeRequest: PlanModeRequest | null = null;
+let planModeSubmitting = false;
 let agentSessionPollTimer: number | undefined;
 let agentSessionRefreshPending = false;
 
@@ -117,6 +124,8 @@ const elements = {
   model: required<HTMLElement>("model-label"),
   providerDot: required<HTMLElement>("provider-dot"),
   modeBanner: required<HTMLElement>("mode-banner"),
+  modePlan: required<HTMLInputElement>("mode-plan"),
+  modeNormal: required<HTMLInputElement>("mode-normal"),
   contextMeter: required<HTMLElement>("context-meter"),
   contextMeterBar: required<HTMLElement>("context-meter-bar"),
   contextMeterValue: required<HTMLElement>("context-meter-value"),
@@ -146,6 +155,13 @@ const elements = {
   questionDialogHints: required<HTMLElement>("question-dialog-hints"),
   questionClose: required<HTMLButtonElement>("question-close"),
   questionSubmit: required<HTMLButtonElement>("question-submit"),
+  planModeDialog: required<HTMLElement>("plan-mode-dialog"),
+  planModeDialogTitle: required<HTMLElement>("plan-mode-dialog-title"),
+  planModeDialogBody: required<HTMLElement>("plan-mode-dialog-body"),
+  planModeDialogHints: required<HTMLElement>("plan-mode-dialog-hints"),
+  planModeClose: required<HTMLButtonElement>("plan-mode-close"),
+  planModeDecline: required<HTMLButtonElement>("plan-mode-decline"),
+  planModeApprove: required<HTMLButtonElement>("plan-mode-approve"),
   toast: required<HTMLElement>("toast"),
 };
 
@@ -170,6 +186,7 @@ async function initialize(): Promise<void> {
 
 function wireEvents(): void {
   document.addEventListener("keydown", (event) => {
+    if (handlePlanModeDialogKeydown(event)) return;
     if (event.key === "Escape" && state.streaming && !state.session?.parentSessionId) {
       event.preventDefault();
       abortCurrentSession();
@@ -229,6 +246,15 @@ function wireEvents(): void {
   elements.tasksStop.addEventListener("click", () => void stopSelectedTask());
   elements.questionClose.addEventListener("click", () => void declineQuestions());
   elements.questionSubmit.addEventListener("click", advanceOrSubmitQuestions);
+  elements.modePlan.addEventListener("change", () => {
+    if (elements.modePlan.checked) void changePlanMode(true);
+  });
+  elements.modeNormal.addEventListener("change", () => {
+    if (elements.modeNormal.checked) void changePlanMode(false);
+  });
+  elements.planModeClose.addEventListener("click", () => void submitPlanModeDecision(false));
+  elements.planModeDecline.addEventListener("click", () => void submitPlanModeDecision(false));
+  elements.planModeApprove.addEventListener("click", () => void submitPlanModeDecision(true));
   elements.tasksDialog.addEventListener("click", (event) => {
     if (event.target === elements.tasksDialog) closeTasksDialog();
   });
@@ -237,6 +263,9 @@ function wireEvents(): void {
   });
   elements.questionDialog.addEventListener("click", (event) => {
     if (event.target === elements.questionDialog) void declineQuestions();
+  });
+  elements.planModeDialog.addEventListener("click", (event) => {
+    if (event.target === elements.planModeDialog) void submitPlanModeDecision(false);
   });
   elements.toggleSidebar.addEventListener("click", () => document.body.classList.add("sidebar-open"));
   elements.closeSidebar.addEventListener("click", () => document.body.classList.remove("sidebar-open"));
@@ -323,6 +352,7 @@ function wireEvents(): void {
 function openLandingDialog(): void {
   if (state.streaming) return;
   state.session = null;
+  renderPlanMode();
   sessionDialogReturnsToLanding = false;
   newSessionReturnsToLanding = false;
   elements.newSessionDialog.hidden = true;
@@ -684,6 +714,11 @@ async function sendMessage(): Promise<void> {
         renderPlanningTasks();
       } else if (event === "ask_user_question") {
         openQuestionDialog(data as AskUserQuestionRequest);
+      } else if (event === "plan_mode_request") {
+        openPlanModeDialog(data as PlanModeRequest);
+      } else if (event === "plan_mode_state") {
+        session.planMode = (data as { planMode: SessionPlanMode }).planMode;
+        renderPlanMode();
       } else if (event === "continuation") {
         assistantMessage = (data as { assistantMessage: Message }).assistantMessage;
         session.messages.push(assistantMessage);
@@ -709,6 +744,7 @@ async function sendMessage(): Promise<void> {
     await refreshCurrentSession();
   } finally {
     closeQuestionDialog();
+    closePlanModeDialog();
     state.controller = null;
     setStreaming(false);
     await loadSessionList();
@@ -1093,6 +1129,133 @@ async function declineQuestions(): Promise<void> {
   }
 }
 
+function openPlanModeDialog(request: PlanModeRequest): void {
+  planModeRequest = request;
+  planModeSubmitting = false;
+  elements.planModeDialog.hidden = false;
+  elements.planModeDialogBody.replaceChildren();
+  elements.planModeDialogTitle.textContent = request.kind === "enter"
+    ? "Enter plan mode?"
+    : "Review implementation plan";
+  elements.planModeDecline.textContent = request.kind === "enter" ? "DECLINE" : "KEEP PLANNING";
+  elements.planModeApprove.textContent = request.kind === "enter" ? "ENTER PLAN MODE" : "APPROVE & IMPLEMENT";
+  elements.planModeDialogHints.textContent = request.kind === "enter"
+    ? "Ctrl/Cmd+Enter approve · Esc decline"
+    : "Ctrl/Cmd+Enter approve · Esc keep planning";
+
+  if (request.kind === "enter") {
+    const content = document.createElement("section");
+    content.className = "plan-mode-entry";
+    const heading = document.createElement("h2");
+    heading.textContent = "Claude wants to plan before making changes";
+    const copy = document.createElement("p");
+    copy.textContent = "Plan mode permits codebase exploration and limits Amber’s Write and Edit tools to a session-specific plan file. You’ll review the completed plan before implementation begins.";
+    content.append(heading, copy);
+    elements.planModeDialogBody.append(content);
+  } else {
+    const metadata = document.createElement("div");
+    metadata.className = "plan-mode-path";
+    const label = document.createElement("span");
+    label.textContent = "PLAN FILE";
+    const path = document.createElement("code");
+    path.textContent = request.planFilePath;
+    metadata.append(label, path);
+
+    const plan = document.createElement("article");
+    plan.className = "plan-mode-review-markdown message-content";
+    plan.innerHTML = markdown.render(request.plan);
+    plan.querySelectorAll<HTMLAnchorElement>("a").forEach((link) => {
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+    });
+    elements.planModeDialogBody.append(metadata, plan);
+
+    if (request.allowedPrompts.length > 0) {
+      const permissions = document.createElement("section");
+      permissions.className = "plan-mode-prompts";
+      const title = document.createElement("strong");
+      title.textContent = "REQUESTED BASH CATEGORIES · INFORMATIONAL ONLY";
+      const list = document.createElement("ul");
+      for (const allowed of request.allowedPrompts) {
+        const item = document.createElement("li");
+        const tool = document.createElement("code");
+        tool.textContent = allowed.tool;
+        item.append(tool, document.createTextNode(` · ${allowed.prompt}`));
+        list.append(item);
+      }
+      permissions.append(title, list);
+      elements.planModeDialogBody.append(permissions);
+    }
+
+    const feedback = document.createElement("label");
+    feedback.className = "plan-mode-feedback";
+    feedback.append(document.createTextNode("OPTIONAL FEEDBACK IF YOU KEEP PLANNING"));
+    const input = document.createElement("textarea");
+    input.id = "plan-mode-feedback";
+    input.rows = 3;
+    input.maxLength = 32_000;
+    input.placeholder = "What should change in the plan?";
+    feedback.append(input);
+    elements.planModeDialogBody.append(feedback);
+  }
+  updatePlanModeDialogState();
+  elements.planModeApprove.focus();
+}
+
+function closePlanModeDialog(): void {
+  elements.planModeDialog.hidden = true;
+  elements.planModeDialogBody.replaceChildren();
+  planModeRequest = null;
+  planModeSubmitting = false;
+}
+
+function updatePlanModeDialogState(): void {
+  elements.planModeClose.disabled = planModeSubmitting;
+  elements.planModeDecline.disabled = planModeSubmitting;
+  elements.planModeApprove.disabled = planModeSubmitting;
+}
+
+async function submitPlanModeDecision(approved: boolean): Promise<void> {
+  const session = state.session;
+  const request = planModeRequest;
+  if (!session || !request || planModeSubmitting) return;
+  planModeSubmitting = true;
+  updatePlanModeDialogState();
+  const feedback = request.kind === "exit"
+    ? elements.planModeDialogBody.querySelector<HTMLTextAreaElement>("#plan-mode-feedback")?.value.trim()
+    : undefined;
+  try {
+    await api<{ decision: { approved: boolean; feedback?: string } }>(
+      `/api/sessions/${session.id}/plan-mode/${encodeURIComponent(request.toolUseId)}/decision`,
+      {
+        method: "POST",
+        body: JSON.stringify({ approved, ...(feedback ? { feedback } : {}) }),
+      },
+    );
+    if (approved && request.kind === "exit" && session.planMode) {
+      session.planMode.active = false;
+      renderPlanMode();
+    }
+    closePlanModeDialog();
+  } catch (error) {
+    planModeSubmitting = false;
+    updatePlanModeDialogState();
+    notify(messageFrom(error));
+  }
+}
+
+function handlePlanModeDialogKeydown(event: KeyboardEvent): boolean {
+  if (elements.planModeDialog.hidden) return false;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    void submitPlanModeDecision(false);
+  } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    void submitPlanModeDecision(true);
+  }
+  return true;
+}
+
 function applyToolUpdate(session: Session, payload: { messageId: string; toolCall: ToolCall }): void {
   const message = session.messages.find((candidate) => candidate.id === payload.messageId);
   if (!message) return;
@@ -1426,7 +1589,7 @@ function renderConfig(): void {
   if (!state.config) return;
   elements.model.textContent = state.config.model;
   elements.providerDot.classList.remove("demo");
-  elements.modeBanner.hidden = true;
+  renderPlanMode();
 }
 
 function renderSession(): void {
@@ -1444,9 +1607,51 @@ function renderSession(): void {
   resetPromptHistory();
   closeHistorySearch(false);
   renderHeader();
+  renderPlanMode();
   renderPlanningTasks();
   renderContextMeter();
   syncAgentSessionPolling();
+}
+
+function renderPlanMode(): void {
+  const session = state.session;
+  const planMode = state.session?.planMode;
+  const active = planMode?.active === true;
+  const canChange = Boolean(session) && !session?.parentSessionId && !state.streaming;
+  elements.modePlan.checked = active;
+  elements.modeNormal.checked = !active;
+  elements.modePlan.disabled = !canChange;
+  elements.modeNormal.disabled = !canChange;
+  elements.modeBanner.hidden = !active;
+  elements.modeBanner.replaceChildren();
+  if (!active || !planMode) return;
+  const status = document.createElement("span");
+  status.textContent = "◇ PLAN MODE";
+  const path = document.createElement("code");
+  path.textContent = planMode.planFilePath;
+  elements.modeBanner.append(status, path);
+}
+
+async function changePlanMode(active: boolean): Promise<void> {
+  const session = state.session;
+  if (!session || session.parentSessionId || state.streaming) return renderPlanMode();
+  setBusy(true);
+  try {
+    const result = await api<{ session: Session }>(`/api/sessions/${session.id}/plan-mode`, {
+      method: "POST",
+      body: JSON.stringify({ active }),
+    });
+    state.session = result.session;
+    renderPlanMode();
+    await loadSessionList();
+    notify(active ? "Plan mode enabled" : "Normal mode enabled");
+  } catch (error) {
+    renderPlanMode();
+    notify(messageFrom(error));
+  } finally {
+    setBusy(false);
+    elements.prompt.focus();
+  }
 }
 
 function renderHeader(): void {
@@ -1844,6 +2049,7 @@ function setStreaming(streaming: boolean): void {
   elements.submit.classList.toggle("stop", streaming);
   elements.submit.querySelector("span")!.textContent = streaming ? "STOP" : "SEND";
   elements.prompt.disabled = streaming;
+  renderPlanMode();
 }
 
 function setBusy(busy: boolean): void {
@@ -1852,6 +2058,7 @@ function setBusy(busy: boolean): void {
   elements.submit.classList.remove("stop");
   elements.submit.querySelector("span")!.textContent = busy ? "WAIT" : "SEND";
   elements.prompt.disabled = busy;
+  renderPlanMode();
 }
 
 async function readEventStream(stream: ReadableStream<Uint8Array>, onEvent: (event: string, data: unknown) => void): Promise<void> {

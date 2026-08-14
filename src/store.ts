@@ -1,5 +1,5 @@
 import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { randomInt, randomUUID } from "node:crypto";
 import type { Message, Session, SessionSummary } from "./types.js";
 import { BASIC_ENGLISH_2000 } from "./basic-english-2000.js";
@@ -14,13 +14,18 @@ const SESSION_WORDS = [...new Set(
 
 export class SessionStore {
   readonly #directory: string;
+  readonly #planDirectory: string;
 
-  constructor(directory: string) {
+  constructor(directory: string, planDirectory = join(dirname(directory), "plans")) {
     this.#directory = directory;
+    this.#planDirectory = planDirectory;
   }
 
   async initialize(): Promise<void> {
-    await mkdir(this.#directory, { recursive: true });
+    await Promise.all([
+      mkdir(this.#directory, { recursive: true }),
+      mkdir(this.#planDirectory, { recursive: true }),
+    ]);
   }
 
   async create(): Promise<Session> {
@@ -57,6 +62,7 @@ export class SessionStore {
       ...(parent.directories ? { directories: structuredClone(parent.directories) } : {}),
       ...(parent.cwd ? { cwd: parent.cwd } : {}),
       ...(parent.addDirInitialized !== undefined ? { addDirInitialized: parent.addDirInitialized } : {}),
+      ...(parent.planMode?.active ? { planMode: structuredClone(parent.planMode) } : {}),
     };
     await this.save(session);
     return session;
@@ -67,6 +73,10 @@ export class SessionStore {
     delete session.compaction;
     delete session.fileReadState;
     delete session.contextTokens;
+    delete session.planMode;
+    await unlink(this.#planPath(session.id)).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+    });
     await this.save(session);
     return session;
   }
@@ -81,6 +91,9 @@ export class SessionStore {
     if (!SESSION_ID.test(id)) return false;
     try {
       await unlink(this.#path(id));
+      await unlink(this.#planPath(id)).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      });
       return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
@@ -94,6 +107,16 @@ export class SessionStore {
     while (await this.get(id));
 
     const now = new Date().toISOString();
+    const forkPlanMode = session.planMode
+      ? { active: session.planMode.active, planFilePath: this.#planPath(id) }
+      : undefined;
+    if (forkPlanMode) {
+      const plan = await readFile(session.planMode!.planFilePath, "utf8").catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
+      if (plan !== undefined) await writeFile(forkPlanMode.planFilePath, plan, "utf8");
+    }
     const fork: Session = {
       id,
       title: id,
@@ -113,6 +136,7 @@ export class SessionStore {
         ? { planningTaskArchiveHighWaterMark: session.planningTaskArchiveHighWaterMark }
         : {}),
       ...(session.contextTokens !== undefined ? { contextTokens: session.contextTokens } : {}),
+      ...(forkPlanMode ? { planMode: forkPlanMode } : {}),
     };
     await this.save(fork);
     return fork;
@@ -209,6 +233,10 @@ export class SessionStore {
 
   #path(id: string): string {
     return join(this.#directory, `${id}.json`);
+  }
+
+  #planPath(id: string): string {
+    return join(this.#planDirectory, `${id}.md`);
   }
 }
 

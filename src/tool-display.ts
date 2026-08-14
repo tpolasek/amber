@@ -4,6 +4,7 @@ import type { ToolCall } from "./types.js";
 const MAX_INLINE_TOOL_SUBJECT_LENGTH = 80;
 
 export function shouldRenderToolOutput(call: ToolCall): boolean {
+  if (call.name === "EnterPlanMode" || call.name === "ExitPlanMode") return false;
   return Boolean(call.output) && !(call.name === "Bash" && call.output === "(no output)");
 }
 
@@ -52,6 +53,8 @@ export function toolStatusLabel(call: ToolCall, now = Date.now()): string {
 }
 
 export function toolSubject(call: ToolCall): string {
+  if (call.name === "EnterPlanMode") return "Request browser approval to begin planning";
+  if (call.name === "ExitPlanMode") return "Review the saved implementation plan";
   if (call.name === "AskUserQuestion") {
     const questions = Array.isArray(call.input.questions) ? call.input.questions : [];
     const first = questions[0];

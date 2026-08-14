@@ -69,6 +69,10 @@ export interface FileToolResult {
   resultText: string;
 }
 
+export interface FileToolPolicy {
+  onlyMutationPath?: string;
+}
+
 export async function executeFileTool(
   name: string,
   input: Record<string, unknown>,
@@ -76,13 +80,53 @@ export async function executeFileTool(
   session: Session,
   currentDirectory = allowedDirectories[0],
   signal?: AbortSignal,
+  policy?: FileToolPolicy,
 ): Promise<FileToolResult> {
   throwIfAborted(signal);
   if (!currentDirectory) throw new Error("No current working directory is configured");
   if (name === READ_TOOL.name) return readTextFile(input, allowedDirectories, currentDirectory, session, signal);
-  if (name === WRITE_TOOL.name) return writeTextFile(input, allowedDirectories, currentDirectory, session);
-  if (name === EDIT_TOOL.name) return editTextFile(input, allowedDirectories, currentDirectory, session);
+  if (name === WRITE_TOOL.name) {
+    await assertMutationPolicy(input.file_path, currentDirectory, policy);
+    return writeTextFile(input, allowedDirectories, currentDirectory, session);
+  }
+  if (name === EDIT_TOOL.name) {
+    await assertMutationPolicy(input.file_path, currentDirectory, policy);
+    return editTextFile(input, allowedDirectories, currentDirectory, session);
+  }
   throw new Error(`Unknown file tool: ${name}`);
+}
+
+async function assertMutationPolicy(
+  value: unknown,
+  currentDirectory: string,
+  policy?: FileToolPolicy,
+): Promise<void> {
+  if (!policy?.onlyMutationPath) return;
+  const requested = resolve(resolvedFilePath(value, currentDirectory));
+  const allowed = resolve(policy.onlyMutationPath);
+  if (requested !== allowed) {
+    throw new Error(`Plan mode only permits Write or Edit for the active plan file: ${allowed}`);
+  }
+  const canonicalParent = await canonicalProspectivePath(dirname(allowed));
+  const canonicalAllowed = join(canonicalParent, basename(allowed));
+  const existingTarget = await realpath(requested).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return canonicalAllowed;
+    throw error;
+  });
+  if (existingTarget !== canonicalAllowed) {
+    throw new Error(`Plan mode cannot modify a plan path that redirects to another file: ${allowed}`);
+  }
+}
+
+async function canonicalProspectivePath(filePath: string): Promise<string> {
+  try {
+    return await realpath(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    const parent = dirname(filePath);
+    if (parent === filePath) throw error;
+    return join(await canonicalProspectivePath(parent), basename(filePath));
+  }
 }
 
 async function readTextFile(

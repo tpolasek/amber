@@ -23,10 +23,14 @@ test("classifies and summarizes tool output for display", () => {
   assert.equal(diffLineClass("+new"), "diff-addition");
   assert.equal(shouldRenderToolOutput(call({ output: "(no output)" })), false);
   assert.equal(shouldRenderToolOutput(call({ output: "done" })), true);
+  assert.equal(shouldRenderToolOutput(call({ name: "EnterPlanMode", output: "internal result" })), false);
+  assert.equal(shouldRenderToolOutput(call({ name: "ExitPlanMode", output: "reviewed plan" })), false);
 });
 
 test("formats tool subjects and statuses independently of the DOM", () => {
   assert.equal(toolSubject(call({ input: { command: "npm test" } })), "npm test");
+  assert.match(toolSubject(call({ name: "EnterPlanMode" })), /begin planning/);
+  assert.match(toolSubject(call({ name: "ExitPlanMode" })), /Review/);
   assert.equal(shouldInlineToolSubject("npm test"), true);
   assert.equal(shouldInlineToolSubject("first\nsecond"), false);
   assert.equal(toolStatusLabel(call({ status: "running" })), "RUNNING…");
