@@ -88,9 +88,7 @@ button { color: inherit; }
 .topbar { grid-row: 1; position: relative; z-index: 7; height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; border-bottom: 1px solid var(--amber-line); background: var(--surface); }
 .breadcrumb { min-width: 0; flex: 1; display: flex; align-items: center; gap: 24px; overflow: hidden; }
 .session-identity { min-width: 0; flex: 0 1 auto; display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
-.session-identity strong { max-width: 260px; overflow: hidden; color: var(--amber-hot); font-size: 12px; font-weight: 500; text-overflow: ellipsis; }
-.session-identity b { color: #5f4d30; font-weight: 400; }
-.session-identity span { overflow: hidden; color: #806b45; font-size: 12px; text-overflow: ellipsis; }
+.session-identity strong { max-width: calc(260px + 5ch); overflow: hidden; color: var(--amber-hot); font-size: 12px; font-weight: 500; text-overflow: ellipsis; }
 .session-directories { min-width: 0; display: flex; align-items: center; gap: 14px; overflow-x: auto; color: #75613d; font-size: 12px; scrollbar-width: none; }
 .session-directories::-webkit-scrollbar { display: none; }
 .session-directory { flex: none; white-space: nowrap; }
@@ -379,7 +377,7 @@ button { color: inherit; }
   .menu-button { margin-right: 10px; font-size: 17px; }
   .topbar { padding: 0 14px; }
   .breadcrumb { gap: 20px; }
-  .session-identity strong { max-width: 150px; }
+  .session-identity strong { max-width: calc(150px + 5ch); }
   .provider-status { display: none; }
   .tasks-overlay { padding: 10px; }
   .tasks-dialog { max-height: calc(100vh - 20px); }

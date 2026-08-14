@@ -1,4 +1,24 @@
 import { StreamingThinkingReveal } from "./streaming-thinking.js";
+import {
+  compactHeaderPath,
+  formatDuration,
+  formatTime,
+  formatTokenCountInThousands,
+  messageFrom,
+  relativeTime,
+  taskRuntime,
+} from "./client-formatters.js";
+import {
+  diffLineClass,
+  diffSummary,
+  isDiffOutput,
+  shouldExpandToolOutput,
+  shouldInlineToolSubject,
+  shouldRenderToolOutput,
+  toolMetadata,
+  toolStatusLabel,
+  toolSubject,
+} from "./tool-display.js";
 
 interface TokenUsage { input: number; output: number }
 type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
@@ -33,7 +53,6 @@ const commands: CommandDefinition[] = [
 ];
 const markdown = markdownit({ html: false, linkify: true, breaks: false, typographer: false });
 const SESSION_ROUTE = /^\/s\/([a-z0-9.-]+)$/;
-const MAX_INLINE_TOOL_SUBJECT_LENGTH = 80;
 let matchingCommands: CommandDefinition[] = [];
 let selectedCommand = 0;
 let directoryCompletions: DirectoryCompletion[] = [];
@@ -94,9 +113,8 @@ const elements = {
   toggleSidebar: required<HTMLButtonElement>("toggle-sidebar"),
   closeSidebar: required<HTMLButtonElement>("close-sidebar"),
   sessionTitle: required<HTMLElement>("session-title"),
-  sessionId: required<HTMLElement>("session-id"),
   sessionDirectories: required<HTMLElement>("session-directories"),
-  provider: required<HTMLElement>("provider-label"),
+  model: required<HTMLElement>("model-label"),
   providerDot: required<HTMLElement>("provider-dot"),
   modeBanner: required<HTMLElement>("mode-banner"),
   contextMeter: required<HTMLElement>("context-meter"),
@@ -670,6 +688,11 @@ async function sendMessage(): Promise<void> {
         assistantMessage = (data as { assistantMessage: Message }).assistantMessage;
         session.messages.push(assistantMessage);
         assistantElement = appendMessage(assistantMessage);
+      } else if (event === "session_named") {
+        if (state.session?.id === session.id) {
+          state.session.title = (data as { title: string }).title;
+          renderHeader();
+        }
       } else if (event === "done") {
         const payload = data as { message: Message; session: Session };
         state.session = payload.session;
@@ -1292,10 +1315,6 @@ function taskDetailField(label: string, value: string): HTMLElement {
   return row;
 }
 
-function taskRuntime(task: BackgroundTask): number {
-  return task.durationMs ?? Math.max(0, Date.now() - Date.parse(task.startedAt));
-}
-
 async function stopSelectedTask(): Promise<void> {
   const session = state.session;
   const task = tasksDialogDetailId
@@ -1405,7 +1424,7 @@ async function runCompactCommand(command: string): Promise<void> {
 
 function renderConfig(): void {
   if (!state.config) return;
-  elements.provider.textContent = `${state.config.provider} · ${state.config.model}`;
+  elements.model.textContent = state.config.model;
   elements.providerDot.classList.remove("demo");
   elements.modeBanner.hidden = true;
 }
@@ -1436,8 +1455,6 @@ function renderHeader(): void {
   if (!session || !config) return;
   elements.sessionTitle.textContent = session.title;
   elements.sessionTitle.title = session.title;
-  elements.sessionId.textContent = session.id;
-  elements.sessionId.title = session.id;
   elements.sessionDirectories.replaceChildren();
   const currentDirectory = session.cwd ?? config.workspaceRoot;
   const directories = [...new Set([...(session.directories ?? []), currentDirectory])];
@@ -1446,7 +1463,7 @@ function renderHeader(): void {
     item.className = "session-directory";
     item.classList.toggle("cwd", directory === currentDirectory);
     item.title = directory;
-    item.append(document.createTextNode(displayHomeRelativePath(directory, config.homeDirectory)));
+    item.append(document.createTextNode(compactHeaderPath(directory, config.homeDirectory)));
     if (directory === currentDirectory) {
       const marker = document.createElement("b");
       marker.textContent = " (CWD)";
@@ -1455,11 +1472,6 @@ function renderHeader(): void {
     elements.sessionDirectories.append(item);
   }
   document.title = `${session.title} · AMBER`;
-}
-
-function displayHomeRelativePath(path: string, homeDirectory: string): string {
-  if (path === homeDirectory) return "~";
-  return path.startsWith(`${homeDirectory}/`) ? `~/${path.slice(homeDirectory.length + 1)}` : path;
 }
 
 function renderPlanningTasks(): void {
@@ -1512,13 +1524,6 @@ function renderContextMeter(): void {
   elements.contextMeterBar.style.width = `${Math.min(100, tokens / 2_000)}%`;
   elements.contextMeterValue.textContent = `${formatTokenCountInThousands(tokens)}k`;
   elements.contextMeter.title = `${tokens.toLocaleString()} cached + uncached input tokens`;
-}
-
-function formatTokenCountInThousands(tokens: number): string {
-  if (tokens === 0) return "0";
-  const thousands = tokens / 1_000;
-  const display = thousands < 100 ? Math.floor(thousands * 10) / 10 : Math.round(thousands);
-  return display.toLocaleString(undefined, { maximumFractionDigits: 1 });
 }
 
 function renderSessionList(): void {
@@ -1784,7 +1789,7 @@ function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
       const isDiff = isDiffOutput(call);
       details.open = toolOutputDisclosurePreferences.get(call.id)
         ?? previousOutputStates.get(call.id)
-        ?? shouldExpandToolOutput(call, isDiff);
+        ?? shouldExpandToolOutput(isDiff);
       summary.addEventListener("click", () => {
         setTimeout(() => toolOutputDisclosurePreferences.set(call.id, details.open), 0);
       });
@@ -1800,29 +1805,6 @@ function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
   }
 }
 
-function shouldRenderToolOutput(call: ToolCall): boolean {
-  return Boolean(call.output) && !(call.name === "Bash" && call.output === "(no output)");
-}
-
-function shouldExpandToolOutput(call: ToolCall, isDiff: boolean): boolean {
-  return isDiff;
-}
-
-function isDiffOutput(call: ToolCall): boolean {
-  return call.status === "complete" && (call.name === "Write" || call.name === "Edit")
-    && call.output.startsWith("--- ") && call.output.includes("\n+++ ");
-}
-
-function diffSummary(diff: string): string {
-  let added = 0;
-  let removed = 0;
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("+") && !line.startsWith("+++")) added += 1;
-    else if (line.startsWith("-") && !line.startsWith("---")) removed += 1;
-  }
-  return `Diff · +${added.toLocaleString()} −${removed.toLocaleString()}`;
-}
-
 function renderDiff(container: HTMLElement, diff: string): void {
   const lines = diff.split("\n");
   lines.forEach((line, index) => {
@@ -1832,69 +1814,6 @@ function renderDiff(container: HTMLElement, diff: string): void {
     container.append(span);
     if (index < lines.length - 1) container.append("\n");
   });
-}
-
-function diffLineClass(line: string): string {
-  if (line.startsWith("@@")) return "diff-hunk";
-  if (line.startsWith("+++ ") || line.startsWith("--- ")) return "diff-header";
-  if (line.startsWith("+")) return "diff-addition";
-  if (line.startsWith("-")) return "diff-deletion";
-  return "diff-context";
-}
-
-function toolStatusLabel(call: ToolCall): string {
-  if (call.name === "Agent" && call.status === "complete" && call.durationMs !== undefined) {
-    return `AGENT COMPLETE · ${formatDuration(call.durationMs)}`;
-  }
-  if (call.statusDisplay) {
-    const elapsed = call.statusDisplay.appendElapsed && call.startedAt
-      ? ` ${formatDuration(Math.max(0, Date.now() - Date.parse(call.startedAt)))}`
-      : "";
-    return `${call.statusDisplay.text}${elapsed}`;
-  }
-  if (call.status === "running") return "RUNNING…";
-  if (call.status === "timed_out") return "TIMED OUT";
-  if (call.status === "complete") return "COMPLETE";
-  if (call.status === "error") return "FAILED";
-  return "QUEUED";
-}
-
-function toolSubject(call: ToolCall): string {
-  if (call.name === "AskUserQuestion") {
-    const questions = Array.isArray(call.input.questions) ? call.input.questions : [];
-    const first = questions[0];
-    return first && typeof first === "object" && typeof (first as { question?: unknown }).question === "string"
-      ? (first as { question: string }).question
-      : "Preparing questions…";
-  }
-  if (call.name === "Bash") return typeof call.input.command === "string" ? call.input.command : "Preparing tool input…";
-  if (call.name === "Agent") {
-    if (typeof call.input.description === "string") return call.input.description;
-    return typeof call.input.prompt === "string" ? call.input.prompt : "Preparing agent input…";
-  }
-  if (call.name === "TaskOutput" || call.name === "TaskStop") {
-    const taskId = call.input.task_id ?? call.input.shell_id;
-    return typeof taskId === "string" ? taskId : "Preparing task ID…";
-  }
-  return call.filePath ?? (typeof call.input.file_path === "string" ? call.input.file_path : "Preparing file path…");
-}
-
-function shouldInlineToolSubject(subject: string): boolean {
-  return subject.length <= MAX_INLINE_TOOL_SUBJECT_LENGTH && !subject.includes("\n");
-}
-
-function toolMetadata(call: ToolCall): string {
-  const values: string[] = [];
-  if (call.name === "Agent") {
-    values.push(call.agentType ?? (typeof call.input.subagent_type === "string" ? call.input.subagent_type : "general-purpose"));
-    if (typeof call.input.model === "string") values.push(call.input.model);
-  }
-  if (call.name !== "Bash" && call.workingDirectory) values.push(call.workingDirectory);
-  if (call.name === "Bash" && call.exitCode !== undefined && call.exitCode !== null && call.exitCode !== 0) {
-    if (call.timeoutMs !== undefined) values.push(`timeout ${formatDuration(call.timeoutMs)}`);
-    values.push(`exit ${call.exitCode}`);
-  }
-  return values.join(" · ");
 }
 
 function updateElapsedToolStatuses(): void {
@@ -1908,10 +1827,6 @@ function updateElapsedToolStatuses(): void {
       if (status) status.textContent = toolStatusLabel(call);
     }
   }
-}
-
-function formatDuration(milliseconds: number): string {
-  return milliseconds < 1000 ? `${milliseconds}ms` : `${(milliseconds / 1000).toFixed(milliseconds < 10_000 ? 1 : 0)}s`;
 }
 
 async function refreshCurrentSession(): Promise<void> {
@@ -2203,17 +2118,6 @@ function scrollTranscriptToBottom(): void {
   });
 }
 
-function formatTime(value: string): string {
-  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(value));
-}
-
-function relativeTime(value: string): string {
-  const seconds = Math.round((new Date(value).getTime() - Date.now()) / 1000);
-  const unit: Intl.RelativeTimeFormatUnit = Math.abs(seconds) < 60 ? "second" : Math.abs(seconds) < 3600 ? "minute" : Math.abs(seconds) < 86400 ? "hour" : "day";
-  const divisor = unit === "second" ? 1 : unit === "minute" ? 60 : unit === "hour" ? 3600 : 86400;
-  return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(Math.round(seconds / divisor), unit);
-}
-
 function required<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
   if (!element) throw new Error(`Missing #${id}`);
@@ -2225,5 +2129,3 @@ function requiredWithin(parent: ParentNode, selector: string): HTMLElement {
   if (!element) throw new Error(`Missing ${selector}`);
   return element;
 }
-
-function messageFrom(error: unknown): string { return error instanceof Error ? error.message : "Something went wrong"; }

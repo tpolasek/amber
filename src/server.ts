@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { SessionStore } from "./store.js";
 import { createProvider } from "./provider.js";
 import { buildProviderHistory, isModelMessage } from "./history.js";
-import { generateSessionTitle } from "./session-title.js";
+import { generateSessionTitle, shouldAutoNameSession } from "./session-title.js";
 import { estimateHistoryTokens, formatCompactionBanner, generateCompactionSummary } from "./compaction.js";
 import { BASH_TOOL, BashExecutor, parseBashInput } from "./bash-tool.js";
 import { BackgroundTaskManager } from "./background-tasks.js";
@@ -60,6 +60,15 @@ const askUserQuestions = new AskUserQuestionManager();
 const agentRunToken = randomUUID();
 const SESSION_PATH_ID = "([a-z0-9.-]+)";
 
+interface AutomaticNameRun {
+  controller: AbortController;
+  sessions: Set<Session>;
+  listeners: Set<(title: string) => void>;
+  completion: Promise<void>;
+}
+
+const automaticNameRuns = new Map<string, AutomaticNameRun>();
+
 await store.initialize();
 
 const server = createServer(async (request, response) => {
@@ -84,6 +93,8 @@ const shutdown = () => {
   activeSessions.abortAll();
   backgroundTasks.stopAll();
   askUserQuestions.stopAll();
+  for (const run of automaticNameRuns.values()) run.controller.abort();
+  automaticNameRuns.clear();
   server.close();
 };
 process.once("SIGINT", shutdown);
@@ -146,6 +157,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   }
   if (method === "DELETE" && sessionMatch?.[1]) {
     if (activeSessions.has(sessionMatch[1])) return json(response, 409, { error: "Wait for the current response to finish" });
+    await stopAutomaticSessionName(sessionMatch[1]);
     const removed = await store.remove(sessionMatch[1]);
     if (removed) backgroundTasks.stopSession(sessionMatch[1]);
     return removed
@@ -298,6 +310,8 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   const body = await readJson(request);
   const content = typeof body.content === "string" ? body.content.trim() : "";
   if (!content || content.length > 32_000) return json(response, 400, { error: "Message must contain 1–32,000 characters" });
+  automaticNameRuns.get(sessionId)?.sessions.add(session);
+  const shouldAutoName = shouldAutoNameSession(session);
 
   const controller = new AbortController();
   request.on("aborted", () => controller.abort());
@@ -319,6 +333,12 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   sendEvent(response, "start", { userMessage, assistantMessage });
   const bashExecutor = new BashExecutor();
   activeSessions.register(sessionId, session.parentSessionId, controller);
+  const onAutomaticName = (title: string) => {
+    if (!response.destroyed && !response.writableEnded) sendEvent(response, "session_named", { title });
+  };
+  const existingNameRun = automaticNameRuns.get(sessionId);
+  if (existingNameRun) existingNameRun.listeners.add(onAutomaticName);
+  else if (shouldAutoName) startAutomaticSessionName(session, onAutomaticName);
 
   try {
     const allowedDirectories = sessionDirectories(session);
@@ -641,9 +661,59 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     const message = error instanceof Error && error.name === "AbortError" ? "Generation stopped" : errorMessage(error);
     if (!response.writableEnded) sendEvent(response, "error", { error: message, message: assistantMessage });
   } finally {
+    automaticNameRuns.get(sessionId)?.listeners.delete(onAutomaticName);
     activeSessions.unregister(sessionId, controller);
     response.end();
   }
+}
+
+function startAutomaticSessionName(session: Session, listener: (title: string) => void): void {
+  if (automaticNameRuns.has(session.id)) return;
+  const controller = new AbortController();
+  const run: AutomaticNameRun = {
+    controller,
+    sessions: new Set([session]),
+    listeners: new Set([listener]),
+    completion: Promise.resolve(),
+  };
+  automaticNameRuns.set(session.id, run);
+  const messages = structuredClone(session.messages);
+  const compaction = session.compaction ? structuredClone(session.compaction) : undefined;
+
+  run.completion = (async () => {
+    try {
+      const title = await generateSessionTitle(provider, messages, controller.signal, compaction);
+      if (automaticNameRuns.get(session.id) !== run) return;
+      const persisted = await store.get(session.id);
+      if (automaticNameRuns.get(session.id) !== run) return;
+      if (!persisted || persisted.title !== persisted.id) {
+        if (persisted) {
+          for (const observed of run.sessions) observed.title = persisted.title;
+        }
+        return;
+      }
+
+      for (const observed of run.sessions) observed.title = title;
+      const currentSession = [...run.sessions].at(-1) ?? session;
+      await store.rename(currentSession, title);
+      if (automaticNameRuns.get(session.id) !== run) return;
+      for (const notify of run.listeners) notify(title);
+    } catch (error) {
+      if (!(error instanceof Error && error.name === "AbortError")) {
+        console.error(`Could not automatically name session ${session.id}:`, error);
+      }
+    } finally {
+      if (automaticNameRuns.get(session.id) === run) automaticNameRuns.delete(session.id);
+    }
+  })();
+}
+
+async function stopAutomaticSessionName(sessionId: string): Promise<void> {
+  const run = automaticNameRuns.get(sessionId);
+  if (!run) return;
+  automaticNameRuns.delete(sessionId);
+  run.controller.abort();
+  await run.completion;
 }
 
 function createAssistantMessage(createdAt = new Date().toISOString()): Message {
@@ -873,6 +943,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
   }
 
   if (command === "/name") {
+    await stopAutomaticSessionName(sessionId);
     if (argument) {
       const title = argument.replace(/\s+/g, " ").trim();
       if (title.length > 80) return json(response, 400, { error: "Session names must be 80 characters or fewer" });

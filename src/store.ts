@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { randomInt } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import type { Message, Session, SessionSummary } from "./types.js";
 import { BASIC_ENGLISH_2000 } from "./basic-english-2000.js";
 
@@ -146,7 +146,7 @@ export class SessionStore {
     if (!SESSION_ID.test(session.id)) throw new Error("Invalid session id");
     session.updatedAt = new Date().toISOString();
     const path = this.#path(session.id);
-    const temporary = `${path}.${process.pid}.tmp`;
+    const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
     await writeFile(temporary, `${JSON.stringify(session, null, 2)}\n`, "utf8");
     await rename(temporary, path);
   }

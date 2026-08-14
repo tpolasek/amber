@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SESSION_TITLE_PROMPT } from "../src/prompts.js";
-import { generateSessionTitle, parseSessionTitle } from "../src/session-title.js";
+import { generateSessionTitle, parseSessionTitle, shouldAutoNameSession } from "../src/session-title.js";
 import type { LlmProvider, Message, ProviderMessage, StreamEvent } from "../src/types.js";
 
 test("generates a session title without mutating or exposing UI-only history", async () => {
@@ -37,4 +37,26 @@ test("parses fenced JSON and rejects invalid generated titles", () => {
   assert.equal(parseSessionTitle('```json\n{"title":"Debug failing CI tests"}\n```'), "Debug failing CI tests");
   assert.throws(() => parseSessionTitle("not json"), /invalid session title/);
   assert.throws(() => parseSessionTitle('{"title":""}'), /invalid session title/);
+});
+
+test("only auto-names an unset session before its first user message", () => {
+  const now = new Date().toISOString();
+  const unset = { id: "amber.session.id", title: "amber.session.id", messages: [] };
+  assert.equal(shouldAutoNameSession(unset), true);
+  assert.equal(shouldAutoNameSession({ ...unset, title: "Custom title" }), false);
+  assert.equal(shouldAutoNameSession({
+    ...unset,
+    messages: [{ id: "user", role: "user", content: "Hello", createdAt: now, status: "complete" }],
+  }), false);
+  assert.equal(shouldAutoNameSession({
+    ...unset,
+    messages: [{
+      id: "banner",
+      role: "assistant",
+      content: "Forked from another session",
+      createdAt: now,
+      status: "complete",
+      kind: "fork-banner",
+    }],
+  }), true);
 });

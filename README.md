@@ -44,6 +44,7 @@ npm start
 - `/compact` streams visible progress while replacing earlier model context with an LLM-generated continuation summary and retaining the complete transcript for browsing. Its persisted banner reports the estimated before/after context size and reduction; estimates use a provider-independent character heuristic. The summary and boundary are stored as session metadata, the banner is excluded from model context, and the summarization exchange is not added as chat messages.
 - `/fork` creates a new session with a copy of the complete transcript and its active compacted context, if present. It appends reciprocal provenance banners linking the fork to its source and the source to its fork. Fork banners persist in chat history but are excluded from model context.
 - `/name <session name>` changes the active session's title as shown in the session archive. Running `/name` without a title asks the configured LLM to generate one from the conversation; the naming prompt and response are not saved in chat history.
+- Sessions whose title is still their generated session ID are named automatically in the background from their first user message. Explicitly named sessions are never auto-renamed.
 - `/tasks` opens a Claude Code-style background-task manager. It lists the current session's running tasks newest first, opens the sole task directly, shows live command/output/runtime details, and supports stopping the selected task. `/bashes` is accepted as a compatibility alias.
 
 ## API

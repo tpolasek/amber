@@ -1,6 +1,11 @@
-import { buildProviderHistory } from "./history.js";
+import { buildProviderHistory, isModelMessage } from "./history.js";
 import { SESSION_TITLE_PROMPT } from "./prompts.js";
-import type { LlmProvider, Message, SessionCompaction } from "./types.js";
+import type { LlmProvider, Message, Session, SessionCompaction } from "./types.js";
+
+export function shouldAutoNameSession(session: Pick<Session, "id" | "title" | "messages">): boolean {
+  return session.title === session.id
+    && !session.messages.some((message) => message.role === "user" && isModelMessage(message));
+}
 
 export async function generateSessionTitle(
   provider: LlmProvider,

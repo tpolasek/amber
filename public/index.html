@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#100b03">
     <meta name="description" content="AMBER — browser terminal for persistent LLM agent sessions">
     <title>AMBER // Agent Terminal</title>
-    <link rel="stylesheet" href="/styles.css?v=39">
+    <link rel="stylesheet" href="/styles.css?v=40">
   </head>
   <body>
     <div class="noise" aria-hidden="true"></div>
@@ -34,10 +34,10 @@
         <header class="topbar">
           <button id="toggle-sidebar" class="icon-button menu-button" aria-label="Open sessions">☰</button>
           <div class="breadcrumb">
-            <div class="session-identity"><strong id="session-title">initializing</strong><b>:</b><span id="session-id">--------</span></div>
+            <div class="session-identity"><strong id="session-title">initializing</strong></div>
             <div id="session-directories" class="session-directories" aria-label="Session directories"></div>
           </div>
-          <div class="provider-status"><span id="provider-dot" class="status-dot"></span><span id="provider-label">CONNECTING</span></div>
+          <div class="provider-status"><span id="provider-dot" class="status-dot"></span><span id="model-label">CONNECTING</span></div>
         </header>
 
         <div id="mode-banner" class="mode-banner" hidden></div>
