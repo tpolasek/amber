@@ -52,6 +52,13 @@ let tasksDialogSkippedList = false;
 let tasksDialogPollTimer: number | undefined;
 let sessionDialogSelection = 0;
 let sessionDialogQuery = "";
+let sessionDialogReturnsToLanding = false;
+let newSessionReplace = false;
+let newSessionCreating = false;
+let newSessionReturnsToLanding = false;
+let newSessionCompletions: DirectoryCompletion[] = [];
+let newSessionCompletionSelection = 0;
+let newSessionCompletionRequest = 0;
 let questionRequest: AskUserQuestionRequest | null = null;
 let questionIndex = 0;
 let questionSelections = new Map<string, QuestionSelection>();
@@ -59,10 +66,11 @@ let questionSubmitting = false;
 let agentSessionPollTimer: number | undefined;
 let agentSessionRefreshPending = false;
 
-const state: { session: Session | null; config: Config | null; streaming: boolean; controller: AbortController | null } = {
+const state: { session: Session | null; config: Config | null; streaming: boolean; aborting: boolean; controller: AbortController | null } = {
   session: null,
   config: null,
   streaming: false,
+  aborting: false,
   controller: null,
 };
 
@@ -94,6 +102,16 @@ const elements = {
   contextMeter: required<HTMLElement>("context-meter"),
   contextMeterBar: required<HTMLElement>("context-meter-bar"),
   contextMeterValue: required<HTMLElement>("context-meter-value"),
+  landingDialog: required<HTMLElement>("landing-dialog"),
+  landingNewSession: required<HTMLButtonElement>("landing-new-session"),
+  landingSelectSession: required<HTMLButtonElement>("landing-select-session"),
+  newSessionDialog: required<HTMLElement>("new-session-dialog"),
+  newSessionForm: required<HTMLFormElement>("new-session-form"),
+  newSessionClose: required<HTMLButtonElement>("new-session-close"),
+  newSessionName: required<HTMLInputElement>("new-session-name"),
+  newSessionPath: required<HTMLInputElement>("new-session-path"),
+  newSessionCompletions: required<HTMLElement>("new-session-completions"),
+  newSessionSubmit: required<HTMLButtonElement>("new-session-submit"),
   sessionDialog: required<HTMLElement>("session-dialog"),
   sessionDialogClose: required<HTMLButtonElement>("session-dialog-close"),
   sessionSearch: required<HTMLInputElement>("session-search"),
@@ -124,7 +142,7 @@ async function initialize(): Promise<void> {
     await loadSessionList();
     const id = location.pathname.match(SESSION_ROUTE)?.[1];
     if (id) await loadSession(id);
-    else await createSession(true);
+    else openLandingDialog();
   } catch (error) {
     notify(messageFrom(error));
   } finally {
@@ -134,6 +152,12 @@ async function initialize(): Promise<void> {
 
 function wireEvents(): void {
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.streaming) {
+      event.preventDefault();
+      abortCurrentSession();
+      return;
+    }
+    if (handleNewSessionDialogKeydown(event)) return;
     if (handleQuestionDialogKeydown(event)) return;
     if (handleTasksDialogKeydown(event)) return;
     if (handleSessionDialogKeydown(event)) return;
@@ -141,10 +165,36 @@ function wireEvents(): void {
       && document.activeElement !== elements.prompt && document.activeElement !== elements.historyQuery) {
       event.preventDefault();
       openHistorySearch();
+    } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "n") {
+      event.preventDefault();
+      if (elements.landingDialog.hidden) openNewSessionDialog(false);
+      else openNewSessionFromLanding();
     }
   });
-  elements.newSession.addEventListener("click", () => void createSession(false));
-  elements.selectSession.addEventListener("click", openSessionDialog);
+  elements.landingNewSession.addEventListener("click", openNewSessionFromLanding);
+  elements.landingSelectSession.addEventListener("click", () => {
+    elements.landingDialog.hidden = true;
+    sessionDialogReturnsToLanding = true;
+    openSessionDialog();
+  });
+  elements.newSession.addEventListener("click", () => openNewSessionDialog(false));
+  elements.newSessionForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void submitNewSession();
+  });
+  elements.newSessionClose.addEventListener("click", closeNewSessionDialog);
+  elements.newSessionDialog.addEventListener("click", (event) => {
+    if (event.target === elements.newSessionDialog) closeNewSessionDialog();
+  });
+  elements.newSessionPath.addEventListener("input", () => {
+    updateNewSessionSubmitState();
+    void updateNewSessionCompletions();
+  });
+  elements.newSessionPath.addEventListener("keydown", handleNewSessionPathKeydown);
+  elements.selectSession.addEventListener("click", () => {
+    sessionDialogReturnsToLanding = false;
+    openSessionDialog();
+  });
   elements.sessionDialogClose.addEventListener("click", closeSessionDialog);
   elements.sessionSearch.addEventListener("input", () => {
     sessionDialogQuery = elements.sessionSearch.value;
@@ -169,7 +219,7 @@ function wireEvents(): void {
   elements.closeSidebar.addEventListener("click", () => document.body.classList.remove("sidebar-open"));
   elements.composer.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (state.streaming) state.controller?.abort();
+    if (state.streaming) abortCurrentSession();
     else void sendMessage();
   });
   elements.prompt.addEventListener("keydown", (event) => {
@@ -240,28 +290,177 @@ function wireEvents(): void {
       closeHistorySearch(true);
     }
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-prompt]").forEach((button) => {
-    button.addEventListener("click", () => {
-      elements.prompt.value = button.dataset.prompt ?? "";
-      resizePrompt();
-      elements.prompt.focus();
-    });
-  });
   window.addEventListener("popstate", () => {
     const id = location.pathname.match(SESSION_ROUTE)?.[1];
     if (id) void loadSession(id);
+    else if (!state.streaming) openLandingDialog();
   });
 }
 
-async function createSession(replace: boolean): Promise<void> {
+function openLandingDialog(): void {
   if (state.streaming) return;
-  const { session } = await api<{ session: Session }>("/api/sessions", { method: "POST" });
-  state.session = session;
-  history[replace ? "replaceState" : "pushState"]({}, "", `/s/${session.id}`);
-  renderSession();
-  await loadSessionList();
-  elements.prompt.focus();
+  state.session = null;
+  sessionDialogReturnsToLanding = false;
+  newSessionReturnsToLanding = false;
+  elements.newSessionDialog.hidden = true;
+  elements.sessionDialog.hidden = true;
+  elements.landingDialog.hidden = false;
+  syncAgentSessionPolling();
+  elements.landingNewSession.focus();
+}
+
+function openNewSessionFromLanding(): void {
+  elements.landingDialog.hidden = true;
+  openNewSessionDialog(true, true);
+}
+
+function openNewSessionDialog(replace: boolean, returnToLanding = false): void {
+  if (state.streaming) return notify("Wait for the current response to finish");
+  newSessionReplace = replace;
+  newSessionCreating = false;
+  newSessionReturnsToLanding = returnToLanding;
+  elements.newSessionName.value = "";
+  elements.newSessionPath.value = state.session?.cwd ?? state.config?.workspaceRoot ?? "";
+  elements.newSessionClose.hidden = state.session === null && !newSessionReturnsToLanding;
+  hideNewSessionCompletions();
+  updateNewSessionSubmitState();
+  elements.sessionDialog.hidden = true;
+  elements.newSessionDialog.hidden = false;
   document.body.classList.remove("sidebar-open");
+  elements.newSessionName.focus();
+}
+
+function closeNewSessionDialog(): void {
+  if (newSessionCreating || (state.session === null && !newSessionReturnsToLanding)) return;
+  elements.newSessionDialog.hidden = true;
+  hideNewSessionCompletions();
+  if (newSessionReturnsToLanding) {
+    newSessionReturnsToLanding = false;
+    elements.landingDialog.hidden = false;
+    return elements.landingNewSession.focus();
+  }
+  elements.prompt.focus();
+}
+
+function handleNewSessionDialogKeydown(event: KeyboardEvent): boolean {
+  if (elements.newSessionDialog.hidden) return false;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeNewSessionDialog();
+  }
+  return true;
+}
+
+function handleNewSessionPathKeydown(event: KeyboardEvent): void {
+  if (elements.newSessionCompletions.hidden) return;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    event.stopPropagation();
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    newSessionCompletionSelection = (newSessionCompletionSelection + direction + newSessionCompletions.length)
+      % newSessionCompletions.length;
+    renderNewSessionCompletions();
+  } else if (event.key === "Enter" || event.key === "Tab") {
+    const completion = newSessionCompletions[newSessionCompletionSelection];
+    if (!completion) return;
+    event.preventDefault();
+    event.stopPropagation();
+    acceptNewSessionCompletion(completion);
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    hideNewSessionCompletions();
+  }
+}
+
+async function updateNewSessionCompletions(): Promise<void> {
+  const sourceValue = elements.newSessionPath.value;
+  const request = ++newSessionCompletionRequest;
+  newSessionCompletions = [];
+  newSessionCompletionSelection = 0;
+  elements.newSessionCompletions.hidden = true;
+  if (!sourceValue.trim()) return;
+  try {
+    const query = new URLSearchParams({ path: sourceValue });
+    const result = await api<{ directories: DirectoryCompletion[] }>(`/api/directory-completions?${query}`);
+    if (request !== newSessionCompletionRequest || elements.newSessionPath.value !== sourceValue) return;
+    newSessionCompletions = result.directories;
+    if (newSessionCompletions.length > 0) renderNewSessionCompletions();
+  } catch {
+    if (request === newSessionCompletionRequest) hideNewSessionCompletions();
+  }
+}
+
+function renderNewSessionCompletions(): void {
+  elements.newSessionCompletions.replaceChildren();
+  newSessionCompletions.forEach((directory, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "command-option directory-option";
+    button.classList.toggle("selected", index === newSessionCompletionSelection);
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-selected", String(index === newSessionCompletionSelection));
+    const value = document.createElement("strong");
+    value.textContent = directory.value;
+    const absolutePath = document.createElement("span");
+    absolutePath.textContent = directory.absolutePath;
+    button.append(value, absolutePath);
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", () => acceptNewSessionCompletion(directory));
+    elements.newSessionCompletions.append(button);
+  });
+  elements.newSessionCompletions.hidden = false;
+  elements.newSessionCompletions.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
+}
+
+function acceptNewSessionCompletion(directory: DirectoryCompletion): void {
+  elements.newSessionPath.value = directory.value;
+  hideNewSessionCompletions();
+  updateNewSessionSubmitState();
+  elements.newSessionPath.focus();
+}
+
+function hideNewSessionCompletions(): void {
+  newSessionCompletionRequest += 1;
+  newSessionCompletions = [];
+  newSessionCompletionSelection = 0;
+  elements.newSessionCompletions.replaceChildren();
+  elements.newSessionCompletions.hidden = true;
+}
+
+function updateNewSessionSubmitState(): void {
+  elements.newSessionSubmit.disabled = newSessionCreating || !elements.newSessionPath.value.trim();
+}
+
+async function submitNewSession(): Promise<void> {
+  if (newSessionCreating) return;
+  const path = elements.newSessionPath.value.trim();
+  if (!path) {
+    notify("A working path is required");
+    return elements.newSessionPath.focus();
+  }
+  newSessionCreating = true;
+  updateNewSessionSubmitState();
+  try {
+    const { session } = await api<{ session: Session }>("/api/sessions", {
+      method: "POST",
+      body: JSON.stringify({ name: elements.newSessionName.value, path }),
+    });
+    state.session = session;
+    history[newSessionReplace ? "replaceState" : "pushState"]({}, "", `/s/${session.id}`);
+    newSessionReturnsToLanding = false;
+    elements.landingDialog.hidden = true;
+    elements.newSessionDialog.hidden = true;
+    hideNewSessionCompletions();
+    renderSession();
+    await loadSessionList();
+    elements.prompt.focus();
+  } catch (error) {
+    notify(messageFrom(error));
+  } finally {
+    newSessionCreating = false;
+    updateNewSessionSubmitState();
+  }
 }
 
 async function loadSession(id: string): Promise<void> {
@@ -330,6 +529,11 @@ function openSessionDialog(): void {
 
 function closeSessionDialog(): void {
   elements.sessionDialog.hidden = true;
+  if (sessionDialogReturnsToLanding) {
+    sessionDialogReturnsToLanding = false;
+    elements.landingDialog.hidden = false;
+    return elements.landingSelectSession.focus();
+  }
   elements.prompt.focus();
 }
 
@@ -339,6 +543,8 @@ async function selectArchivedSession(summary: Summary): Promise<void> {
   history.pushState({}, "", `/s/${summary.id}`);
   try {
     await loadSession(summary.id);
+    sessionDialogReturnsToLanding = false;
+    elements.landingDialog.hidden = true;
     closeSessionDialog();
   } catch (error) {
     notify(messageFrom(error));
@@ -480,6 +686,22 @@ async function sendMessage(): Promise<void> {
     await loadSessionList();
     elements.prompt.focus();
   }
+}
+
+function abortCurrentSession(): void {
+  const session = state.session;
+  if (!session || !state.streaming || state.aborting) return;
+  state.aborting = true;
+  void fetch(`/api/sessions/${session.id}/abort`, { method: "POST" })
+    .then(async (response) => {
+      if (!response.ok) throw new Error(await responseError(response));
+      const result = await response.json() as { aborted: boolean };
+      if (!result.aborted) state.controller?.abort();
+    })
+    .catch((error) => {
+      state.controller?.abort();
+      notify(`Could not stop session: ${messageFrom(error)}`);
+    });
 }
 
 function openQuestionDialog(request: AskUserQuestionRequest): void {
@@ -1357,7 +1579,10 @@ async function deleteSession(summary: Summary): Promise<void> {
         history.replaceState({}, "", `/s/${nextSession.id}`);
         await loadSession(nextSession.id);
       } else {
-        await createSession(true);
+        state.session = null;
+        history.replaceState({}, "", "/");
+        closeSessionDialog();
+        openLandingDialog();
       }
     }
     notify(`Session deleted · ${summary.title}`);
@@ -1691,6 +1916,7 @@ async function refreshCurrentSession(): Promise<void> {
 
 function setStreaming(streaming: boolean): void {
   state.streaming = streaming;
+  if (!streaming) state.aborting = false;
   elements.submit.classList.toggle("stop", streaming);
   elements.submit.querySelector("span")!.textContent = streaming ? "STOP" : "SEND";
   elements.prompt.disabled = streaming;
@@ -1698,6 +1924,7 @@ function setStreaming(streaming: boolean): void {
 
 function setBusy(busy: boolean): void {
   state.streaming = busy;
+  if (!busy) state.aborting = false;
   elements.submit.classList.remove("stop");
   elements.submit.querySelector("span")!.textContent = busy ? "WAIT" : "SEND";
   elements.prompt.disabled = busy;

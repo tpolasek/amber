@@ -177,6 +177,7 @@ function executeBash(
     };
     const abort = () => stop();
     signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) stop();
     const timer = setTimeout(() => {
       timedOut = true;
       stop();

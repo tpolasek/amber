@@ -94,6 +94,20 @@ test("separate session executors run concurrently", async () => {
   assert.equal(secondStartedBeforeFirstCompleted, true);
 });
 
+test("aborting a foreground Bash call stops its process", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-bash-"));
+  const executor = new BashExecutor();
+  const controller = new AbortController();
+  const started = Date.now();
+  const result = executor.run(
+    { command: "sleep 10", timeoutMs: 20_000 }, [directory], controller.signal,
+    { onRunning: () => controller.abort(), onOutput: () => undefined },
+  );
+
+  await assert.rejects(result, (error: unknown) => error instanceof Error && error.name === "AbortError");
+  assert.ok(Date.now() - started < 2_000);
+});
+
 test("rejects a working directory outside the allowed roots", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-bash-"));
   const executor = new BashExecutor();

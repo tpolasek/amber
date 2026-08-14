@@ -24,6 +24,7 @@ import { executeFileTool, FILE_TOOLS } from "./file-tools.js";
 import { completeDirectories } from "./directory-completion.js";
 import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
 import { AGENT_TOOL, getAgentDefinition, parseAgentInput, startAgentRuns } from "./agent-tool.js";
+import { ActiveSessionRuns } from "./session-aborts.js";
 import {
   ASK_USER_QUESTION_TOOL_NAME,
   AskUserQuestionManager,
@@ -53,7 +54,7 @@ const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "127.0.0.1";
 const store = new SessionStore(dataDirectory);
 const provider = createProvider(process.env);
-const activeSessions = new Set<string>();
+const activeSessions = new ActiveSessionRuns();
 const backgroundTasks = new BackgroundTaskManager();
 const askUserQuestions = new AskUserQuestionManager();
 const agentRunToken = randomUUID();
@@ -80,6 +81,7 @@ let shuttingDown = false;
 const shutdown = () => {
   if (shuttingDown) return;
   shuttingDown = true;
+  activeSessions.abortAll();
   backgroundTasks.stopAll();
   askUserQuestions.stopAll();
   server.close();
@@ -107,7 +109,34 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return json(response, 200, { sessions: await store.list() });
   }
   if (method === "POST" && url.pathname === "/api/sessions") {
-    return json(response, 201, { session: await store.create() });
+    const body = await readJson(request);
+    const rawName = body.name;
+    const name = typeof rawName === "string" ? rawName.replace(/\s+/g, " ").trim() : "";
+    if (rawName !== undefined && typeof rawName !== "string") {
+      return json(response, 400, { error: "Session name must be a string" });
+    }
+    if (name.length > 80) return json(response, 400, { error: "Session names must be 80 characters or fewer" });
+    const path = typeof body.path === "string" ? body.path.trim() : "";
+    if (!path) return json(response, 400, { error: "A working path is required" });
+    try {
+      const directory = await resolveAddedDirectory(path);
+      const session = await store.create();
+      if (name) session.title = name;
+      if (directory !== workspaceRoot) session.directories = [directory];
+      session.cwd = directory;
+      session.addDirInitialized = true;
+      await store.save(session);
+      return json(response, 201, { session });
+    } catch (error) {
+      return json(response, 400, { error: `Could not add directory: ${errorMessage(error)}` });
+    }
+  }
+  if (method === "GET" && url.pathname === "/api/directory-completions") {
+    const fragment = url.searchParams.get("path") ?? "";
+    if (fragment.includes("\0") || fragment.includes("\n") || fragment.length > 4_096) {
+      return json(response, 400, { error: "Invalid directory completion path" });
+    }
+    return json(response, 200, { directories: await completeDirectories(fragment, workspaceRoot) });
   }
 
   const sessionMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}$`));
@@ -122,6 +151,14 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return removed
       ? json(response, 200, { deletedSessionId: sessionMatch[1] })
       : json(response, 404, { error: "Session not found" });
+  }
+
+  const abortMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/abort$`));
+  if (method === "POST" && abortMatch?.[1]) {
+    const session = await store.get(abortMatch[1]);
+    if (!session) return json(response, 404, { error: "Session not found" });
+    const sessionIds = activeSessions.abortTree(abortMatch[1]);
+    return json(response, 200, { aborted: sessionIds.length > 0, sessionIds });
   }
 
   const messageMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/messages$`));
@@ -252,6 +289,11 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   const content = typeof body.content === "string" ? body.content.trim() : "";
   if (!content || content.length > 32_000) return json(response, 400, { error: "Message must contain 1–32,000 characters" });
 
+  const controller = new AbortController();
+  request.on("aborted", () => controller.abort());
+  response.on("close", () => {
+    if (!response.writableEnded) controller.abort();
+  });
   const now = new Date().toISOString();
   const userMessage: Message = { id: randomUUID(), role: "user", content, createdAt: now, status: "complete" };
   let assistantMessage = createAssistantMessage(now);
@@ -265,13 +307,8 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     "x-accel-buffering": "no",
   });
   sendEvent(response, "start", { userMessage, assistantMessage });
-  activeSessions.add(sessionId);
   const bashExecutor = new BashExecutor();
-  const controller = new AbortController();
-  request.on("aborted", () => controller.abort());
-  response.on("close", () => {
-    if (!response.writableEnded) controller.abort();
-  });
+  activeSessions.register(sessionId, session.parentSessionId, controller);
 
   try {
     const allowedDirectories = sessionDirectories(session);
@@ -582,7 +619,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     const message = error instanceof Error && error.name === "AbortError" ? "Generation stopped" : errorMessage(error);
     if (!response.writableEnded) sendEvent(response, "error", { error: message, message: assistantMessage });
   } finally {
-    activeSessions.delete(sessionId);
+    activeSessions.unregister(sessionId, controller);
     response.end();
   }
 }
@@ -774,9 +811,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
   if (command === "/add-dir") {
     if (!argument) return json(response, 400, { error: "Usage: /add-dir <directory>" });
     try {
-      const expanded = argument === "~" ? homedir() : argument.startsWith("~/") ? join(homedir(), argument.slice(2)) : argument;
-      const directory = await realpath(resolve(workspaceRoot, expanded));
-      if (!(await stat(directory)).isDirectory()) return json(response, 400, { error: `Not a directory: ${directory}` });
+      const directory = await resolveAddedDirectory(argument);
       const firstAddDir = session.addDirInitialized !== true && (session.directories?.length ?? 0) === 0;
       if (directory !== workspaceRoot && !(session.directories ?? []).includes(directory)) {
         (session.directories ??= []).push(directory);
@@ -817,14 +852,14 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
 
     const controller = new AbortController();
     request.once("aborted", () => controller.abort());
-    activeSessions.add(sessionId);
+    activeSessions.register(sessionId, undefined, controller);
     try {
       const title = await generateSessionTitle(provider, session.messages, controller.signal, session.compaction);
       return json(response, 200, { command: "name", session: await store.rename(session, title) });
     } catch (error) {
       return json(response, 502, { error: errorMessage(error) });
     } finally {
-      activeSessions.delete(sessionId);
+      activeSessions.unregister(sessionId, controller);
     }
   }
 
@@ -854,7 +889,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     response.on("close", () => {
       if (!response.writableEnded) controller.abort();
     });
-    activeSessions.add(sessionId);
+    activeSessions.register(sessionId, undefined, controller);
     response.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-cache, no-transform",
@@ -895,7 +930,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     } catch (error) {
       if (!response.destroyed && !response.writableEnded) sendEvent(response, "error", { error: errorMessage(error) });
     } finally {
-      activeSessions.delete(sessionId);
+      activeSessions.unregister(sessionId, controller);
       response.end();
     }
     return;
@@ -961,6 +996,13 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     return json(response, 200, { command: "context", session });
   }
   return json(response, 400, { error: `Unknown command: ${command || "(empty)"}` });
+}
+
+async function resolveAddedDirectory(path: string): Promise<string> {
+  const expanded = path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
+  const directory = await realpath(resolve(workspaceRoot, expanded));
+  if (!(await stat(directory)).isDirectory()) throw new Error(`Not a directory: ${directory}`);
+  return directory;
 }
 
 async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {

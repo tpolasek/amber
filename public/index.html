@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#100b03">
     <meta name="description" content="AMBER — browser terminal for persistent LLM agent sessions">
     <title>AMBER // Agent Terminal</title>
-    <link rel="stylesheet" href="/styles.css?v=38">
+    <link rel="stylesheet" href="/styles.css?v=39">
   </head>
   <body>
     <div class="noise" aria-hidden="true"></div>
@@ -43,23 +43,7 @@
         <div id="mode-banner" class="mode-banner" hidden></div>
 
         <section id="transcript" class="transcript" aria-live="polite">
-          <div id="empty-state" class="empty-state">
-            <div class="boot-sequence">
-              <p><span>[OK]</span> encrypted channel established</p>
-              <p><span>[OK]</span> session persistence online</p>
-              <p><span>[OK]</span> agent context initialized</p>
-            </div>
-            <div class="hero-mark" aria-hidden="true">
-              <span class="bracket">[</span><div class="amber-core"><i></i><i></i><i></i></div><span class="bracket">]</span>
-            </div>
-            <h1>AWAITING DIRECTIVE</h1>
-            <p class="hero-copy">Your browser-based agent channel is ready.<br>Issue a command to begin the transmission.</p>
-            <div class="suggestions">
-              <button data-prompt="Explain the architecture of this project and identify the most important entry points."><span>01</span><b>SCAN CODEBASE</b><small>Map architecture and entry points</small><i>↗</i></button>
-              <button data-prompt="Help me design and implement a new feature. Start by asking what outcome I want."><span>02</span><b>BUILD FEATURE</b><small>Plan and write an implementation</small><i>↗</i></button>
-              <button data-prompt="Review my latest changes for bugs, regressions, and missing tests."><span>03</span><b>REVIEW CHANGES</b><small>Find risks before they ship</small><i>↗</i></button>
-            </div>
-          </div>
+          <div id="empty-state" class="empty-state"></div>
         </section>
 
         <footer id="composer-shell" class="composer-shell">
@@ -78,6 +62,49 @@
           <div class="composer-meta"><span class="secure">◇ SESSION URL PERSISTED</span></div>
         </footer>
       </main>
+    </div>
+    <div id="landing-dialog" class="tasks-overlay" hidden>
+      <section class="tasks-dialog landing-dialog" role="dialog" aria-modal="true" aria-labelledby="landing-dialog-title">
+        <div class="boot-sequence">
+          <p><span>[OK]</span> encrypted channel established</p>
+          <p><span>[OK]</span> session persistence online</p>
+          <p><span>[OK]</span> agent context initialized</p>
+        </div>
+        <div class="hero-mark" aria-hidden="true">
+          <span class="bracket">[</span><div class="amber-core"><i></i><i></i><i></i></div><span class="bracket">]</span>
+        </div>
+        <h1 id="landing-dialog-title">AWAITING DIRECTIVE</h1>
+        <p class="hero-copy">Your browser-based agent channel is ready.<br>Select or create a session to begin the transmission.</p>
+        <div class="landing-actions">
+          <button id="landing-new-session" type="button"><span>01</span><b>NEW SESSION</b><small>Configure a new agent session</small><i>↗</i></button>
+          <button id="landing-select-session" type="button"><span>02</span><b>SELECT SESSION</b><small>Open an archived session</small><i>↗</i></button>
+        </div>
+      </section>
+    </div>
+    <div id="new-session-dialog" class="tasks-overlay" hidden>
+      <form id="new-session-form" class="tasks-dialog new-session-dialog" role="dialog" aria-modal="true" aria-labelledby="new-session-dialog-title">
+        <header class="tasks-dialog-header">
+          <span class="session-dialog-icon" aria-hidden="true">＋</span>
+          <strong id="new-session-dialog-title">Create session</strong>
+          <button id="new-session-close" class="tasks-dialog-button" type="button" aria-label="Cancel session creation">×</button>
+        </header>
+        <div class="tasks-dialog-body new-session-dialog-body">
+          <label class="new-session-field" for="new-session-name">
+            <span>SESSION NAME <small>OPTIONAL</small></span>
+            <input id="new-session-name" type="text" maxlength="80" autocomplete="off" spellcheck="false" placeholder="Defaults to the generated session ID">
+          </label>
+          <label class="new-session-field" for="new-session-path">
+            <span>WORKING PATH <b>REQUIRED</b></span>
+            <input id="new-session-path" type="text" maxlength="4096" autocomplete="off" spellcheck="false" required placeholder="Choose a directory">
+          </label>
+          <div id="new-session-completions" class="new-session-completions" role="listbox" aria-label="Working path completions" hidden></div>
+          <p>The selected path becomes this session’s CWD and is added to its allowed directories.</p>
+        </div>
+        <footer class="tasks-dialog-footer">
+          <span>Type a path · ↑/↓ select · Tab complete · Enter create · Esc cancel</span>
+          <button id="new-session-submit" class="question-submit-button" type="submit">CREATE SESSION</button>
+        </footer>
+      </form>
     </div>
     <div id="session-dialog" class="tasks-overlay" hidden>
       <section class="tasks-dialog session-dialog" role="dialog" aria-modal="true" aria-labelledby="session-dialog-title">
