@@ -152,7 +152,7 @@ async function initialize(): Promise<void> {
 
 function wireEvents(): void {
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.streaming) {
+    if (event.key === "Escape" && state.streaming && !state.session?.parentSessionId) {
       event.preventDefault();
       abortCurrentSession();
       return;
@@ -161,6 +161,11 @@ function wireEvents(): void {
     if (handleQuestionDialogKeydown(event)) return;
     if (handleTasksDialogKeydown(event)) return;
     if (handleSessionDialogKeydown(event)) return;
+    if (event.key === "Escape" && !event.defaultPrevented && state.session && !state.session.parentSessionId) {
+      event.preventDefault();
+      abortCurrentSession();
+      return;
+    }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "r"
       && document.activeElement !== elements.prompt && document.activeElement !== elements.historyQuery) {
       event.preventDefault();
@@ -690,7 +695,8 @@ async function sendMessage(): Promise<void> {
 
 function abortCurrentSession(): void {
   const session = state.session;
-  if (!session || !state.streaming || state.aborting) return;
+  if (!session || session.parentSessionId || state.aborting) return;
+  const wasStreaming = state.streaming;
   state.aborting = true;
   void fetch(`/api/sessions/${session.id}/abort`, { method: "POST" })
     .then(async (response) => {
@@ -701,6 +707,9 @@ function abortCurrentSession(): void {
     .catch((error) => {
       state.controller?.abort();
       notify(`Could not stop session: ${messageFrom(error)}`);
+    })
+    .finally(() => {
+      if (!wasStreaming) state.aborting = false;
     });
 }
 

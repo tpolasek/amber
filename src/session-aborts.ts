@@ -3,6 +3,19 @@ interface ActiveSessionRun {
   controller: AbortController;
 }
 
+interface SessionFamilyMember {
+  id: string;
+}
+
+interface BackgroundSessionTasks {
+  stopSession(sessionId: string): Array<{ id: string }>;
+}
+
+export interface SessionAbortResult {
+  sessionIds: string[];
+  backgroundTaskIds: string[];
+}
+
 export class ActiveSessionRuns {
   readonly #runs = new Map<string, ActiveSessionRun>();
 
@@ -47,4 +60,29 @@ export class ActiveSessionRuns {
   abortAll(): void {
     for (const run of this.#runs.values()) run.controller.abort();
   }
+}
+
+export async function abortSessionOperations(
+  rootSessionId: string,
+  activeSessions: ActiveSessionRuns,
+  backgroundTasks: BackgroundSessionTasks,
+  loadFamily: () => Promise<readonly SessionFamilyMember[]>,
+): Promise<SessionAbortResult> {
+  const sessionIds = activeSessions.abortTree(rootSessionId);
+  const backgroundTaskIds: string[] = [];
+  const stoppedSessions = new Set<string>();
+
+  const stopAgentBackgroundTasks = (sessionId: string) => {
+    if (sessionId === rootSessionId || stoppedSessions.has(sessionId)) return;
+    stoppedSessions.add(sessionId);
+    backgroundTaskIds.push(...backgroundTasks.stopSession(sessionId).map((task) => task.id));
+  };
+
+  // Stop background work for active agents immediately, then sweep persisted
+  // descendants to catch background work belonging to agents that already exited.
+  for (const sessionId of sessionIds) stopAgentBackgroundTasks(sessionId);
+  const family = await loadFamily();
+  for (const session of family) stopAgentBackgroundTasks(session.id);
+
+  return { sessionIds, backgroundTaskIds };
 }

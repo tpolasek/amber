@@ -161,3 +161,20 @@ test("creates linked agent sub-sessions using the parent id and a short uuid", a
   assert.equal((await store.get(child.id))?.parentSessionId, parent.id);
   assert.deepEqual((await store.list()).map((session) => session.id), [parent.id]);
 });
+
+test("resolves a complete root session family from the root or a nested agent", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const root = await store.create();
+  const firstAgent = await store.createAgentSession(root, "general-purpose", "First agent");
+  const siblingAgent = await store.createAgentSession(root, "code-review", "Sibling agent");
+  const nestedAgent = await store.createAgentSession(firstAgent, "general-purpose", "Nested agent");
+  const unrelated = await store.create();
+
+  const expected = new Set([root.id, firstAgent.id, siblingAgent.id, nestedAgent.id]);
+  assert.deepEqual(new Set((await store.family(root.id)).map((session) => session.id)), expected);
+  assert.deepEqual(new Set((await store.family(nestedAgent.id)).map((session) => session.id)), expected);
+  assert.equal((await store.family(root.id)).some((session) => session.id === unrelated.id), false);
+  assert.deepEqual(await store.family("missing.session.id"), []);
+});

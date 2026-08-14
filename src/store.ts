@@ -177,6 +177,36 @@ export class SessionStore {
       });
   }
 
+  async family(id: string): Promise<Session[]> {
+    let root = await this.get(id);
+    if (!root) return [];
+    const ancestors = new Set([root.id]);
+    while (root.parentSessionId && !ancestors.has(root.parentSessionId)) {
+      const parent = await this.get(root.parentSessionId);
+      if (!parent) break;
+      root = parent;
+      ancestors.add(root.id);
+    }
+
+    const entries = await readdir(this.#directory, { withFileTypes: true });
+    const sessions = (await Promise.all(entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map((entry) => this.get(entry.name.slice(0, -5)))))
+      .filter((session): session is Session => session !== null);
+    const familyIds = new Set([root.id]);
+    let foundDescendant = true;
+    while (foundDescendant) {
+      foundDescendant = false;
+      for (const session of sessions) {
+        if (session.parentSessionId && familyIds.has(session.parentSessionId) && !familyIds.has(session.id)) {
+          familyIds.add(session.id);
+          foundDescendant = true;
+        }
+      }
+    }
+    return [root, ...sessions.filter((session) => session.id !== root.id && familyIds.has(session.id))];
+  }
+
   #path(id: string): string {
     return join(this.#directory, `${id}.json`);
   }

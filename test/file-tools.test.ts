@@ -154,6 +154,58 @@ test("Edit with an empty old_string creates a missing file", async () => {
   assert.equal(await readFile(filePath, "utf8"), "created by edit\n");
 });
 
+test("an aborted session prevents non-shell file tools from executing", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-files-"));
+  const filePath = join(directory, "should-not-exist.txt");
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(
+    executeFileTool(
+      "Write",
+      { file_path: filePath, content: "not written\n" },
+      [directory],
+      session(),
+      directory,
+      controller.signal,
+    ),
+    { name: "AbortError" },
+  );
+  await assert.rejects(stat(filePath), { code: "ENOENT" });
+});
+
+test("Write and Edit finish safely when abort arrives after they start", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-files-"));
+  const writePath = join(directory, "write.txt");
+  const editPath = join(directory, "edit.txt");
+
+  const writeController = new AbortController();
+  const write = executeFileTool(
+    "Write",
+    { file_path: writePath, content: "complete write\n" },
+    [directory],
+    session(),
+    directory,
+    writeController.signal,
+  );
+  writeController.abort();
+  await write;
+  assert.equal(await readFile(writePath, "utf8"), "complete write\n");
+
+  const editController = new AbortController();
+  const edit = executeFileTool(
+    "Edit",
+    { file_path: editPath, old_string: "", new_string: "complete edit\n" },
+    [directory],
+    session(),
+    directory,
+    editController.signal,
+  );
+  editController.abort();
+  await edit;
+  assert.equal(await readFile(editPath, "utf8"), "complete edit\n");
+});
+
 test("file tools resolve relative paths from CWD and reject binary and outside paths", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-files-"));
   const outside = await mkdtemp(join(tmpdir(), "amber-outside-"));

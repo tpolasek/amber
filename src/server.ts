@@ -24,7 +24,7 @@ import { executeFileTool, FILE_TOOLS } from "./file-tools.js";
 import { completeDirectories } from "./directory-completion.js";
 import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
 import { AGENT_TOOL, getAgentDefinition, parseAgentInput, startAgentRuns } from "./agent-tool.js";
-import { ActiveSessionRuns } from "./session-aborts.js";
+import { ActiveSessionRuns, abortSessionOperations } from "./session-aborts.js";
 import {
   ASK_USER_QUESTION_TOOL_NAME,
   AskUserQuestionManager,
@@ -157,8 +157,18 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   if (method === "POST" && abortMatch?.[1]) {
     const session = await store.get(abortMatch[1]);
     if (!session) return json(response, 404, { error: "Session not found" });
-    const sessionIds = activeSessions.abortTree(abortMatch[1]);
-    return json(response, 200, { aborted: sessionIds.length > 0, sessionIds });
+    if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
+    const { sessionIds, backgroundTaskIds } = await abortSessionOperations(
+      session.id,
+      activeSessions,
+      backgroundTasks,
+      () => store.family(session.id),
+    );
+    return json(response, 200, {
+      aborted: sessionIds.length > 0 || backgroundTaskIds.length > 0,
+      sessionIds,
+      backgroundTaskIds,
+    });
   }
 
   const messageMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/messages$`));
@@ -378,6 +388,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       }
       await store.save(session);
       sendEvent(response, "assistant_complete", { message: assistantMessage });
+      throwIfSessionAborted(controller.signal);
 
       if (toolDrafts.size === 0) {
         if (session.parentSessionId) {
@@ -410,6 +421,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       );
 
       for (const call of orderedCalls) {
+        throwIfSessionAborted(controller.signal);
         let resultText = call.output;
         let abortAfterResult: Error | undefined;
         if (call.status !== "error") {
@@ -454,7 +466,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                 call.timeoutMs = input.timeoutMs;
                 call.statusDisplay = { text: "STARTING", appendElapsed: true };
                 sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
-                const task = await backgroundTasks.start(sessionId, input, allowedDirectories);
+                const task = await backgroundTasks.start(sessionId, input, allowedDirectories, controller.signal);
                 const message = `Command running in background with ID: ${task.id}. Use TaskOutput to read its output and status.`;
                 call.status = "complete";
                 call.output = message;
@@ -565,7 +577,14 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             if (typeof call.input.file_path === "string") call.filePath = call.input.file_path;
             sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
             try {
-              const result = await executeFileTool(call.name, call.input, allowedDirectories, session, currentDirectory);
+              const result = await executeFileTool(
+                call.name,
+                call.input,
+                allowedDirectories,
+                session,
+                currentDirectory,
+                controller.signal,
+              );
               call.status = "complete";
               call.filePath = result.filePath;
               call.output = result.output;
@@ -595,6 +614,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         });
         await store.save(session);
         if (abortAfterResult) throw abortAfterResult;
+        throwIfSessionAborted(controller.signal);
       }
 
       const loop = toolLoopTracker.record([...toolDrafts.values()].map(({ call }) => ({
@@ -702,9 +722,12 @@ async function executeAgentCall(
   onUpdate(call);
   let resultText = "";
   let abortAfterResult: Error | undefined;
+  let child: Session | undefined;
   try {
+    throwIfSessionAborted(signal);
     const input = parseAgentInput(call.input);
-    const child = await store.createAgentSession(parent, input.subagentType, input.description);
+    child = await store.createAgentSession(parent, input.subagentType, input.description);
+    throwIfSessionAborted(signal);
     call.agentSessionId = child.id;
     call.agentType = input.subagentType;
     await persistParent();
@@ -720,6 +743,10 @@ async function executeAgentCall(
     call.statusDisplay = { text: "AGENT FAILED" };
     resultText = call.output;
     if (error instanceof Error && error.name === "AbortError") abortAfterResult = error;
+    if (abortAfterResult && child) {
+      child.agentStatus = "error";
+      try { await store.save(child); } catch { /* preserve the original abort */ }
+    }
     try {
       await persistParent();
     } catch {
@@ -1048,4 +1075,11 @@ async function serveFile(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown provider error";
+}
+
+function throwIfSessionAborted(signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  const error = new Error("Session aborted");
+  error.name = "AbortError";
+  throw error;
 }

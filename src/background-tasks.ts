@@ -40,8 +40,15 @@ export interface TaskRetrieval {
 export class BackgroundTaskManager {
   readonly #tasks = new Map<string, ManagedTask>();
 
-  async start(sessionId: string, input: BashInput, allowedDirectories: string[]): Promise<BackgroundTask> {
+  async start(
+    sessionId: string,
+    input: BashInput,
+    allowedDirectories: string[],
+    signal?: AbortSignal,
+  ): Promise<BackgroundTask> {
+    if (signal?.aborted) throw abortError();
     const workingDirectory = await resolveBashWorkingDirectory(input.workingDirectory, allowedDirectories);
+    if (signal?.aborted) throw abortError();
     const id = generateTaskId();
     const startedAt = new Date();
     const child = spawn("/bin/bash", ["-lc", input.command], {
@@ -133,13 +140,16 @@ export class BackgroundTaskManager {
     return publicTask(task);
   }
 
-  stopSession(sessionId: string): void {
+  stopSession(sessionId: string): BackgroundTask[] {
+    const stopped: BackgroundTask[] = [];
     for (const task of this.#tasks.values()) {
       if (task.sessionId === sessionId && task.status === "running") {
         task.status = "killed";
         this.#terminate(task);
+        stopped.push(publicTask(task));
       }
     }
+    return stopped;
   }
 
   stopAll(): void {
@@ -171,6 +181,12 @@ export class BackgroundTaskManager {
     task.durationMs = Date.now() - startedAt.getTime();
     task.resolveCompletion();
   }
+}
+
+function abortError(): Error {
+  const error = new Error("Background Bash aborted");
+  error.name = "AbortError";
+  return error;
 }
 
 function appendTaskOutput(current: string, chunk: string): string {

@@ -81,6 +81,21 @@ test("background Bash applies its timeout without blocking TaskOutput", async ()
   assert.equal(completed.task.status, "timed_out");
 });
 
+test("an aborted session cannot start a background Bash process", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-task-"));
+  const manager = new BackgroundTaskManager();
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(
+    manager.start("session-one", {
+      command: "sleep 5", timeoutMs: 10_000, runInBackground: true,
+    }, [directory], controller.signal),
+    { name: "AbortError" },
+  );
+  assert.deepEqual(manager.list("session-one"), []);
+});
+
 test("TaskStop kills a task and task IDs cannot cross sessions", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-task-"));
   const manager = new BackgroundTaskManager();
@@ -117,6 +132,13 @@ test("task listing includes only active tasks for the session, newest first", as
   assert.deepEqual(manager.list("session-one").map((task) => task.id), [second.id, first.id]);
   assert.equal(manager.list("session-one").some((task) => task.id === completed.id), false);
   assert.equal(manager.list("session-one").some((task) => task.id === otherSession.id), false);
+  assert.deepEqual(
+    manager.stopSession("session-one").map((task) => task.id).sort(),
+    [first.id, second.id].sort(),
+  );
+  assert.equal(manager.get("session-one", first.id)?.status, "killed");
+  assert.equal(manager.get("session-one", second.id)?.status, "killed");
+  assert.equal(manager.get("session-two", otherSession.id)?.status, "running");
   manager.stopAll();
 });
 

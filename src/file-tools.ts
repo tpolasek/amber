@@ -75,9 +75,11 @@ export async function executeFileTool(
   allowedDirectories: string[],
   session: Session,
   currentDirectory = allowedDirectories[0],
+  signal?: AbortSignal,
 ): Promise<FileToolResult> {
+  throwIfAborted(signal);
   if (!currentDirectory) throw new Error("No current working directory is configured");
-  if (name === READ_TOOL.name) return readTextFile(input, allowedDirectories, currentDirectory, session);
+  if (name === READ_TOOL.name) return readTextFile(input, allowedDirectories, currentDirectory, session, signal);
   if (name === WRITE_TOOL.name) return writeTextFile(input, allowedDirectories, currentDirectory, session);
   if (name === EDIT_TOOL.name) return editTextFile(input, allowedDirectories, currentDirectory, session);
   throw new Error(`Unknown file tool: ${name}`);
@@ -88,12 +90,15 @@ async function readTextFile(
   allowedDirectories: string[],
   currentDirectory: string,
   session: Session,
+  signal?: AbortSignal,
 ): Promise<FileToolResult> {
   const requestedPath = resolvedFilePath(input.file_path, currentDirectory);
   assertSupportedTextPath(requestedPath);
   if (isBlockedDevice(requestedPath)) throw new Error(`Cannot read '${requestedPath}': this device file would block or produce infinite output.`);
   const filePath = await resolveExistingPath(requestedPath, allowedDirectories);
+  throwIfAborted(signal);
   const metadata = await stat(filePath);
+  throwIfAborted(signal);
   if (!metadata.isFile()) throw new Error(`Read only supports files, not directories: ${filePath}`);
   const offset = integer(input.offset, "offset", 1, Number.MAX_SAFE_INTEGER, 1);
   const limit = integer(input.limit, "limit", 1, MAX_LINES_TO_READ, MAX_LINES_TO_READ);
@@ -109,7 +114,8 @@ async function readTextFile(
   if (metadata.size > MAX_READ_BYTES && input.limit === undefined) {
     throw new Error(`File is too large to read (${metadata.size.toLocaleString()} bytes). Use offset and limit to read a specific portion.`);
   }
-  const buffer = await readFile(filePath);
+  const buffer = await readFile(filePath, { signal });
+  throwIfAborted(signal);
   if (buffer.includes(0)) throw new Error("Read only supports text files in this version of AMBER");
   const content = buffer.toString("utf8").replaceAll("\r\n", "\n");
   const lines = splitLines(content);
@@ -377,6 +383,13 @@ async function atomicWrite(filePath: string, content: string): Promise<void> {
     await unlink(temporary).catch(() => undefined);
     throw error;
   }
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const error = new Error("File operation aborted");
+  error.name = "AbortError";
+  throw error;
 }
 
 function unifiedDiff(filePath: string, before: string, after: string, created = false): string {
