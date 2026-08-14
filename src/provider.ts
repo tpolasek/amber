@@ -1,4 +1,5 @@
 import type { LlmProvider, ProviderMessage, StreamEvent, StreamOptions, TokenUsage } from "./types.js";
+import { configuredSetting, type AmberSettings } from "./settings.js";
 
 interface AnthropicProviderOptions {
   apiKey?: string;
@@ -135,16 +136,22 @@ export class AnthropicProvider implements LlmProvider {
   }
 }
 
-export function createProvider(environment: NodeJS.ProcessEnv): LlmProvider {
-  if (!environment.ANTHROPIC_AUTH_TOKEN && !environment.ANTHROPIC_API_KEY) {
-    throw new Error("Set ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY before starting AMBER");
+export function createProvider(environment: NodeJS.ProcessEnv, settings: AmberSettings = {}): LlmProvider {
+  const hasEnvironmentCredentials = environment.ANTHROPIC_AUTH_TOKEN !== undefined
+    || environment.ANTHROPIC_API_KEY !== undefined;
+  const apiKey = configuredSetting(environment.ANTHROPIC_API_KEY);
+  const authToken = configuredSetting(environment.ANTHROPIC_AUTH_TOKEN)
+    ?? (!hasEnvironmentCredentials ? configuredSetting(settings.auth_key) : undefined);
+  if (!authToken && !apiKey) {
+    throw new Error("Set auth_key in ~/.amber/settings.json, ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_API_KEY before starting AMBER");
   }
-  const model = environment.ANTHROPIC_MODEL?.trim();
-  if (!model) throw new Error("Set ANTHROPIC_MODEL before starting AMBER");
-  const baseUrl = environment.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com";
+  const model = configuredSetting(environment.ANTHROPIC_MODEL ?? settings.default_model);
+  if (!model) throw new Error("Set default_model in ~/.amber/settings.json or ANTHROPIC_MODEL before starting AMBER");
+  const baseUrl = configuredSetting(environment.ANTHROPIC_BASE_URL ?? settings.auth_url)
+    ?? "https://api.anthropic.com";
   return new AnthropicProvider({
-    ...(environment.ANTHROPIC_API_KEY ? { apiKey: environment.ANTHROPIC_API_KEY } : {}),
-    ...(environment.ANTHROPIC_AUTH_TOKEN ? { authToken: environment.ANTHROPIC_AUTH_TOKEN } : {}),
+    ...(apiKey ? { apiKey } : {}),
+    ...(authToken ? { authToken } : {}),
     model,
     baseUrl,
   });

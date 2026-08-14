@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { SessionStore } from "./store.js";
 import { createProvider } from "./provider.js";
+import { loadSettings } from "./settings.js";
 import { buildProviderHistory, isModelMessage } from "./history.js";
 import { generateSessionTitle, shouldAutoNameSession } from "./session-title.js";
 import { estimateHistoryTokens, formatCompactionBanner, generateCompactionSummary } from "./compaction.js";
@@ -55,7 +56,8 @@ const dataDirectory = resolve(process.env.DATA_DIR ?? join(projectRoot, "data", 
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "127.0.0.1";
 const store = new SessionStore(dataDirectory);
-const provider = createProvider(process.env);
+const settings = await loadSettings();
+const provider = createProvider(process.env, settings);
 const activeSessions = new ActiveSessionRuns();
 const backgroundTasks = new BackgroundTaskManager();
 const askUserQuestions = new AskUserQuestionManager();

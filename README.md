@@ -10,16 +10,28 @@ npm run build
 npm start
 ```
 
-Configure an Anthropic-compatible backend, then open `http://127.0.0.1:3000`:
+On its first start, Amber creates `~/.amber/settings.json`:
+
+```json
+{
+  "auth_key": "<INSERT_AUTH_KEY_HERE>",
+  "auth_url": "<INSERT_AUTH_URL_HERE>",
+  "default_model": "<INSERT_DEFAULT_MODEL_HERE>"
+}
+```
+
+Replace the placeholders with the bearer auth key, Anthropic-compatible endpoint, and model, then open `http://127.0.0.1:3000`. The endpoint defaults to `https://api.anthropic.com` when `auth_url` is left as its placeholder.
+
+Environment variables override the corresponding file settings:
 
 ```bash
 export ANTHROPIC_AUTH_TOKEN="your-key"
 export ANTHROPIC_BASE_URL="https://api.z.ai/api/anthropic"
-export ANTHROPIC_MODEL="your-model" # required
+export ANTHROPIC_MODEL="your-model"
 npm start
 ```
 
-`ANTHROPIC_MODEL` must always be specified; Amber does not choose a provider-specific default. `.env` files are intentionally not loaded by the app, so export variables in the shell or use your process manager.
+`ANTHROPIC_API_KEY` is also supported and uses the `x-api-key` header instead of bearer authentication. `.env` files are intentionally not loaded by the app, so export variables in the shell or use your process manager.
 
 ## Architecture
 

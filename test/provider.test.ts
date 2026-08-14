@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { AnthropicProvider, createProvider } from "../src/provider.js";
+import { createProvider } from "../src/provider.js";
 
 test("uses bearer auth and parses Anthropic-compatible streaming events", async (context) => {
   let receivedAuthorization = "";
@@ -47,10 +47,14 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
   const address = gateway.address();
   assert(address && typeof address === "object");
 
-  const provider = new AnthropicProvider({
-    authToken: "test-token",
-    model: "glm-test",
-    baseUrl: `http://127.0.0.1:${address.port}`,
+  const provider = createProvider({
+    ANTHROPIC_AUTH_TOKEN: "test-token",
+    ANTHROPIC_MODEL: "glm-test",
+    ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
+  }, {
+    auth_key: "settings-token",
+    default_model: "settings-model",
+    auth_url: "https://settings.example.test",
   });
   const events = [];
   const tools = [{ name: "Bash", description: "Run a command", input_schema: { type: "object" as const, properties: {} } }];
@@ -99,4 +103,23 @@ test("requires credentials and an explicit model", () => {
   });
   assert.equal(provider.model, "mimo-v2.5");
   assert.equal(provider.mode, "live");
+});
+
+test("uses settings with environment variable overrides", () => {
+  const settings = {
+    auth_key: "settings-token",
+    auth_url: "https://settings.example.test",
+    default_model: "settings-model",
+  };
+  assert.equal(createProvider({}, settings).model, "settings-model");
+  assert.equal(createProvider({ ANTHROPIC_MODEL: "environment-model" }, settings).model, "environment-model");
+
+  assert.throws(() => createProvider({
+    ANTHROPIC_AUTH_TOKEN: "",
+    ANTHROPIC_MODEL: "environment-model",
+  }, settings), /ANTHROPIC_AUTH_TOKEN/);
+  assert.throws(() => createProvider({}, {
+    auth_key: "<INSERT_AUTH_KEY_HERE>",
+    default_model: "<INSERT_DEFAULT_MODEL_HERE>",
+  }), /auth_key/);
 });

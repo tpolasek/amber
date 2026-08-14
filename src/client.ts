@@ -343,7 +343,7 @@ function openNewSessionDialog(replace: boolean, returnToLanding = false): void {
   newSessionCreating = false;
   newSessionReturnsToLanding = returnToLanding;
   elements.newSessionName.value = "";
-  elements.newSessionPath.value = state.session?.cwd ?? state.config?.workspaceRoot ?? "";
+  elements.newSessionPath.value = state.config?.homeDirectory ?? "";
   elements.newSessionClose.hidden = state.session === null && !newSessionReturnsToLanding;
   hideNewSessionCompletions();
   updateNewSessionSubmitState();
