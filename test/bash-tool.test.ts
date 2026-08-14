@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, realpath } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BashExecutor, BASH_TOOL, parseBashInput } from "../src/bash-tool.js";
@@ -106,6 +106,36 @@ test("aborting a foreground Bash call stops its process", async () => {
 
   await assert.rejects(result, (error: unknown) => error instanceof Error && error.name === "AbortError");
   assert.ok(Date.now() - started < 2_000);
+});
+
+test("foreground Bash waits for its running status to persist before spawning", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-bash-"));
+  const marker = join(directory, "foreground-started");
+  const executor = new BashExecutor();
+  let releaseStatusSave: () => void = () => undefined;
+  const statusSaved = new Promise<void>((resolve) => { releaseStatusSave = resolve; });
+  let runningHookStarted: () => void = () => undefined;
+  const runningHook = new Promise<void>((resolve) => { runningHookStarted = resolve; });
+
+  const result = executor.run(
+    { command: "printf started > foreground-started", timeoutMs: 2_000 },
+    [directory],
+    new AbortController().signal,
+    {
+      onRunning: async () => {
+        runningHookStarted();
+        await statusSaved;
+      },
+      onOutput: () => undefined,
+    },
+  );
+
+  await runningHook;
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await assert.rejects(stat(marker), { code: "ENOENT" });
+  releaseStatusSave();
+  await result;
+  assert.equal(await readFile(marker, "utf8"), "started");
 });
 
 test("rejects a working directory outside the allowed roots", async () => {

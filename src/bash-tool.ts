@@ -54,7 +54,7 @@ export interface BashResult {
 }
 
 export interface BashHooks {
-  onRunning: (workingDirectory: string, statusDisplay: ToolStatusDisplay) => void;
+  onRunning: (workingDirectory: string, statusDisplay: ToolStatusDisplay) => unknown;
   onOutput: (chunk: string) => void;
 }
 
@@ -70,7 +70,8 @@ export class BashExecutor {
     const operation = this.#tail.then(async () => {
       if (signal.aborted) throw abortError();
       const workingDirectory = await resolveBashWorkingDirectory(input.workingDirectory, allowedDirectories);
-      hooks.onRunning(workingDirectory, { text: "RUNNING", appendElapsed: true });
+      await hooks.onRunning(workingDirectory, { text: "RUNNING", appendElapsed: true });
+      if (signal.aborted) throw abortError();
       return executeBash(input, workingDirectory, signal, hooks.onOutput);
     });
     this.#tail = operation.then(() => undefined, () => undefined);

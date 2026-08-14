@@ -466,6 +466,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                 call.timeoutMs = input.timeoutMs;
                 call.statusDisplay = { text: "STARTING", appendElapsed: true };
                 sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+                await store.save(session);
                 const task = await backgroundTasks.start(sessionId, input, allowedDirectories, controller.signal);
                 const message = `Command running in background with ID: ${task.id}. Use TaskOutput to read its output and status.`;
                 call.status = "complete";
@@ -478,13 +479,14 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                 resultText = message;
               } else {
                 const result = await bashExecutor.run(input, allowedDirectories, controller.signal, {
-                  onRunning: (workingDirectory, statusDisplay) => {
+                  onRunning: async (workingDirectory, statusDisplay) => {
                     call.status = "running";
                     call.startedAt = new Date().toISOString();
                     call.workingDirectory = workingDirectory;
                     call.timeoutMs = input.timeoutMs;
                     call.statusDisplay = statusDisplay;
                     sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+                    await store.save(session);
                   },
                   onOutput: (chunk) => {
                     call.output += chunk;
