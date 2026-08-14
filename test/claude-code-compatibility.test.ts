@@ -1,10 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildClaudeCodeAgentSystemPrompt,
   buildClaudeCodeSystemPrompt,
+  CLAUDE_CODE_AGENT_TOOLS,
   CLAUDE_CODE_TOOLS,
   injectClaudeCodeUserContext,
+  structureClaudeCodeUserMessages,
 } from "../src/claude-code-compatibility.js";
+import { getAgentDefinition } from "../src/agent-tool.js";
 
 test("builds the verified four-block Claude Code system prompt", () => {
   const system = buildClaudeCodeSystemPrompt("/tmp/amber-not-a-repository", "mimo-v2.5");
@@ -49,4 +53,25 @@ test("advertises the seven Amber tools in Claude Code order", () => {
     assert.equal(tool.input_schema.type, "object");
     assert.equal(tool.input_schema.additionalProperties, false);
   }
+});
+
+test("builds the verified three-block general agent prompt", () => {
+  const system = buildClaudeCodeAgentSystemPrompt(
+    "/Users/thomas/code/xude",
+    "mimo-v2.5",
+    getAgentDefinition("general-purpose").systemPrompt,
+  );
+  assert.equal(system.length, 3);
+  assert.equal(system[0]?.text, "x-anthropic-billing-header: cc_version=2.1.88.516; cc_entrypoint=sdk-cli;");
+  assert.equal(system[1]?.text, "You are a Claude agent, built on Anthropic's Claude Agent SDK.");
+  assert.equal(system.reduce((total, block) => total + block.text.length, 0), 2_308);
+  assert.match(system[2]?.text ?? "", /Agent threads always have their cwd reset between bash calls/);
+  assert.match(system[2]?.text ?? "", /Working directory: \/Users\/thomas\/code\/xude/);
+  assert.match(system[2]?.text ?? "", /Is directory a git repo: Yes/);
+});
+
+test("structures an agent prompt as one text block and uses the shared child tools", () => {
+  const messages = structureClaudeCodeUserMessages([{ role: "user", content: "Find the PID" }]);
+  assert.deepEqual(messages, [{ role: "user", content: [{ type: "text", text: "Find the PID" }] }]);
+  assert.deepEqual(CLAUDE_CODE_AGENT_TOOLS.map((tool) => tool.name), ["Bash", "Edit", "Read", "Write"]);
 });

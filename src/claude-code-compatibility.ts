@@ -6,6 +6,9 @@ import toolCatalog from "./claude-code-tools.json" with { type: "json" };
 import type { ProviderMessage, ProviderSystemBlock, ToolDefinition } from "./types.js";
 
 export const CLAUDE_CODE_TOOLS = toolCatalog.tools as unknown as ToolDefinition[];
+export const CLAUDE_CODE_AGENT_TOOLS = CLAUDE_CODE_TOOLS.filter((tool) =>
+  tool.name === "Bash" || tool.name === "Edit" || tool.name === "Read" || tool.name === "Write"
+);
 
 export function buildClaudeCodeSystemPrompt(currentDirectory: string, model: string): ProviderSystemBlock[] {
   const shell = basename(process.env.SHELL ?? "unknown");
@@ -46,6 +49,45 @@ export function injectClaudeCodeUserContext(messages: ProviderMessage[]): Provid
       ],
     };
   });
+}
+
+export function structureClaudeCodeUserMessages(messages: ProviderMessage[]): ProviderMessage[] {
+  return messages.map((message) => message.role === "user" && typeof message.content === "string"
+    ? { ...message, content: [{ type: "text", text: message.content }] }
+    : message);
+}
+
+export function buildClaudeCodeAgentSystemPrompt(
+  currentDirectory: string,
+  model: string,
+  agentPrompt: string,
+): ProviderSystemBlock[] {
+  const shell = basename(process.env.SHELL ?? "unknown");
+  const prompt = [
+    agentPrompt,
+    "",
+    "Notes:",
+    "- Agent threads always have their cwd reset between bash calls, as a result please only use absolute file paths.",
+    "- In your final response, share file paths (always absolute, never relative) that are relevant to the task. Include code snippets only when the exact text is load-bearing (e.g., a bug you found, a function signature the caller asked for) — do not recap code you merely read.",
+    "- For clear communication with the user the assistant MUST avoid using emojis.",
+    "- Do not use a colon before tool calls. Text like \"Let me read the file:\" followed by a read tool call should just be \"Let me read the file.\" with a period.",
+    "",
+    "Here is useful information about the environment you are running in:",
+    "<env>",
+    `Working directory: ${currentDirectory}`,
+    `Is directory a git repo: ${isGitRepository(currentDirectory) ? "Yes" : "No"}`,
+    `Platform: ${platform()}`,
+    `Shell: ${shell}`,
+    `OS Version: ${type()} ${release()}`,
+    "</env>",
+    `You are powered by the model ${model}[1m].`,
+  ].join("\n");
+
+  return [
+    { type: "text", text: "x-anthropic-billing-header: cc_version=2.1.88.516; cc_entrypoint=sdk-cli;" },
+    structuredClone(compatibility.systemPrefix[1]) as ProviderSystemBlock,
+    { type: "text", text: prompt },
+  ];
 }
 
 function isGitRepository(directory: string): boolean {

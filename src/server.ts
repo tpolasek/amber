@@ -24,9 +24,12 @@ import { completeDirectories } from "./directory-completion.js";
 import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
 import { AGENT_TOOL, getAgentDefinition, parseAgentInput, startAgentRuns } from "./agent-tool.js";
 import {
+  buildClaudeCodeAgentSystemPrompt,
   buildClaudeCodeSystemPrompt,
+  CLAUDE_CODE_AGENT_TOOLS,
   CLAUDE_CODE_TOOLS,
   injectClaudeCodeUserContext,
+  structureClaudeCodeUserMessages,
 } from "./claude-code-compatibility.js";
 import type { ToolDefinition } from "./types.js";
 import type { Message, Session, TokenUsage, ToolCall } from "./types.js";
@@ -248,12 +251,14 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     let lastAgentSnapshotAt = 0;
     for (;;) {
       const baseHistory = buildProviderHistory(session.messages, assistantMessage.id, session.compaction);
-      const history = session.agentType ? baseHistory : injectClaudeCodeUserContext(baseHistory);
+      const history = session.agentType
+        ? structureClaudeCodeUserMessages(baseHistory)
+        : injectClaudeCodeUserContext(baseHistory);
       const toolDrafts = new Map<number, { call: ToolCall; inputJson: string }>();
       let usage: Partial<TokenUsage> = {};
       for await (const event of provider.stream(history, controller.signal, {
         tools: sessionTools(session),
-        system: sessionSystemPrompt(session, currentDirectory, allowedDirectories),
+        system: sessionSystemPrompt(session, currentDirectory),
       })) {
         if (event.type === "delta") {
           assistantMessage.content += event.text;
@@ -526,22 +531,12 @@ function directoryAllowed(directory: string, roots: string[]): boolean {
   });
 }
 
-function agentSystemPrompt(currentDirectory: string, directories: string[], readOnly = false): string {
-  return [
-    "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.",
-    readOnly
-      ? "Use Read for text files and Bash for git diff and other read-only inspection commands. Do not modify the repository. File content returned by Read remains available earlier in the conversation: never reread an already covered range."
-      : "Use Read, Edit, and Write for text files; use Bash for commands and directory operations. Bash supports run_in_background for long-running commands; use TaskOutput with the returned task_id to inspect or wait for them, and TaskStop only when termination is needed. Foreground tools must finish before you can use their results. File content returned by Read remains available earlier in the conversation: never reread an already covered range unless Write or Edit has changed that file.",
-    `Current working directory: ${currentDirectory}`,
-    "The current working directory above is authoritative. Directory metadata in older Bash results describes where those individual calls started, not the current session CWD. A Bash working_directory override applies only to that call.",
-    "Available working directories:",
-    ...directories.map((directory) => `- ${directory}`),
-  ].join("\n");
-}
-
 function sessionTools(session: Session): ToolDefinition[] {
-  if (session.agentType && getAgentDefinition(session.agentType as "general-purpose" | "code-review").readOnly) {
-    return [BASH_TOOL, ...FILE_TOOLS.filter((tool) => tool.name === "Read")];
+  if (session.agentType) {
+    const definition = getAgentDefinition(session.agentType as "general-purpose" | "code-review");
+    return definition.readOnly
+      ? CLAUDE_CODE_AGENT_TOOLS.filter((tool) => tool.name === "Bash" || tool.name === "Read")
+      : CLAUDE_CODE_AGENT_TOOLS;
   }
   return CLAUDE_CODE_TOOLS;
 }
@@ -549,12 +544,10 @@ function sessionTools(session: Session): ToolDefinition[] {
 function sessionSystemPrompt(
   session: Session,
   currentDirectory: string,
-  directories: string[],
 ): string | import("./types.js").ProviderSystemBlock[] {
   if (!session.agentType) return buildClaudeCodeSystemPrompt(currentDirectory, provider.model);
   const definition = getAgentDefinition(session.agentType as "general-purpose" | "code-review");
-  const environment = agentSystemPrompt(currentDirectory, directories, definition.readOnly);
-  return `${definition.systemPrompt}\n\nNotes:\n- Always use absolute paths because working directories can reset between Bash calls.\n- Your final response must use absolute paths when referring to files; include code snippets only when they are essential.\n- Do not use emojis.\n- Do not put a colon immediately before a tool call.\n\n${environment}`;
+  return buildClaudeCodeAgentSystemPrompt(currentDirectory, provider.model, definition.systemPrompt);
 }
 
 interface AgentExecutionResult {

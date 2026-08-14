@@ -11,6 +11,7 @@ export ANTHROPIC_MODEL="mimo-v2.5"
 export API_TIMEOUT_MS="3000000"
 export PORT="${PORT:-34817}"
 export HOST="127.0.0.1"
+AMBER_PROMPT="${AMBER_PROMPT:-4 + 4}"
 
 AMBER_SERVER_PID=""
 cleanup() {
@@ -49,7 +50,8 @@ if [[ "$ready" != true ]]; then
   exit 1
 fi
 
+request_body="$(node -e 'process.stdout.write(JSON.stringify({ prompt: process.argv[1], cwd: "/tmp" }))' "$AMBER_PROMPT")"
 curl --fail-with-body "http://$HOST:$PORT/api/run" \
   --header "content-type: application/json" \
-  --data '{"prompt":"4 + 4","cwd":"/tmp"}'
+  --data "$request_body"
 printf '\n'
