@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#100b03">
     <meta name="description" content="AMBER — browser terminal for persistent LLM agent sessions">
     <title>AMBER // Agent Terminal</title>
-    <link rel="stylesheet" href="/styles.css?v=40">
+    <link rel="stylesheet" href="/styles.css?v=42">
   </head>
   <body>
     <div class="noise" aria-hidden="true"></div>
@@ -22,6 +22,17 @@
           <button id="new-session" class="new-session"><span>＋</span> NEW SESSION <kbd>⌘N</kbd></button>
           <button id="select-session" class="new-session select-session"><span>≡</span> SELECT SESSION</button>
         </div>
+        <div class="sidebar-label"><span>SELECT MODE</span><span class="line"></span></div>
+        <fieldset class="mode-selector" aria-label="Select mode">
+          <label class="mode-choice">
+            <input type="radio" name="mode" value="plan">
+            <span>PLAN</span>
+          </label>
+          <label class="mode-choice">
+            <input type="radio" name="mode" value="normal" checked>
+            <span>NORMAL</span>
+          </label>
+        </fieldset>
         <div class="sidebar-label"><span>ACTIVE TASKS</span><span class="line"></span></div>
         <nav id="planning-task-list" class="session-list planning-task-list" aria-label="Tasks for this session"></nav>
         <footer class="sidebar-footer">
