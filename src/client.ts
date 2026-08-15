@@ -93,6 +93,9 @@ let agentSessionPollTimer: number | undefined;
 let agentSessionRefreshPending = false;
 let queuedMessage: { sessionId: string; content: string } | null = null;
 
+const ESC_ABORT_WINDOW_MS = 500;
+let lastEscapeForAbortAt = 0;
+
 const state: { session: Session | null; config: Config | null; streaming: boolean; aborting: boolean; controller: AbortController | null } = {
   session: null,
   config: null,
@@ -193,7 +196,7 @@ function wireEvents(): void {
     if (handlePlanModeDialogKeydown(event)) return;
     if (event.key === "Escape" && state.streaming && !state.session?.parentSessionId) {
       event.preventDefault();
-      abortCurrentSession();
+      handleEscapeAbort();
       return;
     }
     if (handleNewSessionDialogKeydown(event)) return;
@@ -202,7 +205,7 @@ function wireEvents(): void {
     if (handleSessionDialogKeydown(event)) return;
     if (event.key === "Escape" && !event.defaultPrevented && state.session && !state.session.parentSessionId) {
       event.preventDefault();
-      abortCurrentSession();
+      handleEscapeAbort();
       return;
     }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "r"
@@ -784,6 +787,17 @@ function clearPrompt(): void {
   hideCommandMenu();
   resetPromptHistory();
   resizePrompt();
+}
+
+function handleEscapeAbort(): void {
+  const now = performance.now();
+  if (now - lastEscapeForAbortAt > ESC_ABORT_WINDOW_MS) {
+    lastEscapeForAbortAt = now;
+    notify("Press Esc again to stop");
+    return;
+  }
+  lastEscapeForAbortAt = 0;
+  abortCurrentSession();
 }
 
 function abortCurrentSession(): void {
