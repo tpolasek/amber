@@ -1765,21 +1765,19 @@ function renderPlanningTasks(): void {
     const item = document.createElement("div");
     item.className = `planning-task-item ${task.status}`;
     item.title = task.description;
-    const marker = document.createElement("span");
-    marker.className = "planning-task-marker";
-    marker.textContent = task.status === "completed" ? "[✓]" : task.status === "in_progress" ? "[~]" : "[ ]";
     const copy = document.createElement("span");
     copy.className = "planning-task-copy";
     const subject = document.createElement("strong");
     subject.textContent = task.status === "in_progress" ? task.activeForm : task.subject;
     const meta = document.createElement("small");
+    const marker = task.status === "completed" ? "[✓]" : task.status === "in_progress" ? "[~]" : "[ ]";
     const status = task.status.replace("_", " ");
     const activeBlockers = task.blockedBy.filter((id) => !completedIds.has(id));
     const blockedBy = activeBlockers.length > 0 ? ` · blocked by ${activeBlockers.map((id) => `#${id}`).join(", ")}` : "";
     const owner = task.owner ? ` · ${task.owner}` : "";
-    meta.textContent = `#${task.id} · ${status}${blockedBy}${owner}`;
-    copy.append(subject, meta);
-    item.append(marker, copy);
+    meta.textContent = `${marker} #${task.id} · ${status}${blockedBy}${owner}`;
+    copy.append(meta, subject);
+    item.append(copy);
     elements.planningTaskList.append(item);
   }
 }
