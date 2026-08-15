@@ -40,6 +40,12 @@ interface AllowedPlanPrompt { tool: "Bash"; prompt: string }
 type PlanModeRequest =
   | { toolUseId: string; kind: "enter" }
   | { toolUseId: string; kind: "exit"; plan: string; planFilePath: string; allowedPrompts: AllowedPlanPrompt[] };
+interface SessionSnapshot {
+  session: Session;
+  active: boolean;
+  questionRequest?: AskUserQuestionRequest;
+  planModeRequest?: PlanModeRequest;
+}
 interface QuestionSelection { labels: Set<string>; other: string; otherSelected: boolean; focusIndex: number }
 interface CommandDefinition { name: "/add-dir" | "/cwd" | "/context" | "/clear" | "/compact" | "/fork" | "/name" | "/tasks"; description: string }
 interface DirectoryCompletion { value: string; absolutePath: string }
@@ -97,8 +103,8 @@ let questionSelections = new Map<string, QuestionSelection>();
 let questionSubmitting = false;
 let planModeRequest: PlanModeRequest | null = null;
 let planModeSubmitting = false;
-let agentSessionPollTimer: number | undefined;
-let agentSessionRefreshPending = false;
+let sessionRunPollTimer: number | undefined;
+let sessionRunRefreshPending = false;
 let queuedMessage: { sessionId: string; content: string } | null = null;
 
 const ESC_ABORT_WINDOW_MS = 500;
@@ -382,7 +388,7 @@ function openLandingDialog(): void {
   elements.newSessionDialog.hidden = true;
   elements.sessionDialog.hidden = true;
   elements.landingDialog.hidden = false;
-  syncAgentSessionPolling();
+  syncSessionRunPolling();
   elements.landingNewSession.focus();
 }
 
@@ -542,46 +548,83 @@ async function submitNewSession(): Promise<void> {
 
 async function loadSession(id: string): Promise<void> {
   if (state.streaming) return;
-  const { session } = await api<{ session: Session }>(`/api/sessions/${id}`);
-  state.session = session;
+  const snapshot = await api<SessionSnapshot>(`/api/sessions/${id}`);
+  decorateStreamingMessage(snapshot);
+  state.session = snapshot.session;
+  if (!snapshot.session.parentSessionId) setStreaming(snapshot.active);
+  syncPendingInteraction(snapshot);
   renderSession();
   renderSessionList();
   document.body.classList.remove("sidebar-open");
 }
 
-function syncAgentSessionPolling(): void {
+function syncSessionRunPolling(): void {
   const session = state.session;
-  const shouldPoll = Boolean(session?.parentSessionId)
-    && (session!.agentStatus === "running" || session!.messages.some((message) => message.status === "streaming"));
-  if (shouldPoll && agentSessionPollTimer === undefined) {
-    agentSessionPollTimer = window.setInterval(() => void refreshAgentSession(), 750);
-  } else if (!shouldPoll && agentSessionPollTimer !== undefined) {
-    window.clearInterval(agentSessionPollTimer);
-    agentSessionPollTimer = undefined;
+  const shouldPoll = Boolean(session) && (session!.parentSessionId
+    ? session!.agentStatus === "running" || session!.messages.some((message) => message.status === "streaming")
+    : state.streaming && state.controller === null);
+  if (shouldPoll && sessionRunPollTimer === undefined) {
+    sessionRunPollTimer = window.setInterval(() => void refreshSessionRun(), 750);
+  } else if (!shouldPoll && sessionRunPollTimer !== undefined) {
+    window.clearInterval(sessionRunPollTimer);
+    sessionRunPollTimer = undefined;
   }
 }
 
-async function refreshAgentSession(): Promise<void> {
+async function refreshSessionRun(): Promise<void> {
   const current = state.session;
-  if (!current?.parentSessionId || agentSessionRefreshPending) return;
-  agentSessionRefreshPending = true;
+  if (!current || sessionRunRefreshPending) return;
+  sessionRunRefreshPending = true;
   try {
-    const { session } = await api<{ session: Session }>(`/api/sessions/${current.id}`);
+    const snapshot = await api<SessionSnapshot>(`/api/sessions/${current.id}`);
     if (state.session?.id !== current.id) return;
-    if (session.updatedAt !== current.updatedAt) {
+    decorateStreamingMessage(snapshot);
+    const session = snapshot.session;
+    const detachedRootRun = !session.parentSessionId;
+    const wasStreaming = state.streaming;
+    if (detachedRootRun) setStreaming(snapshot.active);
+    syncPendingInteraction(snapshot);
+    if (session.updatedAt !== current.updatedAt || snapshot.active) {
       const distanceFromBottom = elements.transcript.scrollHeight
         - elements.transcript.scrollTop - elements.transcript.clientHeight;
       state.session = session;
       renderSession();
       if (distanceFromBottom < 80) scrollTranscriptToBottom();
     } else {
-      syncAgentSessionPolling();
+      syncSessionRunPolling();
     }
+    if (detachedRootRun && wasStreaming && !snapshot.active) sendQueuedMessage(session.id);
   } catch {
     // Keep the current snapshot visible during a transient refresh failure.
   } finally {
-    agentSessionRefreshPending = false;
+    sessionRunRefreshPending = false;
+    syncSessionRunPolling();
   }
+}
+
+function syncPendingInteraction(snapshot: SessionSnapshot): void {
+  if (snapshot.questionRequest) {
+    if (questionRequest?.toolUseId !== snapshot.questionRequest.toolUseId) {
+      openQuestionDialog(snapshot.questionRequest);
+    }
+  } else if (questionRequest) {
+    closeQuestionDialog();
+  }
+  if (snapshot.planModeRequest) {
+    if (planModeRequest?.toolUseId !== snapshot.planModeRequest.toolUseId) {
+      openPlanModeDialog(snapshot.planModeRequest);
+    }
+  } else if (planModeRequest) {
+    closePlanModeDialog();
+  }
+}
+
+function decorateStreamingMessage(snapshot: SessionSnapshot): void {
+  if (!snapshot.active) return;
+  const message = snapshot.session.messages.slice().reverse().find((candidate) =>
+    candidate.role === "assistant" && candidate.status === "streaming",
+  );
+  if (message) message.streamingThinking = Boolean(message.thinking) && !message.content;
 }
 
 let summaries: Summary[] = [];
@@ -683,6 +726,7 @@ async function sendMessage(queuedContent?: string): Promise<void> {
   state.controller = new AbortController();
   let assistantElement: HTMLElement | null = null;
   let assistantMessage: Message | null = null;
+  let detachedActive = false;
   try {
     const response = await fetch(`/api/sessions/${session.id}/messages`, {
       method: "POST",
@@ -762,13 +806,16 @@ async function sendMessage(queuedContent?: string): Promise<void> {
     });
   } catch (error) {
     if (!(error instanceof DOMException && error.name === "AbortError")) notify(messageFrom(error));
-    await refreshCurrentSession();
+    detachedActive = await refreshCurrentSession();
   } finally {
-    closeQuestionDialog();
-    closePlanModeDialog();
     state.controller = null;
-    setStreaming(false);
-    sendQueuedMessage(session.id);
+    setStreaming(detachedActive);
+    if (!detachedActive) {
+      closeQuestionDialog();
+      closePlanModeDialog();
+      sendQueuedMessage(session.id);
+    }
+    syncSessionRunPolling();
     await loadSessionList();
     elements.prompt.focus();
   }
@@ -1702,7 +1749,7 @@ function renderSession(): void {
   renderPlanningTasks();
   renderContextMeter();
   renderQueuedMessage();
-  syncAgentSessionPolling();
+  syncSessionRunPolling();
   elements.transcript.scrollTop = sameSession && !wasFollowingBottom
     ? previousScrollTop
     : elements.transcript.scrollHeight;
@@ -2137,13 +2184,19 @@ function updateElapsedToolStatuses(): void {
   }
 }
 
-async function refreshCurrentSession(): Promise<void> {
-  if (!state.session) return;
+async function refreshCurrentSession(): Promise<boolean> {
+  if (!state.session) return false;
   try {
-    const { session } = await api<{ session: Session }>(`/api/sessions/${state.session.id}`);
-    state.session = session;
+    const snapshot = await api<SessionSnapshot>(`/api/sessions/${state.session.id}`);
+    decorateStreamingMessage(snapshot);
+    state.session = snapshot.session;
+    syncPendingInteraction(snapshot);
     renderSession();
-  } catch { /* preserve the last visible state */ }
+    return snapshot.active;
+  } catch {
+    // Preserve the last visible state and keep polling: the server may still be running.
+    return state.streaming;
+  }
 }
 
 function setStreaming(streaming: boolean): void {

@@ -210,6 +210,12 @@ interface PendingQuestionRequest {
 export class AskUserQuestionManager {
   #pending = new Map<string, PendingQuestionRequest>();
 
+  pending(sessionId: string): { toolUseId: string; questions: AskUserQuestion[] } | undefined {
+    const pending = this.#pending.get(sessionId);
+    if (!pending) return undefined;
+    return { toolUseId: pending.toolUseId, questions: structuredClone(pending.questions) };
+  }
+
   waitForAnswers(
     sessionId: string,
     toolUseId: string,

@@ -1,6 +1,9 @@
+import type { Session } from "./types.js";
+
 interface ActiveSessionRun {
   parentSessionId?: string;
   controller: AbortController;
+  session?: Session;
 }
 
 interface SessionFamilyMember {
@@ -23,11 +26,21 @@ export class ActiveSessionRuns {
     return this.#runs.has(sessionId);
   }
 
-  register(sessionId: string, parentSessionId: string | undefined, controller: AbortController): void {
+  register(
+    sessionId: string,
+    parentSessionId: string | undefined,
+    controller: AbortController,
+    session?: Session,
+  ): void {
     this.#runs.set(sessionId, {
       controller,
       ...(parentSessionId ? { parentSessionId } : {}),
+      ...(session ? { session } : {}),
     });
+  }
+
+  session(sessionId: string): Session | undefined {
+    return this.#runs.get(sessionId)?.session;
   }
 
   unregister(sessionId: string, controller: AbortController): void {

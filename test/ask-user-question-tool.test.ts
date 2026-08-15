@@ -79,6 +79,10 @@ test("waits for the matching session answer and rejects declines", async () => {
   const manager = new AskUserQuestionManager();
   const controller = new AbortController();
   const pending = manager.waitForAnswers("session", "tool-1", questions, controller.signal);
+  const reconnectSnapshot = manager.pending("session");
+  assert.deepEqual(reconnectSnapshot, { toolUseId: "tool-1", questions });
+  reconnectSnapshot!.questions[0]!.question = "Changed only in the snapshot?";
+  assert.equal(manager.pending("session")?.questions[0]?.question, questions[0]?.question);
   assert.throws(() => manager.answer("session", "other-tool", {}), /no longer pending/);
   const submitted = {
     [questions[0]!.question]: "Backend",
@@ -86,6 +90,7 @@ test("waits for the matching session answer and rejects declines", async () => {
   };
   assert.deepEqual(manager.answer("session", "tool-1", submitted), submitted);
   assert.deepEqual(await pending, submitted);
+  assert.equal(manager.pending("session"), undefined);
 
   const declined = manager.waitForAnswers("session", "tool-2", questions, controller.signal);
   manager.decline("session", "tool-2");

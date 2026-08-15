@@ -34,6 +34,33 @@ test("unregister only removes the controller for the matching run", () => {
   assert.equal(current.signal.aborted, true);
 });
 
+test("exposes the current in-memory session while a run is active", () => {
+  const runs = new ActiveSessionRuns();
+  const controller = new AbortController();
+  const now = new Date().toISOString();
+  const session = {
+    id: "session",
+    title: "session",
+    createdAt: now,
+    updatedAt: now,
+    messages: [{
+      id: "assistant",
+      role: "assistant" as const,
+      content: "",
+      thinking: "first checkpoint",
+      createdAt: now,
+      status: "streaming" as const,
+    }],
+  };
+  runs.register(session.id, undefined, controller, session);
+
+  session.messages[0]!.thinking += " and current progress";
+  assert.equal(runs.session(session.id)?.messages[0]?.thinking, "first checkpoint and current progress");
+
+  runs.unregister(session.id, controller);
+  assert.equal(runs.session(session.id), undefined);
+});
+
 test("session abort stops only agent background tasks after aborting active runs", async () => {
   const runs = new ActiveSessionRuns();
   const root = new AbortController();

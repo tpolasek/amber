@@ -183,8 +183,10 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
 
   const sessionMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}$`));
   if (method === "GET" && sessionMatch?.[1]) {
-    const session = await store.get(sessionMatch[1]);
-    return session ? json(response, 200, { session }) : json(response, 404, { error: "Session not found" });
+    const session = activeSessions.session(sessionMatch[1]) ?? await store.get(sessionMatch[1]);
+    return session
+      ? json(response, 200, await sessionSnapshot(session))
+      : json(response, 404, { error: "Session not found" });
   }
   if (method === "DELETE" && sessionMatch?.[1]) {
     if (activeSessions.has(sessionMatch[1])) return json(response, 409, { error: "Wait for the current response to finish" });
@@ -393,10 +395,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   const shouldAutoName = shouldAutoNameSession(session);
 
   const controller = new AbortController();
-  request.on("aborted", () => controller.abort());
-  response.on("close", () => {
-    if (!response.writableEnded) controller.abort();
-  });
   const now = new Date().toISOString();
   const userMessage: Message = { id: randomUUID(), role: "user", content, createdAt: now, status: "complete" };
   let assistantMessage = createAssistantMessage(now);
@@ -411,7 +409,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   });
   sendEvent(response, "start", { userMessage, assistantMessage });
   const bashExecutor = new BashExecutor();
-  activeSessions.register(sessionId, session.parentSessionId, controller);
+  activeSessions.register(sessionId, session.parentSessionId, controller, session);
   const onAutomaticName = (title: string) => {
     if (!response.destroyed && !response.writableEnded) sendEvent(response, "session_named", { title });
   };
@@ -419,12 +417,21 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   if (existingNameRun) existingNameRun.listeners.add(onAutomaticName);
   else if (shouldAutoName) startAutomaticSessionName(session, onAutomaticName);
 
+  let lastSnapshotAt = 0;
+  let snapshotSave = Promise.resolve();
+  const checkpointSession = (force = false): Promise<void> => {
+    const now = Date.now();
+    if (!force && now - lastSnapshotAt < 250) return snapshotSave;
+    lastSnapshotAt = now;
+    const snapshot = structuredClone(session);
+    snapshotSave = snapshotSave.then(() => store.save(snapshot));
+    return snapshotSave;
+  };
   try {
     let allowedDirectories = sessionDirectories(session);
     const currentDirectory = sessionWorkingDirectory(session);
     const activeProvider = providerForSession(session);
     const toolLoopTracker = new ToolLoopTracker();
-    let lastAgentSnapshotAt = 0;
     for (;;) {
       const baseHistory = buildProviderHistory(session.messages, assistantMessage.id, session.compaction);
       const history = session.agentType
@@ -439,19 +446,14 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         if (event.type === "delta") {
           assistantMessage.content += event.text;
           sendEvent(response, "delta", { text: event.text });
-          if (session.parentSessionId && Date.now() - lastAgentSnapshotAt >= 500) {
-            lastAgentSnapshotAt = Date.now();
-            await store.save(session);
-          }
+          await checkpointSession();
         } else if (event.type === "thinking_delta") {
           assistantMessage.thinking = (assistantMessage.thinking ?? "") + event.thinking;
           sendEvent(response, "thinking_delta", { thinking: event.thinking });
-          if (session.parentSessionId && Date.now() - lastAgentSnapshotAt >= 500) {
-            lastAgentSnapshotAt = Date.now();
-            await store.save(session);
-          }
+          await checkpointSession();
         } else if (event.type === "thinking_signature_delta") {
           assistantMessage.thinkingSignature = (assistantMessage.thinkingSignature ?? "") + event.signature;
+          await checkpointSession();
         } else if (event.type === "tool_use_start") {
           const call: ToolCall = {
             id: event.id,
@@ -701,8 +703,12 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                   onOutput: (chunk) => {
                     call.output += chunk;
                     sendEvent(response, "tool_output", { messageId: assistantMessage.id, toolUseId: call.id, chunk });
+                    void checkpointSession().catch((error) => {
+                      console.error(`Could not checkpoint session ${sessionId}:`, error);
+                    });
                   },
                 });
+                await snapshotSave;
                 call.status = result.status;
                 call.output = result.output;
                 call.exitCode = result.exitCode;
@@ -847,6 +853,8 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       sendEvent(response, "continuation", { assistantMessage });
     }
   } catch (error) {
+    // A tool-output checkpoint may still be queued when an abort arrives.
+    await snapshotSave;
     if (assistantMessage.status === "streaming") {
       assistantMessage.status = "error";
       if (!assistantMessage.content) assistantMessage.content = "Response interrupted.";
@@ -1345,7 +1353,34 @@ function json(response: ServerResponse, status: number, body: unknown): void {
 }
 
 function sendEvent(response: ServerResponse, event: string, data: unknown): void {
+  if (response.destroyed || response.writableEnded) return;
   response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+async function sessionSnapshot(session: Session): Promise<Record<string, unknown>> {
+  const question = askUserQuestions.pending(session.id);
+  const pendingPlan = planModeApprovals.pending(session.id);
+  let planModeRequest: Record<string, unknown> | undefined;
+  if (pendingPlan?.kind === "enter") {
+    planModeRequest = pendingPlan;
+  } else if (pendingPlan?.kind === "exit" && session.planMode) {
+    const toolCall = session.messages
+      .flatMap((message) => message.toolCalls ?? [])
+      .find((call) => call.id === pendingPlan.toolUseId);
+    const { allowedPrompts } = parseExitPlanModeInput(toolCall?.input ?? {});
+    planModeRequest = {
+      ...pendingPlan,
+      plan: await readPlanSnapshot(session.planMode.planFilePath),
+      planFilePath: session.planMode.planFilePath,
+      allowedPrompts,
+    };
+  }
+  return {
+    session,
+    active: activeSessions.has(session.id),
+    ...(question ? { questionRequest: question } : {}),
+    ...(planModeRequest ? { planModeRequest } : {}),
+  };
 }
 
 async function serveFile(

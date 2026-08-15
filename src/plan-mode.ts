@@ -276,6 +276,12 @@ interface PendingPlanModeRequest {
 export class PlanModeApprovalManager {
   #pending = new Map<string, PendingPlanModeRequest>();
 
+  pending(sessionId: string): { toolUseId: string; kind: PlanModeRequestKind } | undefined {
+    const pending = this.#pending.get(sessionId);
+    if (!pending) return undefined;
+    return { toolUseId: pending.toolUseId, kind: pending.kind };
+  }
+
   waitForDecision(
     sessionId: string,
     toolUseId: string,

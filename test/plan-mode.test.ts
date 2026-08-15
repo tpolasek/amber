@@ -90,11 +90,13 @@ test("holds one matching approval request per session and retains rejection feed
   const manager = new PlanModeApprovalManager();
   const controller = new AbortController();
   const pending = manager.waitForDecision("session", "tool-1", "enter", controller.signal);
+  assert.deepEqual(manager.pending("session"), { toolUseId: "tool-1", kind: "enter" });
   assert.equal(manager.pendingKind("session", "tool-1"), "enter");
   assert.throws(() => manager.waitForDecision("session", "tool-2", "exit", controller.signal), /already has/);
   assert.throws(() => manager.decide("session", "stale", { approved: true }), /no longer pending/);
   assert.deepEqual(manager.decide("session", "tool-1", { approved: true }), { approved: true });
   assert.deepEqual(await pending, { approved: true });
+  assert.equal(manager.pending("session"), undefined);
 
   const rejected = manager.waitForDecision("session", "tool-2", "exit", controller.signal);
   manager.decide("session", "tool-2", { approved: false, feedback: "  Add rollback steps.  " });
