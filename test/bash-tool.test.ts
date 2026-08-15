@@ -46,6 +46,25 @@ test("runs Bash in an allowed directory and captures output", async () => {
   assert.match(result.statusDisplay.text, /^(?:\d+ms|\d+(?:\.\d)?s)$/);
 });
 
+test("does not leak Node watch dependency reporting into Bash descendants", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-bash-"));
+  const previous = process.env.WATCH_REPORT_DEPENDENCIES;
+  process.env.WATCH_REPORT_DEPENDENCIES = "1";
+  try {
+    const result = await new BashExecutor().run(
+      { command: "node -e 'process.stdout.write(process.env.WATCH_REPORT_DEPENDENCIES ?? \"unset\")'", timeoutMs: 2_000 },
+      [directory],
+      new AbortController().signal,
+      { onRunning: () => undefined, onOutput: () => undefined },
+    );
+    assert.equal(result.status, "complete");
+    assert.equal(result.output, "unset");
+  } finally {
+    if (previous === undefined) delete process.env.WATCH_REPORT_DEPENDENCIES;
+    else process.env.WATCH_REPORT_DEPENDENCIES = previous;
+  }
+});
+
 test("times Bash out and serializes concurrent calls within one executor", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-bash-"));
   const executor = new BashExecutor();

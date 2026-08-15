@@ -58,6 +58,13 @@ export interface BashHooks {
   onOutput: (chunk: string) => void;
 }
 
+export function bashChildEnvironment(): NodeJS.ProcessEnv {
+  const environment = { ...process.env };
+  // node --watch sets this for its direct child; nested Node processes must not inherit it.
+  delete environment.WATCH_REPORT_DEPENDENCIES;
+  return environment;
+}
+
 export class BashExecutor {
   #tail: Promise<void> = Promise.resolve();
 
@@ -136,7 +143,7 @@ function executeBash(
     const started = Date.now();
     const child = spawn("/bin/bash", ["-lc", input.command], {
       cwd: workingDirectory,
-      env: process.env,
+      env: bashChildEnvironment(),
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });

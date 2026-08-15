@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import type { BashInput } from "./bash-tool.js";
-import { resolveBashWorkingDirectory } from "./bash-tool.js";
+import { bashChildEnvironment, resolveBashWorkingDirectory } from "./bash-tool.js";
 
 const TASK_ID_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
 const MAX_TASK_STREAM_CHARACTERS = 200_000;
@@ -53,7 +53,7 @@ export class BackgroundTaskManager {
     const startedAt = new Date();
     const child = spawn("/bin/bash", ["-lc", input.command], {
       cwd: workingDirectory,
-      env: process.env,
+      env: bashChildEnvironment(),
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
