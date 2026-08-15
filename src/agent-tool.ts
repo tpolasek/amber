@@ -13,6 +13,9 @@ export interface AgentDefinition {
   whenToUse: string;
   systemPrompt: string;
   readOnly: boolean;
+  model?: string;
+  auth_key?: string;
+  auth_url?: string;
 }
 
 export const AGENT_TOOL_NAME = "Agent";

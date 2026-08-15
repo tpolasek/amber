@@ -8,6 +8,12 @@ interface AnthropicProviderOptions {
   baseUrl: string;
 }
 
+export interface ProviderOverrides {
+  model?: string;
+  auth_key?: string;
+  auth_url?: string;
+}
+
 const CLAUDE_CODE_BETAS = [
   "claude-code-20250219",
   "context-1m-2025-08-07",
@@ -139,18 +145,23 @@ export class AnthropicProvider implements LlmProvider {
 export function createProvider(
   environment: NodeJS.ProcessEnv,
   settings: Pick<AmberSettings, "auth_key" | "auth_url" | "default_model"> = {},
+  overrides: ProviderOverrides = {},
 ): LlmProvider {
+  const overrideAuthToken = configuredSetting(overrides.auth_key);
   const hasEnvironmentCredentials = environment.ANTHROPIC_AUTH_TOKEN !== undefined
     || environment.ANTHROPIC_API_KEY !== undefined;
-  const apiKey = configuredSetting(environment.ANTHROPIC_API_KEY);
-  const authToken = configuredSetting(environment.ANTHROPIC_AUTH_TOKEN)
+  const apiKey = overrideAuthToken ? undefined : configuredSetting(environment.ANTHROPIC_API_KEY);
+  const authToken = overrideAuthToken
+    ?? configuredSetting(environment.ANTHROPIC_AUTH_TOKEN)
     ?? (!hasEnvironmentCredentials ? configuredSetting(settings.auth_key) : undefined);
   if (!authToken && !apiKey) {
     throw new Error("Set auth_key in ~/.amber/settings.toml, ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_API_KEY before starting AMBER");
   }
-  const model = configuredSetting(environment.ANTHROPIC_MODEL ?? settings.default_model);
+  const model = configuredSetting(overrides.model)
+    ?? configuredSetting(environment.ANTHROPIC_MODEL ?? settings.default_model);
   if (!model) throw new Error("Set default_model in ~/.amber/settings.toml or ANTHROPIC_MODEL before starting AMBER");
-  const baseUrl = configuredSetting(environment.ANTHROPIC_BASE_URL ?? settings.auth_url)
+  const baseUrl = configuredSetting(overrides.auth_url)
+    ?? configuredSetting(environment.ANTHROPIC_BASE_URL ?? settings.auth_url)
     ?? "https://api.anthropic.com";
   return new AnthropicProvider({
     ...(apiKey ? { apiKey } : {}),

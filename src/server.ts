@@ -58,7 +58,7 @@ import {
   planModeSystemBlock,
   readPlanSnapshot,
 } from "./plan-mode.js";
-import type { ToolDefinition } from "./types.js";
+import type { LlmProvider, ToolDefinition } from "./types.js";
 import type { Message, Session, TokenUsage, ToolCall } from "./types.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
@@ -76,8 +76,12 @@ const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "127.0.0.1";
 const store = new SessionStore(dataDirectory, planDirectory);
 const settings = await loadSettings();
-const provider = createProvider(process.env, settings);
 const agentDefinitions = settings.agents;
+const provider = createProvider(process.env, settings);
+const agentProviders = new Map(agentDefinitions.map((definition) => [
+  definition.type,
+  createProvider(process.env, settings, definition),
+]));
 const claudeCodeTools = createClaudeCodeTools(agentDefinitions);
 const activeSessions = new ActiveSessionRuns();
 const backgroundTasks = new BackgroundTaskManager();
@@ -418,6 +422,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   try {
     let allowedDirectories = sessionDirectories(session);
     const currentDirectory = sessionWorkingDirectory(session);
+    const activeProvider = providerForSession(session);
     const toolLoopTracker = new ToolLoopTracker();
     let lastAgentSnapshotAt = 0;
     for (;;) {
@@ -427,9 +432,9 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         : injectClaudeCodeUserContext(baseHistory);
       const toolDrafts = new Map<number, { call: ToolCall; inputJson: string }>();
       let usage: Partial<TokenUsage> = {};
-      for await (const event of provider.stream(history, controller.signal, {
+      for await (const event of activeProvider.stream(history, controller.signal, {
         tools: sessionTools(session, approvalCapable),
-        system: sessionSystemPrompt(session, currentDirectory),
+        system: sessionSystemPrompt(session, currentDirectory, activeProvider.model),
       })) {
         if (event.type === "delta") {
           assistantMessage.content += event.text;
@@ -963,16 +968,24 @@ function sessionTools(session: Session, approvalCapable = true): ToolDefinition[
 function sessionSystemPrompt(
   session: Session,
   currentDirectory: string,
+  model: string,
 ): string | import("./types.js").ProviderSystemBlock[] {
   const system = !session.agentType
-    ? buildClaudeCodeSystemPrompt(currentDirectory, provider.model)
+    ? buildClaudeCodeSystemPrompt(currentDirectory, model)
     : buildClaudeCodeAgentSystemPrompt(
         currentDirectory,
-        provider.model,
+        model,
         getAgentDefinition(agentDefinitions, session.agentType).systemPrompt,
       );
   if (session.planMode?.active) system.push(planModeSystemBlock(session.planMode.planFilePath, Boolean(session.agentType)));
   return system;
+}
+
+function providerForSession(session: Session): LlmProvider {
+  if (!session.agentType) return provider;
+  const agentProvider = agentProviders.get(session.agentType);
+  if (!agentProvider) throw new Error(`Agent type '${session.agentType}' is no longer configured`);
+  return agentProvider;
 }
 
 function isPlanModeTool(name: string): boolean {
@@ -1006,6 +1019,7 @@ async function executeAgentCall(
     throwIfSessionAborted(signal);
     call.agentSessionId = child.id;
     call.agentType = input.subagentType;
+    call.agentModel = providerForSession(child).model;
     await persistParent();
     onUpdate(call);
     resultText = await runSessionPrompt(child.id, input.prompt, signal);
@@ -1282,7 +1296,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
       content: [
         `**Context · ${session.id}**`,
         "",
-        `- Model: \`${provider.model}\``,
+        `- Model: \`${providerForSession(session).model}\``,
         `- Active context: **${currentTokens.toLocaleString()} tokens** (cached + uncached input)`,
         `- Latest input / output: **${(latestUsage?.input ?? 0).toLocaleString()} / ${(latestUsage?.output ?? 0).toLocaleString()}**`,
         `- Session input: **${totalInput.toLocaleString()} tokens**`,

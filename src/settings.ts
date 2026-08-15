@@ -60,6 +60,12 @@ Rules:
   ],
 } as const;
 
+export const SETTINGS_TEMPLATE_SOURCE = `${stringify(SETTINGS_TEMPLATE).trimEnd()}
+# model = "<INSERT_AGENT_MODEL_HERE>"
+# auth_key = "<INSERT_AGENT_AUTH_KEY_HERE>"
+# auth_url = "<INSERT_AGENT_AUTH_URL_HERE>"
+`;
+
 export async function loadSettings(homeDirectory = homedir()): Promise<AmberSettings> {
   const settingsDirectory = join(homeDirectory, ".amber");
   const settingsPath = join(settingsDirectory, "settings.toml");
@@ -70,7 +76,7 @@ export async function loadSettings(homeDirectory = homedir()): Promise<AmberSett
     source = await readFile(settingsPath, "utf8");
   } catch (error) {
     if (!isNotFoundError(error)) throw error;
-    const initialSource = stringify(SETTINGS_TEMPLATE);
+    const initialSource = SETTINGS_TEMPLATE_SOURCE;
     try {
       await writeFile(settingsPath, initialSource, { encoding: "utf8", flag: "wx", mode: 0o600 });
     } catch (writeError) {
@@ -141,11 +147,19 @@ function parseAgentDefinitions(value: unknown, settingsPath: string): AgentDefin
     if (typeof agent.readOnly !== "boolean") {
       throw new Error(`${settingsPath}: agents[${index}].readOnly must be a boolean`);
     }
+    for (const key of ["model", "auth_key", "auth_url"] as const) {
+      if (agent[key] !== undefined && (typeof agent[key] !== "string" || !agent[key].trim())) {
+        throw new Error(`${settingsPath}: agents[${index}].${key} must be a non-empty string`);
+      }
+    }
     return {
       type: (agent.type as string).trim(),
       whenToUse: (agent.whenToUse as string).trim(),
       systemPrompt: agent.systemPrompt as string,
       readOnly: agent.readOnly,
+      ...(typeof agent.model === "string" ? { model: agent.model.trim() } : {}),
+      ...(typeof agent.auth_key === "string" ? { auth_key: agent.auth_key.trim() } : {}),
+      ...(typeof agent.auth_url === "string" ? { auth_url: agent.auth_url.trim() } : {}),
     };
   });
   const types = definitions.map((agent) => agent.type);

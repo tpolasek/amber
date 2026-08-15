@@ -11,9 +11,13 @@ test("creates a settings template on first load", async () => {
 
   const settings = await loadSettings(homeDirectory);
   const settingsPath = join(homeDirectory, ".amber", "settings.toml");
+  const source = await readFile(settingsPath, "utf8");
 
   assert.deepEqual(settings, SETTINGS_TEMPLATE);
-  assert.deepEqual(parse(await readFile(settingsPath, "utf8")), SETTINGS_TEMPLATE);
+  assert.deepEqual(parse(source), SETTINGS_TEMPLATE);
+  assert.match(source, /# model = "<INSERT_AGENT_MODEL_HERE>"/);
+  assert.match(source, /# auth_key = "<INSERT_AGENT_AUTH_KEY_HERE>"/);
+  assert.match(source, /# auth_url = "<INSERT_AGENT_AUTH_URL_HERE>"/);
   assert.equal((await stat(settingsPath)).mode & 0o777, 0o600);
 });
 
@@ -48,6 +52,33 @@ test("loads settings with no configured agents", async () => {
     auth_key: "saved-key",
     default_model: "saved-model",
     agents: [],
+  });
+});
+
+test("loads optional provider settings for each agent", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const settingsDirectory = join(homeDirectory, ".amber");
+  await mkdir(settingsDirectory);
+  await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+    agents: [{
+      type: "review",
+      whenToUse: "Review code.",
+      systemPrompt: "Review it.",
+      readOnly: true,
+      model: " agent-model ",
+      auth_key: " agent-token ",
+      auth_url: " https://agent.example.test/anthropic ",
+    }],
+  }), "utf8");
+
+  assert.deepEqual((await loadSettings(homeDirectory)).agents[0], {
+    type: "review",
+    whenToUse: "Review code.",
+    systemPrompt: "Review it.",
+    readOnly: true,
+    model: "agent-model",
+    auth_key: "agent-token",
+    auth_url: "https://agent.example.test/anthropic",
   });
 });
 

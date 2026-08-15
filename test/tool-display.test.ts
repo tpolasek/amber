@@ -6,6 +6,7 @@ import {
   isDiffOutput,
   shouldInlineToolSubject,
   shouldRenderToolOutput,
+  toolMetadata,
   toolStatusLabel,
   toolSubject,
 } from "../src/tool-display.js";
@@ -39,4 +40,9 @@ test("formats tool subjects and statuses independently of the DOM", () => {
     startedAt: "2026-01-01T00:00:00.000Z",
     statusDisplay: { text: "RUNNING", appendElapsed: true },
   }), Date.parse("2026-01-01T00:00:02.000Z")), "RUNNING 2.0s");
+  assert.equal(toolMetadata(call({
+    name: "Agent",
+    agentType: "general-purpose",
+    agentModel: "mimo-2.5",
+  })), "general-purpose · mimo-2.5");
 });

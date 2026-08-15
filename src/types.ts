@@ -29,6 +29,7 @@ export interface ToolCall {
   statusDisplay?: ToolStatusDisplay;
   agentSessionId?: string;
   agentType?: string;
+  agentModel?: string;
 }
 
 export interface Message {
