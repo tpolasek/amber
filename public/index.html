@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#100b03">
     <meta name="description" content="AMBER — browser terminal for persistent LLM agent sessions">
     <title>AMBER // Agent Terminal</title>
-    <link rel="stylesheet" href="/styles.css?v=42">
+    <link rel="stylesheet" href="/styles.css?v=43">
   </head>
   <body>
     <div class="noise" aria-hidden="true"></div>
@@ -58,10 +58,17 @@
         </section>
 
         <footer id="composer-shell" class="composer-shell">
+          <div id="queued-message" class="queued-message" role="status" hidden>
+            <strong>QUEUED</strong>
+            <span id="queued-message-content"></span>
+          </div>
           <form id="composer" class="composer">
             <div class="prompt-mark">❯</div>
             <textarea id="prompt" rows="1" maxlength="32000" placeholder="Enter a directive…" aria-label="Message"></textarea>
-            <button id="submit-button" type="submit" class="send-button"><span>SEND</span><i>↵</i></button>
+            <div class="composer-actions">
+              <button id="queue-button" type="button" class="send-button queue-button" hidden><span>QUEUED SEND</span><i>↵</i></button>
+              <button id="submit-button" type="submit" class="send-button"><span>SEND</span><i>↵</i></button>
+            </div>
           </form>
           <div id="command-menu" class="command-menu" role="listbox" aria-label="Slash commands" hidden></div>
           <div id="history-search" class="history-search" hidden>

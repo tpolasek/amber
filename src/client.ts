@@ -91,6 +91,7 @@ let planModeRequest: PlanModeRequest | null = null;
 let planModeSubmitting = false;
 let agentSessionPollTimer: number | undefined;
 let agentSessionRefreshPending = false;
+let queuedMessage: { sessionId: string; content: string } | null = null;
 
 const state: { session: Session | null; config: Config | null; streaming: boolean; aborting: boolean; controller: AbortController | null } = {
   session: null,
@@ -114,6 +115,9 @@ const elements = {
   historyQuery: required<HTMLInputElement>("history-query"),
   historyResults: required<HTMLElement>("history-results"),
   prompt: required<HTMLTextAreaElement>("prompt"),
+  queue: required<HTMLButtonElement>("queue-button"),
+  queuedMessage: required<HTMLElement>("queued-message"),
+  queuedMessageContent: required<HTMLElement>("queued-message-content"),
   submit: required<HTMLButtonElement>("submit-button"),
   newSession: required<HTMLButtonElement>("new-session"),
   selectSession: required<HTMLButtonElement>("select-session"),
@@ -274,6 +278,7 @@ function wireEvents(): void {
     if (state.streaming) abortCurrentSession();
     else void sendMessage();
   });
+  elements.queue.addEventListener("click", queueCurrentMessage);
   elements.prompt.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "r") {
       event.preventDefault();
@@ -318,7 +323,8 @@ function wireEvents(): void {
     }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      elements.composer.requestSubmit();
+      if (state.streaming) queueCurrentMessage();
+      else elements.composer.requestSubmit();
     }
   });
   elements.prompt.addEventListener("input", () => {
@@ -644,20 +650,17 @@ function handleSessionDialogKeydown(event: KeyboardEvent): boolean {
   return true;
 }
 
-async function sendMessage(): Promise<void> {
+async function sendMessage(queuedContent?: string): Promise<void> {
   const session = state.session;
-  const content = elements.prompt.value.trim();
+  const content = (queuedContent ?? elements.prompt.value).trim();
   if (!session || !content || state.streaming) return;
 
   const commandName = content.split(/\s+/, 1)[0]?.toLowerCase();
   if (commands.some((command) => command.name === commandName) || commandName === "/bashes") {
-    return runCommand(content);
+    return runCommand(content, queuedContent === undefined);
   }
 
-  elements.prompt.value = "";
-  hideCommandMenu();
-  resetPromptHistory();
-  resizePrompt();
+  if (queuedContent === undefined) clearPrompt();
   setStreaming(true);
   state.controller = new AbortController();
   let assistantElement: HTMLElement | null = null;
@@ -747,9 +750,40 @@ async function sendMessage(): Promise<void> {
     closePlanModeDialog();
     state.controller = null;
     setStreaming(false);
+    sendQueuedMessage(session.id);
     await loadSessionList();
     elements.prompt.focus();
   }
+}
+
+function queueCurrentMessage(): void {
+  const session = state.session;
+  const content = elements.prompt.value.trim();
+  if (!session || !state.streaming || !content) return;
+  queuedMessage = { sessionId: session.id, content };
+  clearPrompt();
+  renderQueuedMessage();
+}
+
+function sendQueuedMessage(sessionId: string): void {
+  if (!queuedMessage || queuedMessage.sessionId !== sessionId || state.session?.id !== sessionId) return;
+  const content = queuedMessage.content;
+  queuedMessage = null;
+  renderQueuedMessage();
+  void sendMessage(content);
+}
+
+function renderQueuedMessage(): void {
+  const queued = queuedMessage?.sessionId === state.session?.id ? queuedMessage : null;
+  elements.queuedMessage.hidden = queued === null;
+  elements.queuedMessageContent.textContent = queued?.content ?? "";
+}
+
+function clearPrompt(): void {
+  elements.prompt.value = "";
+  hideCommandMenu();
+  resetPromptHistory();
+  resizePrompt();
 }
 
 function abortCurrentSession(): void {
@@ -1301,14 +1335,11 @@ function messageElement(messageId: string): HTMLElement | null {
     .find((element) => element.dataset.messageId === messageId) ?? null;
 }
 
-async function runCommand(command: string): Promise<void> {
+async function runCommand(command: string, clearComposer = true): Promise<void> {
   const session = state.session;
   if (!session || state.streaming) return;
-  if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/compact") return runCompactCommand(command);
-  elements.prompt.value = "";
-  hideCommandMenu();
-  resetPromptHistory();
-  resizePrompt();
+  if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/compact") return runCompactCommand(command, clearComposer);
+  if (clearComposer) clearPrompt();
   setBusy(true);
   try {
     const result = await api<{ command: "add-dir" | "cwd" | "context" | "clear" | "compact" | "fork" | "name" | "tasks"; session: Session; directory?: string; cwdChanged?: boolean; previousSessionId?: string; tasks?: BackgroundTask[] }>(
@@ -1548,13 +1579,10 @@ function handleTasksDialogKeydown(event: KeyboardEvent): boolean {
   return true;
 }
 
-async function runCompactCommand(command: string): Promise<void> {
+async function runCompactCommand(command: string, clearComposer = true): Promise<void> {
   const session = state.session;
   if (!session || state.streaming) return;
-  elements.prompt.value = "";
-  hideCommandMenu();
-  resetPromptHistory();
-  resizePrompt();
+  if (clearComposer) clearPrompt();
   setStreaming(true);
   state.controller = new AbortController();
 
@@ -1602,6 +1630,7 @@ async function runCompactCommand(command: string): Promise<void> {
   } finally {
     state.controller = null;
     setStreaming(false);
+    sendQueuedMessage(session.id);
     await loadSessionList();
     elements.prompt.focus();
   }
@@ -1632,6 +1661,7 @@ function renderSession(): void {
   renderPlanMode();
   renderPlanningTasks();
   renderContextMeter();
+  renderQueuedMessage();
   syncAgentSessionPolling();
 }
 
@@ -2068,15 +2098,17 @@ async function refreshCurrentSession(): Promise<void> {
 function setStreaming(streaming: boolean): void {
   state.streaming = streaming;
   if (!streaming) state.aborting = false;
+  elements.queue.hidden = !streaming;
   elements.submit.classList.toggle("stop", streaming);
   elements.submit.querySelector("span")!.textContent = streaming ? "STOP" : "SEND";
-  elements.prompt.disabled = streaming;
+  elements.prompt.disabled = false;
   renderPlanMode();
 }
 
 function setBusy(busy: boolean): void {
   state.streaming = busy;
   if (!busy) state.aborting = false;
+  elements.queue.hidden = true;
   elements.submit.classList.remove("stop");
   elements.submit.querySelector("span")!.textContent = busy ? "WAIT" : "SEND";
   elements.prompt.disabled = busy;
@@ -2223,7 +2255,10 @@ function selectCommand(command: CommandDefinition, execute: boolean): void {
   elements.prompt.value = acceptsPath ? `${command.name} ` : command.name;
   hideCommandMenu();
   resizePrompt();
-  if (execute && !acceptsPath) elements.composer.requestSubmit();
+  if (execute && !acceptsPath) {
+    if (state.streaming) queueCurrentMessage();
+    else elements.composer.requestSubmit();
+  }
   else elements.prompt.focus();
 }
 
