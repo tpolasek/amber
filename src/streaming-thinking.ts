@@ -1,4 +1,5 @@
 export const STREAMING_THINKING_TICK_MS = 50;
+export const STREAMING_THINKING_BOTTOM_THRESHOLD_PX = 8;
 const STREAMING_THINKING_MIN_WPS = 5;
 const STREAMING_THINKING_MAX_WPS = 120;
 const STREAMING_THINKING_DEFAULT_WPS = 30;
@@ -50,6 +51,23 @@ export class StreamingThinkingReveal {
     if (this.intervalId === null) return;
     clearInterval(this.intervalId);
     this.intervalId = null;
+  }
+}
+
+export class BottomScrollPin {
+  private followingBottom = true;
+
+  update(scrollTop: number, clientHeight: number, scrollHeight: number): void {
+    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+    this.followingBottom = distanceFromBottom <= STREAMING_THINKING_BOTTOM_THRESHOLD_PX;
+  }
+
+  shouldFollowBottom(): boolean {
+    return this.followingBottom;
+  }
+
+  reset(): void {
+    this.followingBottom = true;
   }
 }
 

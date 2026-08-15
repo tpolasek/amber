@@ -1,4 +1,4 @@
-import { StreamingThinkingReveal } from "./streaming-thinking.js";
+import { BottomScrollPin, StreamingThinkingReveal } from "./streaming-thinking.js";
 import {
   compactHeaderPath,
   formatDuration,
@@ -68,7 +68,15 @@ let historyDraft = "";
 let historyMatches: string[] = [];
 let selectedHistoryMatch = 0;
 const toolOutputDisclosurePreferences = new Map<string, boolean>();
-const streamingThinkingReveals = new WeakMap<HTMLElement, StreamingThinkingReveal>();
+interface StreamingThinkingState {
+  reveal: StreamingThinkingReveal;
+  container: HTMLElement;
+  scrollPin: BottomScrollPin;
+  onScroll: () => void;
+}
+const streamingThinkingStates = new WeakMap<HTMLElement, StreamingThinkingState>();
+const transcriptScrollPin = new BottomScrollPin();
+let renderedTranscriptSessionId: string | null = null;
 let tasksDialogTasks: BackgroundTask[] = [];
 let tasksDialogSelection = 0;
 let tasksDialogDetailId: string | null = null;
@@ -276,6 +284,13 @@ function wireEvents(): void {
   });
   elements.toggleSidebar.addEventListener("click", () => document.body.classList.add("sidebar-open"));
   elements.closeSidebar.addEventListener("click", () => document.body.classList.remove("sidebar-open"));
+  elements.transcript.addEventListener("scroll", () => {
+    transcriptScrollPin.update(
+      elements.transcript.scrollTop,
+      elements.transcript.clientHeight,
+      elements.transcript.scrollHeight,
+    );
+  }, { passive: true });
   elements.composer.addEventListener("submit", (event) => {
     event.preventDefault();
     if (state.streaming) abortCurrentSession();
@@ -1658,12 +1673,23 @@ function renderConfig(): void {
 }
 
 function renderSession(): void {
+  const session = state.session;
+  const sameSession = session?.id === renderedTranscriptSessionId;
+  const previousScrollTop = elements.transcript.scrollTop;
+  const wasFollowingBottom = transcriptScrollPin.shouldFollowBottom();
   elements.transcript.querySelectorAll<HTMLElement>(".message").forEach((element) => {
     stopStreamingThinkingReveal(element);
     element.remove();
   });
-  const session = state.session;
-  if (!session) return;
+  if (!session) {
+    renderedTranscriptSessionId = null;
+    transcriptScrollPin.reset();
+    return;
+  }
+  if (!sameSession) {
+    renderedTranscriptSessionId = session.id;
+    transcriptScrollPin.reset();
+  }
   elements.composerShell.hidden = Boolean(session.parentSessionId);
   elements.emptyState.hidden = session.messages.length > 0;
   for (const message of session.messages) {
@@ -1677,6 +1703,9 @@ function renderSession(): void {
   renderContextMeter();
   renderQueuedMessage();
   syncAgentSessionPolling();
+  elements.transcript.scrollTop = sameSession && !wasFollowingBottom
+    ? previousScrollTop
+    : elements.transcript.scrollHeight;
 }
 
 function renderPlanMode(): void {
@@ -1968,28 +1997,38 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
 }
 
 function updateStreamingThinkingReveal(element: HTMLElement, container: HTMLElement, thinking: string): void {
-  let reveal = streamingThinkingReveals.get(element);
-  if (!reveal) {
+  let state = streamingThinkingStates.get(element);
+  if (!state) {
     container.replaceChildren();
-    reveal = new StreamingThinkingReveal((displayed) => {
+    const scrollPin = new BottomScrollPin();
+    const onScroll = () => scrollPin.update(container.scrollTop, container.clientHeight, container.scrollHeight);
+    container.addEventListener("scroll", onScroll, { passive: true });
+    const reveal = new StreamingThinkingReveal((displayed) => {
       if (!element.isConnected) {
         stopStreamingThinkingReveal(element);
         return;
       }
       container.innerHTML = markdown.render(displayed) + '<span class="cursor-block"></span>';
+      if (scrollPin.shouldFollowBottom()) {
+        requestAnimationFrame(() => {
+          if (scrollPin.shouldFollowBottom() && element.isConnected) container.scrollTop = container.scrollHeight;
+        });
+      }
       scrollTranscriptToBottom();
     });
-    streamingThinkingReveals.set(element, reveal);
+    state = { reveal, container, scrollPin, onScroll };
+    streamingThinkingStates.set(element, state);
     reveal.start();
   }
-  reveal.update(thinking);
+  state.reveal.update(thinking);
 }
 
 function stopStreamingThinkingReveal(element: HTMLElement): void {
-  const reveal = streamingThinkingReveals.get(element);
-  if (!reveal) return;
-  reveal.stop();
-  streamingThinkingReveals.delete(element);
+  const state = streamingThinkingStates.get(element);
+  if (!state) return;
+  state.reveal.stop();
+  state.container.removeEventListener("scroll", state.onScroll);
+  streamingThinkingStates.delete(element);
 }
 
 function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
@@ -2389,8 +2428,11 @@ function setPromptValue(value: string): void {
 }
 
 function scrollTranscriptToBottom(): void {
+  if (!transcriptScrollPin.shouldFollowBottom()) return;
   requestAnimationFrame(() => {
-    elements.transcript.scrollTop = elements.transcript.scrollHeight;
+    if (transcriptScrollPin.shouldFollowBottom()) {
+      elements.transcript.scrollTop = elements.transcript.scrollHeight;
+    }
   });
 }
 

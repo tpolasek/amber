@@ -180,7 +180,7 @@ button { color: inherit; }
 .message-thinking.streaming-thinking { margin: 0 0 7px; border: 0; background: transparent; }
 .message-thinking.streaming-thinking summary { display: flex; justify-content: flex-start; gap: 6px; padding: 0 0 4px; color: var(--amber-dim); font-style: italic; letter-spacing: 0; pointer-events: none; }
 .message-thinking.streaming-thinking summary::before { content: "∴"; }
-.message-thinking.streaming-thinking .thinking-content { max-height: none; overflow: visible; padding: 0 0 0 2ch; border: 0; color: var(--amber-dim); }
+.message-thinking.streaming-thinking .thinking-content { max-height: min(320px, 42vh); overflow-y: auto; overscroll-behavior: contain; padding: 0 7px 0 2ch; border: 0; color: var(--amber-dim); }
 .message-thinking.streaming-thinking .thinking-content > :first-child { margin-top: 0; }
 .message-thinking.streaming-thinking .cursor-block { background: var(--amber-dim); box-shadow: 0 0 7px var(--amber-dim); }
 .message-tools[hidden] { display: none; }

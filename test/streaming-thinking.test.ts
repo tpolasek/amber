@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   advanceStreamingWord,
+  BottomScrollPin,
   countStreamingWords,
   StreamingThinkingReveal,
 } from "../src/streaming-thinking.js";
@@ -27,4 +28,15 @@ test("reveals buffered thinking smoothly without exposing partial words", () => 
 
   reveal.tick();
   assert.equal(frames.at(-1), "one two three");
+});
+
+test("streaming thinking follows the bottom until the user scrolls away and returns", () => {
+  const pin = new BottomScrollPin();
+  assert.equal(pin.shouldFollowBottom(), true);
+
+  pin.update(120, 200, 500);
+  assert.equal(pin.shouldFollowBottom(), false);
+
+  pin.update(293, 200, 500);
+  assert.equal(pin.shouldFollowBottom(), true);
 });
