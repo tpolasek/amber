@@ -35,6 +35,14 @@ export class StreamingThinkingReveal {
     this.lastSample = { length: thinking.length, time: now };
   }
 
+  resume(thinking: string, now = Date.now()): void {
+    this.fullText = thinking;
+    this.displayedLength = thinking.length;
+    this.credit = 0;
+    this.lastSample = { length: thinking.length, time: now };
+    this.onReveal(thinking);
+  }
+
   tick(elapsedMs = STREAMING_THINKING_TICK_MS): void {
     if (this.displayedLength >= this.fullText.length) return;
     this.credit += (this.rate * elapsedMs) / 1_000;

@@ -24,7 +24,7 @@ interface TokenUsage { input: number; output: number }
 type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
 interface ToolStatusDisplay { text: string; appendElapsed?: boolean }
 interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string; statusDisplay?: ToolStatusDisplay; agentSessionId?: string; agentType?: string; agentModel?: string }
-interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; streamingThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "compact-banner" | "tool-result"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean }
+interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; streamingThinking?: boolean; resyncedThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "compact-banner" | "tool-result"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean }
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
 type PlanningTaskStatus = "pending" | "in_progress" | "completed";
 interface PlanningTask { id: string; subject: string; description: string; activeForm: string; status: PlanningTaskStatus; owner: string; blocks: string[]; blockedBy: string[]; metadata: Record<string, unknown> }
@@ -584,15 +584,7 @@ async function refreshSessionRun(): Promise<void> {
     const wasStreaming = state.streaming;
     if (detachedRootRun) setStreaming(snapshot.active);
     syncPendingInteraction(snapshot);
-    if (session.updatedAt !== current.updatedAt || snapshot.active) {
-      const distanceFromBottom = elements.transcript.scrollHeight
-        - elements.transcript.scrollTop - elements.transcript.clientHeight;
-      state.session = session;
-      renderSession();
-      if (distanceFromBottom < 80) scrollTranscriptToBottom();
-    } else {
-      syncSessionRunPolling();
-    }
+    updateRenderedSession(session);
     if (detachedRootRun && wasStreaming && !snapshot.active) sendQueuedMessage(session.id);
   } catch {
     // Keep the current snapshot visible during a transient refresh failure.
@@ -624,7 +616,10 @@ function decorateStreamingMessage(snapshot: SessionSnapshot): void {
   const message = snapshot.session.messages.slice().reverse().find((candidate) =>
     candidate.role === "assistant" && candidate.status === "streaming",
   );
-  if (message) message.streamingThinking = Boolean(message.thinking) && !message.content;
+  if (message) {
+    message.streamingThinking = Boolean(message.thinking) && !message.content;
+    message.resyncedThinking = message.streamingThinking;
+  }
 }
 
 let summaries: Summary[] = [];
@@ -1755,6 +1750,55 @@ function renderSession(): void {
     : elements.transcript.scrollHeight;
 }
 
+function updateRenderedSession(session: Session): void {
+  if (renderedTranscriptSessionId !== session.id) {
+    state.session = session;
+    renderSession();
+    return;
+  }
+
+  const previousScrollTop = elements.transcript.scrollTop;
+  const wasFollowingBottom = transcriptScrollPin.shouldFollowBottom();
+  state.session = session;
+  const visibleMessages = session.messages.filter((message) => message.kind !== "tool-result");
+  const visibleIds = new Set(visibleMessages.map((message) => message.id));
+  elements.transcript.querySelectorAll<HTMLElement>(".message").forEach((element) => {
+    if (element.dataset.messageId && visibleIds.has(element.dataset.messageId)) return;
+    stopStreamingThinkingReveal(element);
+    element.remove();
+  });
+  for (const message of visibleMessages) {
+    let element = elements.transcript.querySelector<HTMLElement>(
+      `.message[data-message-id="${CSS.escape(message.id)}"]`,
+    );
+    if (element) updateMessage(element, message);
+    else element = appendMessage(message);
+  }
+  const renderedMessages = [...elements.transcript.querySelectorAll<HTMLElement>(".message")];
+  const orderChanged = renderedMessages.some((element, index) =>
+    element.dataset.messageId !== visibleMessages[index]?.id);
+  if (orderChanged) {
+    // Moving an existing node preserves its streaming reveal state while also
+    // keeping newly discovered messages in exact transcript order.
+    for (const message of visibleMessages) {
+      const element = elements.transcript.querySelector<HTMLElement>(
+        `.message[data-message-id="${CSS.escape(message.id)}"]`,
+      );
+      if (element) elements.transcript.append(element);
+    }
+  }
+
+  elements.composerShell.hidden = Boolean(session.parentSessionId);
+  elements.emptyState.hidden = session.messages.length > 0;
+  renderHeader();
+  renderPlanMode();
+  renderPlanningTasks();
+  renderContextMeter();
+  renderQueuedMessage();
+  syncSessionRunPolling();
+  elements.transcript.scrollTop = wasFollowingBottom ? elements.transcript.scrollHeight : previousScrollTop;
+}
+
 function renderPlanMode(): void {
   const session = state.session;
   const planMode = state.session?.planMode;
@@ -1998,7 +2042,12 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
     thinking.classList.toggle("streaming-thinking", activelyThinking);
     thinkingLabel.textContent = activelyThinking ? "Thinking…" : "Thinking";
     if (activelyThinking) {
-      updateStreamingThinkingReveal(element, thinkingContent, message.thinking ?? "");
+      updateStreamingThinkingReveal(
+        element,
+        thinkingContent,
+        message.thinking ?? "",
+        message.resyncedThinking === true,
+      );
     } else {
       stopStreamingThinkingReveal(element);
       thinkingContent.innerHTML = markdown.render(message.thinking ?? "");
@@ -2043,7 +2092,12 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
   });
 }
 
-function updateStreamingThinkingReveal(element: HTMLElement, container: HTMLElement, thinking: string): void {
+function updateStreamingThinkingReveal(
+  element: HTMLElement,
+  container: HTMLElement,
+  thinking: string,
+  resumeExisting: boolean,
+): void {
   let state = streamingThinkingStates.get(element);
   if (!state) {
     container.replaceChildren();
@@ -2065,7 +2119,10 @@ function updateStreamingThinkingReveal(element: HTMLElement, container: HTMLElem
     });
     state = { reveal, container, scrollPin, onScroll };
     streamingThinkingStates.set(element, state);
+    if (resumeExisting) reveal.resume(thinking);
+    else reveal.update(thinking);
     reveal.start();
+    return;
   }
   state.reveal.update(thinking);
 }
@@ -2189,9 +2246,8 @@ async function refreshCurrentSession(): Promise<boolean> {
   try {
     const snapshot = await api<SessionSnapshot>(`/api/sessions/${state.session.id}`);
     decorateStreamingMessage(snapshot);
-    state.session = snapshot.session;
     syncPendingInteraction(snapshot);
-    renderSession();
+    updateRenderedSession(snapshot.session);
     return snapshot.active;
   } catch {
     // Preserve the last visible state and keep polling: the server may still be running.

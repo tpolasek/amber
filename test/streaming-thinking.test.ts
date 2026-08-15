@@ -30,6 +30,18 @@ test("reveals buffered thinking smoothly without exposing partial words", () => 
   assert.equal(frames.at(-1), "one two three");
 });
 
+test("resumes from an existing thinking snapshot without replaying it", () => {
+  const frames: string[] = [];
+  const reveal = new StreamingThinkingReveal((displayed) => frames.push(displayed));
+  reveal.resume("one two", 0);
+  assert.deepEqual(frames, ["one two"]);
+
+  reveal.update("one two three", 1_000);
+  reveal.tick(1_000);
+  assert.equal(frames.at(-1), "one two three");
+  assert.equal(frames.includes("one"), false);
+});
+
 test("streaming thinking follows the bottom until the user scrolls away and returns", () => {
   const pin = new BottomScrollPin();
   assert.equal(pin.shouldFollowBottom(), true);
