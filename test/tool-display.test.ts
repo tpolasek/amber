@@ -32,6 +32,9 @@ test("formats tool subjects and statuses independently of the DOM", () => {
   assert.equal(toolSubject(call({ input: { command: "npm test" } })), "npm test");
   assert.match(toolSubject(call({ name: "EnterPlanMode" })), /begin planning/);
   assert.match(toolSubject(call({ name: "ExitPlanMode" })), /Review/);
+  assert.equal(toolSubject(call({ name: "Glob", input: { pattern: "**/*.ts" } })), "**/*.ts");
+  assert.equal(toolSubject(call({ name: "Glob", input: { pattern: "*.md", path: "docs" } })), "*.md in docs");
+  assert.equal(toolSubject(call({ name: "Glob", input: {} })), "Preparing glob pattern…");
   assert.equal(shouldInlineToolSubject("npm test"), true);
   assert.equal(shouldInlineToolSubject("first\nsecond"), false);
   assert.equal(toolStatusLabel(call({ status: "running" })), "RUNNING…");

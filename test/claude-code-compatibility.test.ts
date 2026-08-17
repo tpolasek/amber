@@ -42,12 +42,13 @@ test("injects the verified reminders before only the first user prompt", () => {
   assert.equal(messages[2]?.content, "again");
 });
 
-test("advertises the thirteen Amber tools in Claude Code order", () => {
+test("advertises the fourteen Amber tools in Claude Code order", () => {
   assert.deepEqual(CLAUDE_CODE_TOOLS.map((tool) => tool.name), [
     "Agent",
     "AskUserQuestion",
     "Bash",
     "Edit",
+    "Glob",
     "Grep",
     "Read",
     "TaskCreate",
@@ -84,7 +85,7 @@ test("builds the verified three-block general agent prompt", () => {
 test("structures an agent prompt as one text block and uses the shared child tools", () => {
   const messages = structureClaudeCodeUserMessages([{ role: "user", content: "Find the PID" }]);
   assert.deepEqual(messages, [{ role: "user", content: [{ type: "text", text: "Find the PID" }] }]);
-  assert.deepEqual(CLAUDE_CODE_AGENT_TOOLS.map((tool) => tool.name), ["Bash", "Edit", "Grep", "Read", "Write"]);
+  assert.deepEqual(CLAUDE_CODE_AGENT_TOOLS.map((tool) => tool.name), ["Bash", "Edit", "Glob", "Grep", "Read", "Write"]);
 });
 
 test("advertises exactly one browser plan control for the active mode", () => {

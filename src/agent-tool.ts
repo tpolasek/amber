@@ -31,7 +31,7 @@ export function createAgentTool(definitions: readonly AgentDefinition[]): ToolDe
       `The Agent tool launches a specialized agent in a persisted Amber sub-session. Each invocation starts fresh and returns one final message. If subagent_type is omitted, ${defaultAgentType} is used.`,
       "",
       "Available agent types and the tools they have access to:",
-      ...definitions.map((agent) => `- ${agent.type}: ${agent.whenToUse} (Tools: ${agent.readOnly ? "Bash, Grep, Read" : "All tools"})`),
+      ...definitions.map((agent) => `- ${agent.type}: ${agent.whenToUse} (Tools: ${agent.readOnly ? "Bash, Glob, Grep, Read" : "All tools"})`),
       "",
       "Always include a short description (3-5 words). Brief the agent like a smart colleague who has not seen this conversation, and clearly say whether it should write code or only research.",
       "Launch multiple agents concurrently whenever possible by returning multiple Agent tool uses in a single response. Amber starts all Agent calls from that response in parallel.",

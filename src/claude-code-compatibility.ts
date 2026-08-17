@@ -41,7 +41,8 @@ export function toolsForPlanMode(
 }
 
 export const CLAUDE_CODE_AGENT_TOOLS = catalogTools.filter((tool) =>
-  tool.name === "Bash" || tool.name === "Edit" || tool.name === "Grep" || tool.name === "Read" || tool.name === "Write"
+  tool.name === "Bash" || tool.name === "Edit" || tool.name === "Glob" || tool.name === "Grep" || tool.name === "Read"
+    || tool.name === "Write"
 );
 
 export function buildClaudeCodeSystemPrompt(currentDirectory: string, model: string): ProviderSystemBlock[] {

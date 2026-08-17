@@ -10,7 +10,7 @@ const MAX_GREP_OUTPUT_CHARACTERS = 10_000_000;
 const MAX_PATTERN_CHARACTERS = 10_000;
 
 // Version control system directories excluded from searches because they add noise.
-const VCS_DIRECTORIES_TO_EXCLUDE = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"] as const;
+export const VCS_DIRECTORIES_TO_EXCLUDE = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"] as const;
 
 // Default cap on grep results when head_limit is unspecified. Unbounded content-mode
 // greps can exhaust the conversation context. Pass head_limit=0 explicitly for unlimited.
@@ -216,7 +216,7 @@ interface RipgrepRun {
   stderr: string;
 }
 
-function runRipgrep(args: string[], searchPath: string, signal: AbortSignal): Promise<RipgrepRun> {
+export function runRipgrep(args: string[], searchPath: string, signal: AbortSignal): Promise<RipgrepRun> {
   return new Promise((resolveRun, reject) => {
     // The search path may be a single file; processes can only start in directories.
     const child = spawn("rg", args, {

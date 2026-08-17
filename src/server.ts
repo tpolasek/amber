@@ -23,6 +23,7 @@ import {
 import { executePlanningTaskTool, PLANNING_TASK_TOOLS } from "./planning-task-tools.js";
 import { executeFileTool, FILE_TOOLS } from "./file-tools.js";
 import { executeGrep, GREP_TOOL, parseGrepInput } from "./grep-tool.js";
+import { executeGlob, GLOB_TOOL, parseGlobInput } from "./glob-tool.js";
 import { completeDirectories, completeDirectoryRoots } from "./directory-completion.js";
 import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
 import { AGENT_TOOL_NAME, getAgentDefinition, parseAgentInput, startAgentRuns } from "./agent-tool.js";
@@ -880,6 +881,29 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             }
             call.durationMs = Date.now() - started;
             call.completedAt = new Date().toISOString();
+          } else if (call.name === GLOB_TOOL.name) {
+            const started = Date.now();
+            call.status = "running";
+            call.startedAt = new Date(started).toISOString();
+            sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+            try {
+              const result = await executeGlob(
+                parseGlobInput(call.input),
+                allowedDirectories,
+                currentDirectory,
+                controller.signal,
+              );
+              call.status = "complete";
+              call.output = result.output;
+              call.workingDirectory = result.workingDirectory;
+              resultText = result.resultText;
+            } catch (error) {
+              call.status = "error";
+              call.output = errorMessage(error);
+              resultText = call.output;
+            }
+            call.durationMs = Date.now() - started;
+            call.completedAt = new Date().toISOString();
           } else {
             call.status = "error";
             call.output = `Unknown tool: ${call.name}`;
@@ -1032,7 +1056,9 @@ function sessionTools(session: Session, approvalCapable = true): ToolDefinition[
   if (session.agentType) {
     const definition = getAgentDefinition(agentDefinitions, session.agentType);
     return session.planMode?.active || definition.readOnly
-      ? CLAUDE_CODE_AGENT_TOOLS.filter((tool) => tool.name === "Bash" || tool.name === "Grep" || tool.name === "Read")
+      ? CLAUDE_CODE_AGENT_TOOLS.filter((tool) =>
+        tool.name === "Bash" || tool.name === "Glob" || tool.name === "Grep" || tool.name === "Read"
+      )
       : CLAUDE_CODE_AGENT_TOOLS;
   }
   return toolsForPlanMode(claudeCodeTools, session.planMode?.active === true, approvalCapable);
