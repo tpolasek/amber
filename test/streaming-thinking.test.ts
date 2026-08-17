@@ -63,7 +63,10 @@ test("programmatic bottom scroll stays pinned when content lands before the scro
   pin.update(300, 200, 700);
   assert.equal(pin.shouldFollowBottom(), true);
 
-  pin.update(300, 200, 900);
+  // The next frame scrolls again against the grown content and stays pinned.
+  element.scrollHeight = 900;
+  pin.scrollToBottom(element);
+  pin.update(700, 200, 900);
   assert.equal(pin.shouldFollowBottom(), true);
 });
 
@@ -76,5 +79,26 @@ test("user scrolling away from a programmatic bottom scroll still unpins", () =>
   assert.equal(pin.shouldFollowBottom(), false);
 
   pin.update(300, 200, 500);
+  assert.equal(pin.shouldFollowBottom(), true);
+});
+
+test("a later user scroll through the stale programmatic position does not re-pin", () => {
+  const pin = new BottomScrollPin();
+  const element = { scrollTop: 0, scrollHeight: 500, clientHeight: 200 };
+  pin.scrollToBottom(element);
+
+  // Our scroll event lands on the recorded position and consumes it.
+  pin.update(300, 200, 500);
+  assert.equal(pin.shouldFollowBottom(), true);
+
+  // The user scrolls away while content keeps growing.
+  pin.update(100, 200, 700);
+  assert.equal(pin.shouldFollowBottom(), false);
+
+  // Scrolling back down through the old recorded position must stay unpinned.
+  pin.update(300, 200, 900);
+  assert.equal(pin.shouldFollowBottom(), false);
+
+  pin.update(700, 200, 900);
   assert.equal(pin.shouldFollowBottom(), true);
 });

@@ -71,6 +71,12 @@ export function toolSubject(call: ToolCall): string {
     const taskId = call.input.task_id ?? call.input.shell_id;
     return typeof taskId === "string" ? taskId : "Preparing task ID…";
   }
+  if (call.name === "Grep") {
+    const pattern = typeof call.input.pattern === "string" ? call.input.pattern : "";
+    if (!pattern) return "Preparing search pattern…";
+    const path = typeof call.input.path === "string" ? call.input.path.trim() : "";
+    return path ? `${pattern} in ${path}` : pattern;
+  }
   return call.filePath ?? (typeof call.input.file_path === "string" ? call.input.file_path : "Preparing file path…");
 }
 

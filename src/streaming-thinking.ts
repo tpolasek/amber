@@ -67,10 +67,15 @@ export class BottomScrollPin {
   private programmaticScrollTop: number | null = null;
 
   update(scrollTop: number, clientHeight: number, scrollHeight: number): void {
-    if (this.programmaticScrollTop !== null && Math.abs(scrollTop - this.programmaticScrollTop) < 1) {
-      // Scroll events dispatch a frame after the scrollTop assignment, so content
-      // streamed in meanwhile can make the distance look large even though this is
-      // our own scroll-to-bottom rather than the user scrolling away.
+    // Scroll events dispatch a frame after the scrollTop assignment and are coalesced
+    // per frame, so this event corresponds to the latest assignment: if the position
+    // matches it, this is our own scroll-to-bottom (content streamed in meanwhile can
+    // make the distance look large) rather than the user scrolling away. Consume the
+    // record either way so a later user scroll through the stale position cannot be
+    // mistaken for ours.
+    const programmaticScrollTop = this.programmaticScrollTop;
+    this.programmaticScrollTop = null;
+    if (programmaticScrollTop !== null && Math.abs(scrollTop - programmaticScrollTop) < 1) {
       this.followingBottom = true;
       return;
     }
