@@ -211,15 +211,15 @@ async function initialize(): Promise<void> {
 function wireEvents(): void {
   document.addEventListener("keydown", (event) => {
     if (handlePlanModeDialogKeydown(event)) return;
+    if (handleNewSessionDialogKeydown(event)) return;
+    if (handleQuestionDialogKeydown(event)) return;
+    if (handleTasksDialogKeydown(event)) return;
+    if (handleSessionDialogKeydown(event)) return;
     if (event.key === "Escape" && state.streaming && !state.session?.parentSessionId) {
       event.preventDefault();
       handleEscapeAbort();
       return;
     }
-    if (handleNewSessionDialogKeydown(event)) return;
-    if (handleQuestionDialogKeydown(event)) return;
-    if (handleTasksDialogKeydown(event)) return;
-    if (handleSessionDialogKeydown(event)) return;
     if (event.key === "Escape" && !event.defaultPrevented && state.session && !state.session.parentSessionId) {
       event.preventDefault();
       handleEscapeAbort();
@@ -402,7 +402,6 @@ function openNewSessionFromLanding(): void {
 }
 
 function openNewSessionDialog(replace: boolean, returnToLanding = false): void {
-  if (state.streaming) return notify("Wait for the current response to finish");
   newSessionReplace = replace;
   newSessionCreating = false;
   newSessionReturnsToLanding = returnToLanding;
@@ -526,6 +525,14 @@ async function submitNewSession(): Promise<void> {
     notify("A working path is required");
     return elements.newSessionPath.focus();
   }
+  // From a session context the new session opens in its own tab so the current
+  // session (and any in-flight run) keeps this tab untouched. The tab is opened
+  // synchronously with the click so pop-up blockers allow it.
+  const sessionTab = state.session !== null ? window.open("", "_blank") : null;
+  if (state.session !== null && !sessionTab) {
+    notify("Allow pop-ups to open new sessions in a tab");
+    return;
+  }
   newSessionCreating = true;
   updateNewSessionSubmitState();
   try {
@@ -533,16 +540,22 @@ async function submitNewSession(): Promise<void> {
       method: "POST",
       body: JSON.stringify({ name: elements.newSessionName.value, path }),
     });
-    state.session = session;
-    history[newSessionReplace ? "replaceState" : "pushState"]({}, "", `/s/${session.id}`);
     newSessionReturnsToLanding = false;
     elements.landingDialog.hidden = true;
     elements.newSessionDialog.hidden = true;
     hideNewSessionCompletions();
-    renderSession();
-    await loadSessionList();
+    if (sessionTab) {
+      sessionTab.location.href = `/s/${session.id}`;
+      await loadSessionList();
+    } else {
+      state.session = session;
+      history[newSessionReplace ? "replaceState" : "pushState"]({}, "", `/s/${session.id}`);
+      renderSession();
+      await loadSessionList();
+    }
     elements.prompt.focus();
   } catch (error) {
+    sessionTab?.close();
     notify(messageFrom(error));
   } finally {
     newSessionCreating = false;
@@ -657,8 +670,16 @@ function closeSessionDialog(): void {
 }
 
 async function selectArchivedSession(summary: Summary): Promise<void> {
-  if (state.streaming) return notify("Wait for the current response to finish");
   if (summary.id === state.session?.id) return closeSessionDialog();
+  if (state.session !== null) {
+    // From a session context the archive selection opens in its own tab so the
+    // current session (and any in-flight run) keeps this tab untouched.
+    const tab = window.open(`/s/${summary.id}`, "_blank");
+    if (!tab) return notify("Allow pop-ups to open sessions in a tab");
+    sessionDialogReturnsToLanding = false;
+    closeSessionDialog();
+    return;
+  }
   history.pushState({}, "", `/s/${summary.id}`);
   try {
     await loadSession(summary.id);
