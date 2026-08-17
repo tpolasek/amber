@@ -24,7 +24,7 @@ interface TokenUsage { input: number; output: number }
 type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
 interface ToolStatusDisplay { text: string; appendElapsed?: boolean }
 interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string; statusDisplay?: ToolStatusDisplay; agentSessionId?: string; agentType?: string; agentModel?: string }
-interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; streamingThinking?: boolean; resyncedThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "compact-banner" | "tool-result"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean }
+interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; streamingThinking?: boolean; resyncedThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean }
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
 type PlanningTaskStatus = "pending" | "in_progress" | "completed";
 interface PlanningTask { id: string; subject: string; description: string; activeForm: string; status: PlanningTaskStatus; owner: string; blocks: string[]; blockedBy: string[]; metadata: Record<string, unknown> }
@@ -106,6 +106,7 @@ let planModeSubmitting = false;
 let sessionRunPollTimer: number | undefined;
 let sessionRunRefreshPending = false;
 let queuedMessage: { sessionId: string; content: string } | null = null;
+let pendingPlanHandoff: { sessionId: string; prompt: string } | null = null;
 
 const ESC_ABORT_WINDOW_MS = 500;
 let lastEscapeForAbortAt = 0;
@@ -183,6 +184,7 @@ const elements = {
   planModeClose: required<HTMLButtonElement>("plan-mode-close"),
   planModeDecline: required<HTMLButtonElement>("plan-mode-decline"),
   planModeApprove: required<HTMLButtonElement>("plan-mode-approve"),
+  planModeNewSession: required<HTMLButtonElement>("plan-mode-new-session"),
   toast: required<HTMLElement>("toast"),
 };
 
@@ -276,6 +278,7 @@ function wireEvents(): void {
   elements.planModeClose.addEventListener("click", () => void cancelPlanModeRequest());
   elements.planModeDecline.addEventListener("click", () => void submitPlanModeDecision(false));
   elements.planModeApprove.addEventListener("click", () => void submitPlanModeDecision(true));
+  elements.planModeNewSession.addEventListener("click", () => void submitPlanModeNewSessionDecision());
   elements.tasksDialog.addEventListener("click", (event) => {
     if (event.target === elements.tasksDialog) closeTasksDialog();
   });
@@ -808,11 +811,28 @@ async function sendMessage(queuedContent?: string): Promise<void> {
     if (!detachedActive) {
       closeQuestionDialog();
       closePlanModeDialog();
-      sendQueuedMessage(session.id);
+      if (pendingPlanHandoff) {
+        const handoff = pendingPlanHandoff;
+        pendingPlanHandoff = null;
+        void executePlanHandoff(handoff);
+      } else {
+        sendQueuedMessage(session.id);
+      }
     }
     syncSessionRunPolling();
     await loadSessionList();
     elements.prompt.focus();
+  }
+}
+
+async function executePlanHandoff(handoff: { sessionId: string; prompt: string }): Promise<void> {
+  try {
+    history.pushState({}, "", `/s/${handoff.sessionId}`);
+    await loadSession(handoff.sessionId);
+    notify(`Plan implementation session · ${handoff.sessionId}`);
+    void sendMessage(handoff.prompt);
+  } catch (error) {
+    notify(messageFrom(error));
   }
 }
 
@@ -1249,7 +1269,8 @@ function openPlanModeDialog(request: PlanModeRequest): void {
     ? "Enter plan mode?"
     : "Review implementation plan";
   elements.planModeDecline.textContent = request.kind === "enter" ? "DECLINE" : "KEEP PLANNING";
-  elements.planModeApprove.textContent = request.kind === "enter" ? "ENTER PLAN MODE" : "APPROVE & IMPLEMENT";
+  elements.planModeApprove.textContent = request.kind === "enter" ? "ENTER PLAN MODE" : "IMPLEMENT";
+  elements.planModeNewSession.hidden = request.kind !== "exit";
   elements.planModeDialogHints.textContent = request.kind === "enter"
     ? "Ctrl/Cmd+Enter approve · Esc decline"
     : "Feedback enables Keep Planning · Ctrl/Cmd+Enter approve · Esc close and wait";
@@ -1330,6 +1351,7 @@ function updatePlanModeDialogState(): void {
   elements.planModeDecline.disabled = planModeSubmitting || !canKeepPlanning;
   elements.planModeDecline.classList.toggle("ready", feedbackRequired && canKeepPlanning && !planModeSubmitting);
   elements.planModeApprove.disabled = planModeSubmitting;
+  elements.planModeNewSession.disabled = planModeSubmitting;
 }
 
 async function cancelPlanModeRequest(): Promise<void> {
@@ -1362,6 +1384,35 @@ async function submitPlanModeDecision(approved: boolean, cancelled = false): Pro
     if (approved && request.kind === "exit" && session.planMode) {
       session.planMode.active = false;
       renderPlanMode();
+    }
+    closePlanModeDialog();
+  } catch (error) {
+    planModeSubmitting = false;
+    updatePlanModeDialogState();
+    notify(messageFrom(error));
+  }
+}
+
+async function submitPlanModeNewSessionDecision(): Promise<void> {
+  const session = state.session;
+  const request = planModeRequest;
+  if (!session || !request || planModeSubmitting || request.kind !== "exit") return;
+  planModeSubmitting = true;
+  updatePlanModeDialogState();
+  try {
+    const result = await api<{ decision: { approved: boolean; newSessionId?: string } }>(
+      `/api/sessions/${session.id}/plan-mode/${encodeURIComponent(request.toolUseId)}/decision`,
+      { method: "POST", body: JSON.stringify({ approved: true, newSession: true }) },
+    );
+    if (session.planMode) {
+      session.planMode.active = false;
+      renderPlanMode();
+    }
+    if (result.decision.newSessionId) {
+      pendingPlanHandoff = {
+        sessionId: result.decision.newSessionId,
+        prompt: `Execute the plan: ${request.planFilePath}`,
+      };
     }
     closePlanModeDialog();
   } catch (error) {
@@ -1998,7 +2049,7 @@ function appendMessage(message: Message, before: HTMLElement | null = null): HTM
   const article = document.createElement("article");
   const messageClass = message.kind === "command"
     ? " command-message"
-    : message.kind === "fork-banner" || message.kind === "agent-banner"
+    : message.kind === "fork-banner" || message.kind === "agent-banner" || message.kind === "plan-banner"
       ? " fork-banner"
       : message.kind === "compact-banner"
         ? " compact-banner"
@@ -2060,11 +2111,13 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
   } else {
     stopStreamingThinkingReveal(element);
   }
-  if (message.kind === "fork-banner" || message.kind === "agent-banner") {
+  if (message.kind === "fork-banner" || message.kind === "agent-banner" || message.kind === "plan-banner") {
     const linkedSessionId = message.sourceSessionId ?? message.forkedSessionId;
     const label = message.kind === "agent-banner"
       ? "Agent sub-session of: "
-      : message.sourceSessionId ? "Forked from session: " : "Forked to session: ";
+      : message.kind === "plan-banner"
+        ? (message.sourceSessionId ? "Plan from session: " : "Plan implementation session: ")
+        : message.sourceSessionId ? "Forked from session: " : "Forked to session: ";
     content.replaceChildren(document.createTextNode(label));
     if (linkedSessionId) {
       const link = document.createElement("a");

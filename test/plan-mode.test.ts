@@ -10,6 +10,7 @@ import {
   PlanModeApprovalManager,
   formatExitPlanModeApprovedResult,
   formatExitPlanModeCancelledResult,
+  formatExitPlanModeNewSessionResult,
   formatExitPlanModeRejectedResult,
   parseEnterPlanModeInput,
   parseExitPlanModeInput,
@@ -56,6 +57,17 @@ test("strictly parses entry and optional exit allowed prompts", () => {
     cancelled: true,
   });
   assert.throws(() => parsePlanModeDecision({ approved: true, cancelled: true }), /cannot also be cancelled/);
+  assert.deepEqual(parsePlanModeDecision({ approved: true, newSession: true }), {
+    approved: true,
+    newSession: true,
+  });
+  assert.throws(() => parsePlanModeDecision({ approved: true, newSession: false }), /must be true/);
+  assert.throws(() => parsePlanModeDecision({ approved: false, newSession: true }), /must approve/);
+  assert.throws(() => parsePlanModeDecision({ approved: true, newSession: true, cancelled: true }), /cannot also be cancelled/);
+  assert.throws(
+    () => parsePlanModeDecision({ approved: true, newSession: true, feedback: "Tighten scope" }),
+    /cannot include feedback/,
+  );
   assert.deepEqual(parsePlanModeToggleInput({ active: true }), { active: true });
   assert.deepEqual(parsePlanModeToggleInput({ active: false }), { active: false });
   assert.throws(() => parsePlanModeToggleInput({ active: "yes" }), /boolean/);
@@ -104,6 +116,15 @@ test("holds one matching approval request per session and retains rejection feed
   assert.match(formatExitPlanModeRejectedResult("Add rollback steps."), /Add rollback steps/);
   assert.match(formatExitPlanModeApprovedResult("# Reviewed"), /# Reviewed/);
   assert.match(formatExitPlanModeCancelledResult(), /Stop now and wait/);
+
+  const delegated = manager.waitForDecision("session", "tool-3", "exit", controller.signal);
+  manager.decideParsed("session", "tool-3", { approved: true, newSession: true, newSessionId: "calm.meadow.lake" });
+  assert.deepEqual(await delegated, { approved: true, newSession: true, newSessionId: "calm.meadow.lake" });
+  assert.match(
+    formatExitPlanModeNewSessionResult("calm.meadow.lake"),
+    /new linked session \(calm\.meadow\.lake\)/,
+  );
+  assert.match(formatExitPlanModeNewSessionResult("calm.meadow.lake"), /Do not implement the plan in this session/);
 });
 
 test("cleans up pending plan approvals when a run aborts or the manager stops", async () => {

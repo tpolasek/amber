@@ -40,7 +40,7 @@ export interface Message {
   thinkingSignature?: string;
   createdAt: string;
   status: MessageStatus;
-  kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "compact-banner" | "tool-result";
+  kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result";
   sourceSessionId?: string;
   forkedSessionId?: string;
   usage?: TokenUsage;

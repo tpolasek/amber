@@ -74,9 +74,6 @@ export class SessionStore {
     delete session.fileReadState;
     delete session.contextTokens;
     delete session.planMode;
-    await unlink(this.#planPath(session.id)).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== "ENOENT") throw error;
-    });
     await this.save(session);
     return session;
   }
@@ -140,6 +137,26 @@ export class SessionStore {
     };
     await this.save(fork);
     return fork;
+  }
+
+  async createPlanImplementation(session: Session, banner: Message): Promise<Session> {
+    let id = "";
+    do id = randomSessionId();
+    while (await this.get(id));
+
+    const now = new Date().toISOString();
+    const implementation: Session = {
+      id,
+      title: id,
+      createdAt: now,
+      updatedAt: now,
+      messages: [banner],
+      ...(session.directories ? { directories: structuredClone(session.directories) } : {}),
+      ...(session.cwd ? { cwd: session.cwd } : {}),
+      ...(session.addDirInitialized !== undefined ? { addDirInitialized: session.addDirInitialized } : {}),
+    };
+    await this.save(implementation);
+    return implementation;
   }
 
   async #createWithId(id: string): Promise<Session> {

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionStore } from "../src/store.js";
 import { BASIC_ENGLISH_2000 } from "../src/basic-english-2000.js";
@@ -215,8 +215,46 @@ test("persists, forks, inherits, clears, and deletes plan mode state and files",
   const forkPlanPath = fork.planMode!.planFilePath;
   await store.clear(fork);
   assert.equal(fork.planMode, undefined);
-  await assert.rejects(stat(forkPlanPath), { code: "ENOENT" });
+  assert.equal(await readFile(forkPlanPath, "utf8"), "# Fork plan\n");
 
   assert.equal(await store.remove(session.id), true);
   await assert.rejects(stat(sourcePlanPath), { code: "ENOENT" });
+  assert.equal(await store.remove(fork.id), true);
+  await assert.rejects(stat(forkPlanPath), { code: "ENOENT" });
+});
+
+test("creates a linked plan implementation session with fresh history", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-plan-impl-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const source = await store.create();
+  source.directories = ["/tmp/example-workspace"];
+  source.cwd = "/tmp/example-workspace/subdirectory";
+  source.addDirInitialized = true;
+  source.planMode = { active: true, planFilePath: join(dirname(directory), "plans", `${source.id}.md`) };
+  source.messages.push({
+    id: "message-1", role: "user", content: "Plan this feature", createdAt: new Date().toISOString(), status: "complete",
+  });
+  await store.save(source);
+  const banner = {
+    id: "banner-plan-impl",
+    role: "assistant" as const,
+    content: `Plan from session: ${source.id}`,
+    createdAt: new Date().toISOString(),
+    status: "complete" as const,
+    kind: "plan-banner" as const,
+    sourceSessionId: source.id,
+  };
+
+  const implementation = await store.createPlanImplementation(source, banner);
+  assert.notEqual(implementation.id, source.id);
+  assert.deepEqual(implementation.messages, [banner]);
+  assert.deepEqual(implementation.directories, source.directories);
+  assert.equal(implementation.cwd, source.cwd);
+  assert.equal(implementation.addDirInitialized, true);
+  assert.equal(implementation.planMode, undefined);
+  assert.equal(implementation.parentSessionId, undefined);
+  assert.equal(source.messages.length, 1);
+  assert.deepEqual((await store.get(implementation.id))?.messages, [banner]);
+  assert.deepEqual(new Set((await store.list()).map((session) => session.id)), new Set([implementation.id, source.id]));
 });

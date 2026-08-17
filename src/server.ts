@@ -50,9 +50,11 @@ import {
   formatEnterPlanModeResult,
   formatExitPlanModeApprovedResult,
   formatExitPlanModeCancelledResult,
+  formatExitPlanModeNewSessionResult,
   formatExitPlanModeRejectedResult,
   parseEnterPlanModeInput,
   parseExitPlanModeInput,
+  parsePlanModeDecision,
   parsePlanModeToggleInput,
   planFilePath,
   planModeSystemBlock,
@@ -288,8 +290,28 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     const body = await readJson(request);
     const toolUseId = decodeURIComponent(planModeDecisionMatch[2]);
     try {
-      const decision = planModeApprovals.decide(planModeDecisionMatch[1], toolUseId, body);
-      return json(response, 200, { decision });
+      const decision = parsePlanModeDecision(body);
+      if (decision.newSession) {
+        if (planModeApprovals.pendingKind(planModeDecisionMatch[1], toolUseId) !== "exit") {
+          throw new Error("Implementing in a new session requires a plan review request");
+        }
+        const implementationBanner: Message = {
+          id: randomUUID(),
+          role: "assistant",
+          content: `Plan from session: ${session.id}`,
+          createdAt: new Date().toISOString(),
+          status: "complete",
+          kind: "plan-banner",
+          sourceSessionId: session.id,
+        };
+        const implementation = await store.createPlanImplementation(session, implementationBanner);
+        const settled = planModeApprovals.decideParsed(planModeDecisionMatch[1], toolUseId, {
+          ...decision,
+          newSessionId: implementation.id,
+        });
+        return json(response, 200, { decision: settled });
+      }
+      return json(response, 200, { decision: planModeApprovals.decideParsed(planModeDecisionMatch[1], toolUseId, decision) });
     } catch (error) {
       return json(response, 400, { error: errorMessage(error) });
     }
@@ -609,7 +631,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                 allowedPrompts,
               });
               const decision = await decisionPromise;
-              if (decision.approved) {
+              if (decision.approved && !decision.newSession) {
                 session.planMode.active = false;
                 allowedDirectories = sessionDirectories(session);
                 sendEvent(response, "plan_mode_state", { planMode: session.planMode });
@@ -617,6 +639,24 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                 call.output = "";
                 call.statusDisplay = { text: "APPROVED" };
                 resultText = formatExitPlanModeApprovedResult(plan);
+              } else if (decision.newSession) {
+                session.planMode.active = false;
+                allowedDirectories = sessionDirectories(session);
+                session.messages.push({
+                  id: randomUUID(),
+                  role: "assistant",
+                  content: `Plan implementation session: ${decision.newSessionId ?? ""}`,
+                  createdAt: new Date().toISOString(),
+                  status: "complete",
+                  kind: "plan-banner",
+                  ...(decision.newSessionId ? { forkedSessionId: decision.newSessionId } : {}),
+                });
+                sendEvent(response, "plan_mode_state", { planMode: session.planMode });
+                call.status = "complete";
+                call.output = "";
+                call.statusDisplay = { text: "DELEGATED" };
+                resultText = formatExitPlanModeNewSessionResult(decision.newSessionId ?? "");
+                endTurnAfterResult = true;
               } else if (decision.cancelled) {
                 call.status = "error";
                 call.output = "";

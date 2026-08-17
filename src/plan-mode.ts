@@ -115,6 +115,8 @@ export interface PlanModeDecision {
   approved: boolean;
   feedback?: string;
   cancelled?: boolean;
+  newSession?: true;
+  newSessionId?: string;
 }
 
 export interface PlanModeToggleInput {
@@ -159,7 +161,7 @@ export function parsePlanModeDecision(value: unknown): PlanModeDecision {
     throw new Error("Plan mode decision must be an object");
   }
   const input = value as Record<string, unknown>;
-  if (Object.keys(input).some((key) => key !== "approved" && key !== "feedback" && key !== "cancelled")) {
+  if (Object.keys(input).some((key) => key !== "approved" && key !== "feedback" && key !== "cancelled" && key !== "newSession")) {
     throw new Error("Plan mode decision contains an unknown field");
   }
   if (typeof input.approved !== "boolean") throw new Error("approved must be a boolean");
@@ -172,12 +174,21 @@ export function parsePlanModeDecision(value: unknown): PlanModeDecision {
   if (input.approved === true && input.cancelled === true) {
     throw new Error("An approved plan mode decision cannot also be cancelled");
   }
+  if (input.newSession !== undefined && input.newSession !== true) {
+    throw new Error("newSession must be true when provided");
+  }
+  if (input.newSession === true) {
+    if (input.approved !== true) throw new Error("A new-session decision must approve the plan");
+    if (input.cancelled === true) throw new Error("A new-session decision cannot also be cancelled");
+    if (input.feedback !== undefined) throw new Error("A new-session decision cannot include feedback");
+  }
   const feedback = typeof input.feedback === "string" ? input.feedback.trim() : "";
   if (feedback.length > 32_000) throw new Error("feedback must be 32,000 characters or fewer");
   return {
     approved: input.approved,
     ...(feedback ? { feedback } : {}),
     ...(input.cancelled === true ? { cancelled: true } : {}),
+    ...(input.newSession === true ? { newSession: true } : {}),
   };
 }
 
@@ -238,6 +249,10 @@ export function formatExitPlanModeRejectedResult(feedback?: string): string {
 
 export function formatExitPlanModeCancelledResult(): string {
   return "The user closed the plan review without exiting plan mode. Stop now and wait for the user to send another prompt.";
+}
+
+export function formatExitPlanModeNewSessionResult(newSessionId: string): string {
+  return `The user approved the plan and chose to implement it in a new linked session (${newSessionId}). Do not implement the plan in this session; end the turn.`;
 }
 
 export function planModeSystemBlock(planPath: string, childAgent = false): ProviderSystemBlock {
@@ -304,8 +319,11 @@ export class PlanModeApprovalManager {
   }
 
   decide(sessionId: string, toolUseId: string, value: unknown): PlanModeDecision {
-    const pending = this.#get(sessionId, toolUseId);
-    const decision = parsePlanModeDecision(value);
+    return this.decideParsed(sessionId, toolUseId, parsePlanModeDecision(value));
+  }
+
+  decideParsed(sessionId: string, toolUseId: string, decision: PlanModeDecision): PlanModeDecision {
+    this.#get(sessionId, toolUseId);
     this.#settle(sessionId, toolUseId, decision);
     return decision;
   }
