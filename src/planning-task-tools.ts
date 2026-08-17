@@ -52,17 +52,167 @@ export interface PlanningTaskToolResult<T> {
   resultText: string;
 }
 
-const TASK_CREATE_PROMPT = `Use this tool to create a structured task in the task list. Tasks are useful for complex multi-step work, non-trivial implementations, plan-mode tracking, and user-requested todo lists. Do not create tasks for a single straightforward action or purely informational conversation.
+const TASK_CREATE_PROMPT = `Use this tool to create a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
+It also helps the user understand the progress of the task and overall progress of their requests.
 
-Use a short, actionable subject in imperative form and include enough context and requirements in the description for someone else to complete the work. activeForm is the present-continuous text shown while work is in progress and defaults to subject. New tasks start pending with no owner or dependencies. Check TaskList first to avoid duplicates.`;
+## When to Use This Tool
 
-const TASK_GET_PROMPT = `Retrieve the full current state of one task by ID. Use this before updating a task, when starting assigned work, or when you need its description, owner, dependencies, or metadata. Check blockedBy before beginning work and use TaskList for a summary of every task.`;
+Use this tool proactively in these scenarios:
 
-const TASK_LIST_PROMPT = `List all tasks in summary form. Use this to check progress, avoid duplicate tasks, find pending work, and see which tasks are blocked. Prefer available tasks in ascending ID order. After completing a task, list tasks again to find newly unblocked work. Use TaskGet for descriptions, outgoing dependencies, and metadata.`;
+- Complex multi-step tasks - When a task requires 3 or more distinct steps or actions
+- Non-trivial and complex tasks - Tasks that require careful planning or multiple operations
+- Plan mode - When using plan mode, create a task list to track the work
+- User explicitly requests todo list - When the user explicitly asks you to use the todo list
+- User provides multiple tasks to be done - When the user provides multiple tasks to be done (numbered or comma-separated)
+- After receiving new instructions - Immediately capture user requirements as tasks
+- When you start working on a task - Mark it as in_progress BEFORE beginning work
+- After completing a task - Mark it as completed and add any follow-up tasks discovered during implementation
 
-const TASK_UPDATE_PROMPT = `Update only the specified fields of an existing task. Read the latest task with TaskGet first. Use status pending, in_progress, or completed for the normal workflow; deleted permanently removes the task. Mark a task completed only when its work is fully accomplished and verification passes. Keep incomplete or blocked work in progress and create a separate task for a newly discovered blocker.
+## When NOT to Use This Tool
 
-metadata is merged into existing metadata; set a key to null to delete it. addBlocks adds tasks that must wait for this task, while addBlockedBy adds tasks that must finish before this task can proceed.`;
+Skip using this tool when:
+- There is only a single, straightforward task
+- The task is trivial and tracking it provides no organizational benefit
+- The task can be completed in less than 3 trivial steps
+- The task is purely conversational or informational
+
+NOTE that you should not use this tool if there is only one trivial task to do. In this case you are better off just doing the task directly.
+
+## Task Fields
+
+- **subject**: A brief, actionable title in imperative form (e.g., "Fix authentication bug in login flow")
+- **description**: What needs to be done
+- **activeForm** (optional): Present continuous form shown in the spinner when the task is in_progress (e.g., "Fixing authentication bug"). If omitted, the spinner shows the subject instead.
+
+All tasks are created with status \`pending\`.
+
+## Tips
+
+- Create tasks with clear, specific subjects that describe the outcome
+- After creating tasks, use TaskUpdate to set up dependencies (blocks/blockedBy) if needed
+- Check TaskList first to avoid creating duplicate tasks
+`;
+
+const TASK_GET_PROMPT = `Use this tool to retrieve a task by its ID from the task list.
+
+## When to Use This Tool
+
+- When you need the full description and context before starting work on a task
+- To understand task dependencies (what it blocks, what blocks it)
+- After being assigned a task, to get complete requirements
+
+## Output
+
+Returns full task details:
+- **subject**: Task title
+- **description**: Detailed requirements and context
+- **status**: 'pending', 'in_progress', or 'completed'
+- **blocks**: Tasks waiting on this one to complete
+- **blockedBy**: Tasks that must complete before this one can start
+
+## Tips
+
+- After fetching a task, verify its blockedBy list is empty before beginning work.
+- Use TaskList to see all tasks in summary form.
+`;
+
+const TASK_LIST_PROMPT = `Use this tool to list all tasks in the task list.
+
+## When to Use This Tool
+
+- To see what tasks are available to work on (status: 'pending', no owner, not blocked)
+- To check overall progress on the project
+- To find tasks that are blocked and need dependencies resolved
+- After completing a task, to check for newly unblocked work or claim the next available task
+- **Prefer working on tasks in ID order** (lowest ID first) when multiple tasks are available, as earlier tasks often set up context for later ones
+
+## Output
+
+Returns a summary of each task:
+- **id**: Task identifier (use with TaskGet, TaskUpdate)
+- **subject**: Brief description of the task
+- **status**: 'pending', 'in_progress', or 'completed'
+- **owner**: Agent ID if assigned, empty if available
+- **blockedBy**: List of open task IDs that must be resolved first (tasks with blockedBy cannot be claimed until dependencies resolve)
+
+Use TaskGet with a specific task ID to view full details including description and comments.
+`;
+
+const TASK_UPDATE_PROMPT = `Use this tool to update a task in the task list.
+
+## When to Use This Tool
+
+**Mark tasks as resolved:**
+- When you have completed the work described in a task
+- When a task is no longer needed or has been superseded
+- IMPORTANT: Always mark your assigned tasks as resolved when you finish them
+- After resolving, call TaskList to find your next task
+
+- ONLY mark a task as completed when you have FULLY accomplished it
+- If you encounter errors, blockers, or cannot finish, keep the task as in_progress
+- When blocked, create a new task describing what needs to be resolved
+- Never mark a task as completed if:
+  - Tests are failing
+  - Implementation is partial
+  - You encountered unresolved errors
+  - You couldn't find necessary files or dependencies
+
+**Delete tasks:**
+- When a task is no longer relevant or was created in error
+- Setting status to \`deleted\` permanently removes the task
+
+**Update task details:**
+- When requirements change or become clearer
+- When establishing dependencies between tasks
+
+## Fields You Can Update
+
+- **status**: The task status (see Status Workflow below)
+- **subject**: Change the task title (imperative form, e.g., "Run tests")
+- **description**: Change the task description
+- **activeForm**: Present continuous form shown in spinner when in_progress (e.g., "Running tests")
+- **owner**: Change the task owner (agent name)
+- **metadata**: Merge metadata keys into the task (set a key to null to delete it)
+- **addBlocks**: Mark tasks that cannot start until this one completes
+- **addBlockedBy**: Mark tasks that must complete before this one can start
+
+## Status Workflow
+
+Status progresses: \`pending\` → \`in_progress\` → \`completed\`
+
+Use \`deleted\` to permanently remove a task.
+
+## Staleness
+
+Make sure to read a task's latest state using \`TaskGet\` before updating it.
+
+## Examples
+
+Mark task as in progress when starting work:
+\`\`\`json
+{"taskId": "1", "status": "in_progress"}
+\`\`\`
+
+Mark task as completed after finishing work:
+\`\`\`json
+{"taskId": "1", "status": "completed"}
+\`\`\`
+
+Delete a task:
+\`\`\`json
+{"taskId": "1", "status": "deleted"}
+\`\`\`
+
+Claim a task by setting owner:
+\`\`\`json
+{"taskId": "1", "owner": "my-name"}
+\`\`\`
+
+Set up task dependencies:
+\`\`\`json
+{"taskId": "2", "addBlockedBy": ["1"]}
+\`\`\`
+`;
 
 export const TASK_CREATE_TOOL: ToolDefinition = {
   name: "TaskCreate",
@@ -70,10 +220,10 @@ export const TASK_CREATE_TOOL: ToolDefinition = {
   input_schema: {
     type: "object",
     properties: {
-      subject: { type: "string", description: "Short, actionable title in imperative form." },
-      description: { type: "string", description: "Detailed context and requirements for the task." },
-      activeForm: { type: "string", description: "Present-continuous spinner text. Defaults to subject." },
-      metadata: { type: "object", additionalProperties: true, description: "Arbitrary metadata attached to the task. Defaults to an empty object." },
+      subject: { type: "string", description: "A brief title for the task" },
+      description: { type: "string", description: "What needs to be done" },
+      activeForm: { type: "string", description: 'Present continuous form shown in spinner when in_progress (e.g., "Running tests")' },
+      metadata: { type: "object", additionalProperties: true, description: "Arbitrary metadata to attach to the task" },
     },
     required: ["subject", "description"],
     additionalProperties: false,
@@ -86,7 +236,7 @@ export const TASK_GET_TOOL: ToolDefinition = {
   input_schema: {
     type: "object",
     properties: {
-      taskId: { type: "string", description: "The ID of the task to retrieve." },
+      taskId: { type: "string", description: "The ID of the task to retrieve" },
     },
     required: ["taskId"],
     additionalProperties: false,
@@ -109,15 +259,15 @@ export const TASK_UPDATE_TOOL: ToolDefinition = {
   input_schema: {
     type: "object",
     properties: {
-      taskId: { type: "string", description: "The ID of the task to update." },
-      status: { type: "string", enum: ["pending", "in_progress", "completed", "deleted"], description: "New task status." },
-      subject: { type: "string", description: "New imperative-form task title." },
-      description: { type: "string", description: "Replacement task description." },
-      activeForm: { type: "string", description: "New present-continuous spinner text." },
-      owner: { type: "string", description: "New task owner; use an empty string to unassign." },
-      metadata: { type: "object", additionalProperties: true, description: "Metadata to merge. A null value deletes that key." },
-      addBlocks: { type: "array", items: { type: "string" }, description: "Task IDs that this task now blocks." },
-      addBlockedBy: { type: "array", items: { type: "string" }, description: "Task IDs that now block this task." },
+      taskId: { type: "string", description: "The ID of the task to update" },
+      subject: { type: "string", description: "New subject for the task" },
+      description: { type: "string", description: "New description for the task" },
+      activeForm: { type: "string", description: 'Present continuous form shown in spinner when in_progress (e.g., "Running tests")' },
+      status: { type: "string", enum: ["pending", "in_progress", "completed", "deleted"], description: "New status for the task" },
+      addBlocks: { type: "array", items: { type: "string" }, description: "Task IDs that this task blocks" },
+      addBlockedBy: { type: "array", items: { type: "string" }, description: "Task IDs that block this task" },
+      owner: { type: "string", description: "New owner for the task" },
+      metadata: { type: "object", additionalProperties: true, description: "Metadata keys to merge into the task. Set a key to null to delete it." },
     },
     required: ["taskId"],
     additionalProperties: false,
