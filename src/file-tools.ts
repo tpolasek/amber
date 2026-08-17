@@ -4,7 +4,7 @@ import { chmod, mkdir, readFile, realpath, rename, stat, unlink, writeFile } fro
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { createTwoFilesPatch, FILE_HEADERS_ONLY } from "diff";
-import type { FileReadState, Session, ToolDefinition } from "./types.js";
+import type { FileReadState, Session, ToolDefinition, ToolReadRange } from "./types.js";
 
 const MAX_LINES_TO_READ = 2_000;
 const MAX_READ_BYTES = 256 * 1024;
@@ -48,7 +48,7 @@ export const WRITE_TOOL: ToolDefinition = {
 
 export const EDIT_TOOL: ToolDefinition = {
   name: "Edit",
-  description: "Perform an exact string replacement in a text file. Relative file_path values resolve from the session current working directory; absolute and ~/ paths are also accepted. An existing file must first be fully read once with Read so its contents are available in conversation context; do not repeatedly Read it before editing. old_string must be unique unless replace_all is true. Never include Read's line-number prefix in old_string. A successful Edit invalidates cached Read coverage for this file, so a later inspection may Read it once again.",
+  description: "Perform an exact string replacement in a text file. Relative file_path values resolve from the session current working directory; absolute and ~/ paths are also accepted. Before editing, Read the file or at least the lines around old_string; an Edit is allowed once every line of old_string was returned by an earlier Read (a full-file Read always qualifies), so do not repeatedly Read it before editing. old_string must be unique unless replace_all is true. Never include Read's line-number prefix in old_string. A successful Edit invalidates cached Read coverage for this file, so a later inspection may Read it once again.",
   input_schema: {
     type: "object",
     properties: {
@@ -68,6 +68,7 @@ export interface FileToolResult {
   filePath: string;
   output: string;
   resultText: string;
+  readRange?: ToolReadRange;
 }
 
 export interface FileToolPolicy {
@@ -154,6 +155,7 @@ async function readTextFile(
       filePath,
       output: "Cached Read · reused earlier context",
       resultText: `<system-reminder>Lines ${offset}-${Math.max(offset, endLine)} of ${filePath} were already returned by an earlier Read and remain available in the active conversation context. Reuse that content. Do not call Read again for this range unless Write or Edit changes the file.</system-reminder>`,
+      readRange: { startLine: offset, endLine: Math.max(offset, endLine), totalLines: prior?.totalLines ?? endLine },
     };
   }
   if (metadata.size > MAX_READ_BYTES && input.limit === undefined) {
@@ -177,8 +179,13 @@ async function readTextFile(
     : `<system-reminder>Warning: the file is shorter than offset ${offset}. It has ${lines.length} lines.</system-reminder>`);
   return {
     filePath,
-    output: `Read ${selected.length.toLocaleString()} ${selected.length === 1 ? "line" : "lines"}`,
+    output: resultText,
     resultText,
+    readRange: {
+      startLine: selected.length > 0 ? offset : 0,
+      endLine: selected.length > 0 ? offset + selected.length - 1 : 0,
+      totalLines: lines.length,
+    },
   };
 }
 
@@ -236,16 +243,17 @@ async function editTextFile(
   const metadata = await stat(filePath);
   if (!metadata.isFile()) throw new Error(`Edit only supports files: ${filePath}`);
   if (metadata.size > MAX_EDIT_BYTES) throw new Error("File is too large to edit");
-  requireFullRead(filePath, session);
-  const rawOriginal = await readFile(filePath, "utf8");
-  if (rawOriginal.includes("\0")) throw new Error("Edit only supports text files in this version of AMBER");
+  const rawBuffer = await readFile(filePath);
+  if (rawBuffer.includes(0)) throw new Error("Edit only supports text files in this version of AMBER");
+  const rawOriginal = rawBuffer.toString("utf8");
   const usesCrlf = rawOriginal.includes("\r\n");
   const original = rawOriginal.replaceAll("\r\n", "\n");
   const oldString = input.old_string;
+  const replaceAll = input.replace_all === true;
+  requireEditReadCoverage(filePath, session, rawBuffer, original, oldString, replaceAll);
   if (oldString === "" && original !== "") throw new Error("Cannot create new file: file already exists and is not empty.");
   const occurrences = countOccurrences(original, oldString);
   if (occurrences === 0) throw new Error(`String to replace not found in file.\nString: ${oldString}`);
-  const replaceAll = input.replace_all === true;
   if (occurrences > 1 && !replaceAll) {
     throw new Error(`Found ${occurrences} matches of the string to replace, but replace_all is false. Set replace_all to true or provide more context.`);
   }
@@ -264,6 +272,43 @@ async function editTextFile(
 function requireFullRead(filePath: string, session: Session): void {
   const prior = session.fileReadState?.[filePath];
   if (!prior?.full) throw new Error("File has not been fully read yet. Read it first before writing to it.");
+}
+
+function requireEditReadCoverage(
+  filePath: string,
+  session: Session,
+  rawBuffer: Buffer,
+  original: string,
+  oldString: string,
+  replaceAll: boolean,
+): void {
+  const prior = session.fileReadState?.[filePath];
+  if (prior?.full) return;
+  if (!prior || prior.hash !== hash(rawBuffer)) {
+    throw new Error("File has not been fully read yet. Read it first before writing to it.");
+  }
+  for (const span of editLineSpans(original, oldString, replaceAll)) {
+    if (!rangesCoverLines(prior, span.startLine, span.endLine)) {
+      throw new Error(
+        `Lines ${span.startLine}-${span.endLine} of ${filePath} have not been read yet. Read that range before editing it.`,
+      );
+    }
+  }
+}
+
+function editLineSpans(content: string, needle: string, all: boolean): Array<{ startLine: number; endLine: number }> {
+  if (!needle) return [];
+  const spans: Array<{ startLine: number; endLine: number }> = [];
+  let searchFrom = 0;
+  while (true) {
+    const index = content.indexOf(needle, searchFrom);
+    if (index === -1) break;
+    const startLine = content.slice(0, index).split("\n").length;
+    spans.push({ startLine, endLine: startLine + needle.split("\n").length - 1 });
+    if (!all) break;
+    searchFrom = index + needle.length;
+  }
+  return spans;
 }
 
 async function updateWrittenFileState(filePath: string, session: Session): Promise<void> {
@@ -315,14 +360,16 @@ function updateReadCoverage(
 function readRangeCovered(state: FileReadState | undefined, offset: number, limit: number): boolean {
   if (state?.totalLines === undefined || !state.hasRead) return false;
   if (offset > state.totalLines) return true;
-  if (!state.ranges?.length) return false;
-  const targetEnd = Math.min(state.totalLines, offset + limit - 1);
-  let coveredThrough = offset - 1;
-  for (const range of state.ranges) {
+  return rangesCoverLines(state, offset, Math.min(state.totalLines, offset + limit - 1));
+}
+
+function rangesCoverLines(state: FileReadState, startLine: number, endLine: number): boolean {
+  let coveredThrough = startLine - 1;
+  for (const range of state.ranges ?? []) {
     if (range.endLine <= coveredThrough) continue;
     if (range.startLine > coveredThrough + 1) return false;
     coveredThrough = range.endLine;
-    if (coveredThrough >= targetEnd) return true;
+    if (coveredThrough >= endLine) return true;
   }
   return false;
 }

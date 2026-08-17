@@ -30,9 +30,14 @@ test("Read returns numbered lines and records full-read state", async () => {
   const result = await executeFileTool("Read", { file_path: filePath }, [directory], current);
 
   assert.equal(result.filePath, canonicalFilePath);
-  assert.equal(result.output, "Read 3 lines");
+  assert.equal(result.output, "     1→first\n     2→second\n     3→third");
   assert.equal(result.resultText, "     1→first\n     2→second\n     3→third");
+  assert.deepEqual(result.readRange, { startLine: 1, endLine: 3, totalLines: 3 });
   assert.equal(current.fileReadState?.[canonicalFilePath]?.full, true);
+
+  const partial = await executeFileTool("Read", { file_path: filePath, offset: 2, limit: 1 }, [directory], session());
+  assert.equal(partial.output, "     2→second");
+  assert.deepEqual(partial.readRange, { startLine: 2, endLine: 2, totalLines: 3 });
 });
 
 test("Read deduplicates ranges already present in conversation context", async () => {
@@ -45,6 +50,7 @@ test("Read deduplicates ranges already present in conversation context", async (
   const cached = await executeFileTool("Read", { file_path: filePath, offset: 2, limit: 2 }, [directory], current);
 
   assert.equal(cached.output, "Cached Read · reused earlier context");
+  assert.deepEqual(cached.readRange, { startLine: 2, endLine: 3, totalLines: 4 });
   assert.match(cached.resultText, /already returned by an earlier Read/);
   assert.doesNotMatch(cached.resultText, /two\n.*three/s);
 });
@@ -87,6 +93,68 @@ test("partial Read does not authorize an existing-file write", async () => {
   assert.equal(current.fileReadState?.[canonicalFilePath]?.full, false);
   await assert.rejects(
     executeFileTool("Write", { file_path: filePath, content: "replacement\n" }, [directory], current),
+    /not been fully read/,
+  );
+});
+
+test("partial Read authorizes Edit of covered lines but not unread lines", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-files-"));
+  const filePath = join(directory, "sample.txt");
+  await writeFile(filePath, "first\nsecond\nthird\nfourth\n", "utf8");
+  const current = session();
+  await executeFileTool("Read", { file_path: filePath, offset: 2, limit: 2 }, [directory], current);
+
+  await assert.rejects(
+    executeFileTool("Edit", { file_path: filePath, old_string: "first", new_string: "1st" }, [directory], current),
+    /Lines 1-1 of .* have not been read yet/,
+  );
+  await assert.rejects(
+    executeFileTool("Edit", { file_path: filePath, old_string: "third\nfourth", new_string: "3rd\n4th" }, [directory], current),
+    /Lines 3-4 of .* have not been read yet/,
+  );
+  const edited = await executeFileTool(
+    "Edit",
+    { file_path: filePath, old_string: "second\nthird", new_string: "2nd\n3rd" },
+    [directory],
+    current,
+  );
+  assert.match(edited.resultText, /updated successfully/);
+  assert.equal(await readFile(filePath, "utf8"), "first\n2nd\n3rd\nfourth\n");
+});
+
+test("Edit with replace_all requires every occurrence to sit in read lines", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-files-"));
+  const filePath = join(directory, "sample.txt");
+  await writeFile(filePath, "dup\nother\ndup\n", "utf8");
+  const current = session();
+  await executeFileTool("Read", { file_path: filePath, offset: 2, limit: 1 }, [directory], current);
+
+  await assert.rejects(
+    executeFileTool(
+      "Edit",
+      { file_path: filePath, old_string: "dup", new_string: "twin", replace_all: true },
+      [directory],
+      current,
+    ),
+    /Lines 1-1 of .* have not been read yet/,
+  );
+});
+
+test("Edit rejects a file that was never read or changed since its last partial Read", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-files-"));
+  const filePath = join(directory, "sample.txt");
+  await writeFile(filePath, "first\nsecond\n", "utf8");
+  const unread = session();
+  await assert.rejects(
+    executeFileTool("Edit", { file_path: filePath, old_string: "first", new_string: "1st" }, [directory], unread),
+    /not been fully read/,
+  );
+
+  const stale = session();
+  await executeFileTool("Read", { file_path: filePath, offset: 1, limit: 1 }, [directory], stale);
+  await writeFile(filePath, "externally changed\nsecond\n", "utf8");
+  await assert.rejects(
+    executeFileTool("Edit", { file_path: filePath, old_string: "second", new_string: "2nd" }, [directory], stale),
     /not been fully read/,
   );
 });

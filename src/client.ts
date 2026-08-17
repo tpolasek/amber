@@ -23,7 +23,8 @@ import {
 interface TokenUsage { input: number; output: number }
 type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
 interface ToolStatusDisplay { text: string; appendElapsed?: boolean }
-interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string; statusDisplay?: ToolStatusDisplay; agentSessionId?: string; agentType?: string; agentModel?: string }
+interface ToolReadRange { startLine: number; endLine: number; totalLines: number }
+interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string; readRange?: ToolReadRange; statusDisplay?: ToolStatusDisplay; agentSessionId?: string; agentType?: string; agentModel?: string }
 interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; streamingThinking?: boolean; resyncedThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean }
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
 type PlanningTaskStatus = "pending" | "in_progress" | "completed";
@@ -2252,13 +2253,23 @@ function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
       const summary = document.createElement("summary");
       const lineCount = call.output.split("\n").length;
       const isDiff = isDiffOutput(call);
+      const range = !isDiff ? call.readRange : undefined;
+      const count = range ? (range.startLine > 0 ? range.endLine - range.startLine + 1 : 0) : lineCount;
+      const rangeText = range
+        ? (range.startLine === 0 ? "[0]" : range.startLine === range.endLine ? `[${range.startLine}]` : `[${range.startLine}-${range.endLine}]`)
+        : undefined;
+      const totalText = range
+        ? (range.startLine === 0 ? "Empty" : `${range.totalLines.toLocaleString()} total lines`)
+        : undefined;
+      summary.textContent = [isDiff ? diffSummary(call.output) : "Output", `${count.toLocaleString()} ${count === 1 ? "line" : "lines"}`, rangeText, totalText]
+        .filter(Boolean)
+        .join(" · ");
       details.open = toolOutputDisclosurePreferences.get(call.id)
         ?? previousOutputStates.get(call.id)
         ?? shouldExpandToolOutput(isDiff);
       summary.addEventListener("click", () => {
         setTimeout(() => toolOutputDisclosurePreferences.set(call.id, details.open), 0);
       });
-      summary.textContent = `${isDiff ? diffSummary(call.output) : "Output"} · ${lineCount.toLocaleString()} ${lineCount === 1 ? "line" : "lines"}`;
       const output = document.createElement("pre");
       output.className = `tool-output${isDiff ? " tool-diff" : ""}`;
       if (isDiff) renderDiff(output, call.output);

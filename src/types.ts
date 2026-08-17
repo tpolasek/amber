@@ -13,6 +13,12 @@ export interface ToolStatusDisplay {
   appendElapsed?: boolean;
 }
 
+export interface ToolReadRange {
+  startLine: number;
+  endLine: number;
+  totalLines: number;
+}
+
 export interface ToolCall {
   id: string;
   name: string;
@@ -26,6 +32,7 @@ export interface ToolCall {
   workingDirectory?: string;
   timeoutMs?: number;
   filePath?: string;
+  readRange?: ToolReadRange;
   statusDisplay?: ToolStatusDisplay;
   agentSessionId?: string;
   agentType?: string;

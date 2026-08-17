@@ -847,6 +847,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               call.status = "complete";
               call.filePath = result.filePath;
               call.output = result.output;
+              if (result.readRange) call.readRange = result.readRange;
               resultText = result.resultText;
             } catch (error) {
               call.status = "error";
