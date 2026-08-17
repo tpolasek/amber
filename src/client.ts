@@ -1797,9 +1797,8 @@ function renderSession(): void {
   renderContextMeter();
   renderQueuedMessage();
   syncSessionRunPolling();
-  elements.transcript.scrollTop = sameSession && !wasFollowingBottom
-    ? previousScrollTop
-    : elements.transcript.scrollHeight;
+  if (sameSession && !wasFollowingBottom) elements.transcript.scrollTop = previousScrollTop;
+  else transcriptScrollPin.scrollToBottom(elements.transcript);
 }
 
 function updateRenderedSession(session: Session): void {
@@ -1848,7 +1847,8 @@ function updateRenderedSession(session: Session): void {
   renderContextMeter();
   renderQueuedMessage();
   syncSessionRunPolling();
-  elements.transcript.scrollTop = wasFollowingBottom ? elements.transcript.scrollHeight : previousScrollTop;
+  if (wasFollowingBottom) transcriptScrollPin.scrollToBottom(elements.transcript);
+  else elements.transcript.scrollTop = previousScrollTop;
 }
 
 function renderPlanMode(): void {
@@ -2166,7 +2166,7 @@ function updateStreamingThinkingReveal(
       container.innerHTML = markdown.render(displayed) + '<span class="cursor-block"></span>';
       if (scrollPin.shouldFollowBottom()) {
         requestAnimationFrame(() => {
-          if (scrollPin.shouldFollowBottom() && element.isConnected) container.scrollTop = container.scrollHeight;
+          if (scrollPin.shouldFollowBottom() && element.isConnected) scrollPin.scrollToBottom(container);
         });
       }
       scrollTranscriptToBottom();
@@ -2608,7 +2608,7 @@ function scrollTranscriptToBottom(): void {
   if (!transcriptScrollPin.shouldFollowBottom()) return;
   requestAnimationFrame(() => {
     if (transcriptScrollPin.shouldFollowBottom()) {
-      elements.transcript.scrollTop = elements.transcript.scrollHeight;
+      transcriptScrollPin.scrollToBottom(elements.transcript);
     }
   });
 }

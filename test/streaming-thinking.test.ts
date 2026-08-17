@@ -52,3 +52,29 @@ test("streaming thinking follows the bottom until the user scrolls away and retu
   pin.update(293, 200, 500);
   assert.equal(pin.shouldFollowBottom(), true);
 });
+
+test("programmatic bottom scroll stays pinned when content lands before the scroll event", () => {
+  const pin = new BottomScrollPin();
+  const element = { scrollTop: 0, scrollHeight: 500, clientHeight: 200 };
+  pin.scrollToBottom(element);
+  assert.equal(element.scrollTop, 300);
+
+  // Scroll events dispatch a frame late: stale scrollTop, grown scrollHeight.
+  pin.update(300, 200, 700);
+  assert.equal(pin.shouldFollowBottom(), true);
+
+  pin.update(300, 200, 900);
+  assert.equal(pin.shouldFollowBottom(), true);
+});
+
+test("user scrolling away from a programmatic bottom scroll still unpins", () => {
+  const pin = new BottomScrollPin();
+  const element = { scrollTop: 0, scrollHeight: 500, clientHeight: 200 };
+  pin.scrollToBottom(element);
+
+  pin.update(150, 200, 500);
+  assert.equal(pin.shouldFollowBottom(), false);
+
+  pin.update(300, 200, 500);
+  assert.equal(pin.shouldFollowBottom(), true);
+});
