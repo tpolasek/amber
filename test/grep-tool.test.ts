@@ -14,7 +14,7 @@ async function fixture(): Promise<string> {
 test("defines the Grep tool and parses its input with defaults", () => {
   assert.equal(GREP_TOOL.name, "Grep");
   assert.deepEqual(Object.keys(GREP_TOOL.input_schema.properties ?? {}), [
-    "pattern", "path", "glob", "type", "output_mode", "-B", "-A", "-C", "context", "-n", "-i", "multiline", "head_limit", "offset",
+    "pattern", "path", "glob", "output_mode", "-B", "-A", "-C", "context", "-n", "-i", "type", "head_limit", "offset", "multiline",
   ]);
   assert.deepEqual(parseGrepInput({ pattern: "needle" }), {
     pattern: "needle",
@@ -55,7 +55,17 @@ test("defines the Grep tool and parses its input with defaults", () => {
   });
   assert.equal(parseGrepInput({ pattern: "x", "-C": 2 }).context, 2);
   assert.equal(parseGrepInput({ pattern: "x", context: 5, "-C": 2 }).context, 5);
-  assert.throws(() => parseGrepInput({ pattern: "" }), /non-empty pattern/);
+  assert.deepEqual(parseGrepInput({ pattern: "x", head_limit: "3", offset: "6", "-A": "1", "-i": "true", "-n": "false" }), {
+    pattern: "x",
+    outputMode: "files_with_matches",
+    showLineNumbers: false,
+    caseInsensitive: true,
+    multiline: false,
+    offset: 6,
+    headLimit: 3,
+    contextAfter: 1,
+  });
+  assert.throws(() => parseGrepInput({ pattern: "", }), /non-empty pattern/);
   assert.throws(() => parseGrepInput({}), /non-empty pattern/);
   assert.throws(() => parseGrepInput({ pattern: "x", output_mode: "bogus" }), /output_mode/);
   assert.throws(() => parseGrepInput({ pattern: "x", head_limit: -1 }), /head_limit/);
