@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { completeDirectories } from "../src/directory-completion.js";
+import { completeDirectories, completeDirectoryRoots } from "../src/directory-completion.js";
 
 test("completes relative and absolute directory fragments", async () => {
   const root = await mkdtemp(join(tmpdir(), "amber-complete-"));
@@ -23,6 +23,18 @@ test("completes relative and absolute directory fragments", async () => {
     (await completeDirectories(`${root}/b`, root)).map((entry) => entry.value),
     [`${root}/beta`],
   );
+});
+
+test("completes available working roots for empty cwd fragments", async () => {
+  const root = await mkdtemp(join(tmpdir(), "amber-complete-roots-"));
+  const added = join(root, "added");
+  await mkdir(added);
+  const missing = join(root, "missing");
+
+  assert.deepEqual(await completeDirectoryRoots([root, added, missing, added]), [
+    { value: await realpath(root), absolutePath: await realpath(root) },
+    { value: await realpath(added), absolutePath: await realpath(added) },
+  ]);
 });
 
 test("restricts cwd completion to authorized roots", async () => {

@@ -15,6 +15,7 @@ const BLOCKED_DEVICE_PATHS = new Set([
   "/dev/stdout", "/dev/stderr", "/dev/fd/0", "/dev/fd/1", "/dev/fd/2",
 ]);
 const UNSUPPORTED_READ_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".ipynb"]);
+const STATIC_READ_DIRECTORIES = [join(homedir(), ".amber", "plans")];
 
 export const READ_TOOL: ToolDefinition = {
   name: "Read",
@@ -139,7 +140,7 @@ async function readTextFile(
   const requestedPath = resolvedFilePath(input.file_path, currentDirectory);
   assertSupportedTextPath(requestedPath);
   if (isBlockedDevice(requestedPath)) throw new Error(`Cannot read '${requestedPath}': this device file would block or produce infinite output.`);
-  const filePath = await resolveExistingPath(requestedPath, allowedDirectories);
+  const filePath = await resolveExistingPath(requestedPath, [...new Set([...allowedDirectories, ...STATIC_READ_DIRECTORIES])]);
   throwIfAborted(signal);
   const metadata = await stat(filePath);
   throwIfAborted(signal);

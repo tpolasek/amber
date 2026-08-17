@@ -54,6 +54,21 @@ export async function completeDirectories(
   return completions;
 }
 
+export async function completeDirectoryRoots(roots: string[]): Promise<DirectoryCompletion[]> {
+  const completions: DirectoryCompletion[] = [];
+  for (const root of roots) {
+    try {
+      const absolutePath = await realpath(root);
+      if (!(await stat(absolutePath)).isDirectory()) continue;
+      if (completions.some((existing) => existing.absolutePath === absolutePath)) continue;
+      completions.push({ value: absolutePath, absolutePath });
+    } catch {
+      // Skip roots that no longer exist.
+    }
+  }
+  return completions;
+}
+
 function completionParts(fragment: string, baseDirectory: string): {
   parentCandidate: string;
   displayPrefix: string;

@@ -22,7 +22,7 @@ import {
 } from "./task-tools.js";
 import { executePlanningTaskTool, PLANNING_TASK_TOOLS } from "./planning-task-tools.js";
 import { executeFileTool, FILE_TOOLS } from "./file-tools.js";
-import { completeDirectories } from "./directory-completion.js";
+import { completeDirectories, completeDirectoryRoots } from "./directory-completion.js";
 import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
 import { AGENT_TOOL_NAME, getAgentDefinition, parseAgentInput, startAgentRuns } from "./agent-tool.js";
 import { ActiveSessionRuns, abortSessionOperations } from "./session-aborts.js";
@@ -1154,6 +1154,9 @@ async function listDirectoryCompletions(response: ServerResponse, sessionId: str
     return json(response, 400, { error: "Invalid directory completion path" });
   }
   const currentDirectory = sessionWorkingDirectory(session);
+  if (command === "cwd" && fragment === "") {
+    return json(response, 200, { directories: await completeDirectoryRoots(sessionDirectoryRoots(session)) });
+  }
   const directories = await completeDirectories(
     fragment,
     command === "cwd" ? currentDirectory : workspaceRoot,

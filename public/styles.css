@@ -398,6 +398,7 @@ button { color: inherit; }
 .plan-mode-feedback textarea:focus { border-color: var(--amber); }
 .plan-mode-feedback textarea::placeholder { color: #55462f; }
 .plan-mode-dialog-footer > div { display: flex; gap: 8px; }
+.plan-mode-dialog-footer button { white-space: nowrap; flex-shrink: 0; }
 .plan-mode-decline-button { padding: 7px 11px; border: 1px solid rgba(255,178,26,.25); background: transparent; color: #a68c60; cursor: pointer; font: inherit; font-size: 11px; letter-spacing: .08em; }
 .plan-mode-decline-button:hover:not(:disabled) { border-color: var(--amber-dim); background: var(--amber-faint); }
 .plan-mode-decline-button.ready { border-color: var(--amber-dim); background: var(--amber-faint); color: var(--amber-hot); }

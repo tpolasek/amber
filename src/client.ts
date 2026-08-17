@@ -2445,9 +2445,12 @@ function renderDirectoryMenu(): void {
     button.setAttribute("aria-selected", String(index === selectedCommand));
     const value = document.createElement("strong");
     value.textContent = directory.value;
-    const absolutePath = document.createElement("span");
-    absolutePath.textContent = directory.absolutePath;
-    button.append(value, absolutePath);
+    button.append(value);
+    if (directory.absolutePath !== directory.value) {
+      const absolutePath = document.createElement("span");
+      absolutePath.textContent = directory.absolutePath;
+      button.append(absolutePath);
+    }
     button.addEventListener("mousedown", (event) => event.preventDefault());
     button.addEventListener("click", () => acceptDirectoryCompletion(directory));
     elements.commandMenu.append(button);
@@ -2466,7 +2469,8 @@ function acceptDirectoryCompletion(directory: DirectoryCompletion): void {
 function selectCommand(command: CommandDefinition, execute: boolean): void {
   const acceptsPath = command.name === "/add-dir" || command.name === "/cwd";
   elements.prompt.value = acceptsPath ? `${command.name} ` : command.name;
-  hideCommandMenu();
+  if (acceptsPath) updateCommandMenu();
+  else hideCommandMenu();
   resizePrompt();
   if (execute && !acceptsPath) {
     if (state.streaming) queueCurrentMessage();
