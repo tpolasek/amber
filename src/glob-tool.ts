@@ -24,7 +24,7 @@ export const GLOB_TOOL: ToolDefinition = {
       pattern: { type: "string", description: "The glob pattern to match files against" },
       path: {
         type: "string",
-        description: "The directory to search in. Defaults to the current working directory. Must be a valid directory path - omit it rather than passing null/undefined.",
+        description: 'The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter "undefined" or "null" - simply omit it for the default behavior. Must be a valid directory path if provided.',
       },
     },
     required: ["pattern"],
