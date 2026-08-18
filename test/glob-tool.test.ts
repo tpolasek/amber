@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, realpath, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeGlob, GLOB_TOOL, parseGlobInput } from "../src/glob-tool.js";
+import { executeGlob, GLOB_TOOL, isPermissionOnlyRipgrepStderr, parseGlobInput } from "../src/glob-tool.js";
 
 const signal = () => new AbortController().signal;
 
@@ -112,4 +112,43 @@ test("an aborted signal rejects the search", async () => {
     executeGlob(parseGlobInput({ pattern: "*.txt" }), [directory], directory, AbortSignal.abort()),
     (error: unknown) => error instanceof Error && error.name === "AbortError",
   );
+});
+
+test("classifies permission-only ripgrep stderr", () => {
+  assert.equal(isPermissionOnlyRipgrepStderr(""), false);
+  assert.equal(isPermissionOnlyRipgrepStderr("   \n"), false);
+  assert.equal(
+    isPermissionOnlyRipgrepStderr("rg: /tmp/systemd-private-x: Permission denied (os error 13)"),
+    true,
+  );
+  assert.equal(
+    isPermissionOnlyRipgrepStderr([
+      "rg: /tmp/a: Permission denied (os error 13)",
+      "rg: /tmp/b: Permission denied (os error 13)",
+    ].join("\n")),
+    true,
+  );
+  assert.equal(isPermissionOnlyRipgrepStderr("rg: error parsing glob"), false);
+  assert.equal(
+    isPermissionOnlyRipgrepStderr("rg: /tmp/a: Permission denied (os error 13)\nrg: error parsing glob"),
+    false,
+  );
+});
+
+test("returns readable matches when a subdirectory is unreadable", async () => {
+  const directory = await fixture();
+  const locked = join(directory, "locked");
+  await mkdir(locked);
+  await writeFile(join(locked, "secret.txt"), "hidden\n");
+  await writeFile(join(directory, "visible.txt"), "ok\n");
+  await chmod(locked, 0);
+  try {
+    const result = await executeGlob(parseGlobInput({ pattern: "**/*.txt" }), [directory], directory, signal());
+    const paths = result.resultText.split("\n");
+    assert.ok(paths.includes("visible.txt"), result.resultText);
+    assert.ok(!paths.some((path) => path.includes("secret.txt") || path.includes("locked")), result.resultText);
+    assert.doesNotMatch(result.resultText, /ripgrep failed/);
+  } finally {
+    await chmod(locked, 0o700);
+  }
 });

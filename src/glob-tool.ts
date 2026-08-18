@@ -98,6 +98,17 @@ function abortError(): Error {
   return error;
 }
 
+// rg exits 2 when it cannot descend into a directory (common under /tmp because
+// of root-owned systemd-private-* dirs) while still writing readable matches
+// to stdout. Treat those as skippable so Glob returns what it can see.
+const PERMISSION_ERROR = /permission denied|operation not permitted|access is denied|os error 13|os error 1\b/i;
+
+export function isPermissionOnlyRipgrepStderr(stderr: string): boolean {
+  const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+  if (lines.length === 0) return false;
+  return lines.every((line) => PERMISSION_ERROR.test(line));
+}
+
 function toRelativePath(filePath: string, currentDirectory: string): string {
   const rel = relative(currentDirectory, filePath);
   if (rel === "") return ".";
@@ -120,8 +131,9 @@ export async function executeGlob(
   }
   args.push("--glob", input.pattern, "--", searchPath);
   const run = await runRipgrep(args, searchPath, signal ?? new AbortController().signal);
-  // rg exits 0 with files, 1 with no matches, and 2+ on error.
-  if (run.exitCode !== null && run.exitCode >= 2) {
+  // rg exits 0 with files, 1 with no matches, and 2+ on error. Permission
+  // failures on individual directories should not hide readable matches.
+  if (run.exitCode !== null && run.exitCode >= 2 && !isPermissionOnlyRipgrepStderr(run.stderr)) {
     throw new Error(`ripgrep failed (exit ${run.exitCode}): ${run.stderr.trim() || "unknown error"}`);
   }
   if (run.exitCode === null) throw new Error("ripgrep terminated unexpectedly");
