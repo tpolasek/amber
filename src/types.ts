@@ -54,6 +54,7 @@ export interface Message {
   toolCalls?: ToolCall[];
   toolUseId?: string;
   toolError?: boolean;
+  contentBlocks?: Array<{ type: "text"; text: string }>;
 }
 
 export interface SessionCompaction {
@@ -114,11 +115,16 @@ export interface SessionSummary {
   preview: string;
 }
 
+export interface ProviderCacheControl {
+  type: "ephemeral";
+  scope?: "global";
+}
+
 export type ProviderContentBlock =
   | { type: "thinking"; thinking: string; signature: string }
-  | { type: "text"; text: string }
+  | { type: "text"; text: string; cache_control?: ProviderCacheControl }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
-  | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean };
+  | { type: "tool_result"; tool_use_id: string; content: string | Array<{ type: "text"; text: string }>; is_error?: boolean; cache_control?: ProviderCacheControl };
 
 export interface ToolDefinition {
   name: string;
@@ -134,11 +140,14 @@ export interface ToolDefinition {
 export interface StreamOptions {
   tools?: ToolDefinition[];
   system?: string | ProviderSystemBlock[];
+  temperature?: number;
+  thinking?: boolean;
 }
 
 export interface ProviderSystemBlock {
   type: "text";
   text: string;
+  cache_control?: ProviderCacheControl;
 }
 
 export interface ProviderMessage {

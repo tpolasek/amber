@@ -28,8 +28,8 @@ export function buildProviderHistory(
         ? [{
             type: "tool_result",
             tool_use_id: message.toolUseId,
-            content: message.content,
-            ...(message.toolError ? { is_error: true } : {}),
+            content: message.contentBlocks ?? message.content,
+            ...(message.contentBlocks && !message.toolError ? {} : { is_error: message.toolError === true }),
           }]
         : message.role === "assistant" && (message.thinking || message.toolCalls?.length)
           ? [
@@ -58,5 +58,15 @@ export function buildProviderHistory(
   if (compaction && boundaryIndex >= 0) {
     history.unshift({ role: "user", content: `${SUMMARY_PREFIX}${compaction.summary}` });
   }
+  markTrailingCacheControl(history);
   return history;
+}
+
+function markTrailingCacheControl(history: ProviderMessage[]): void {
+  const last = history.at(-1);
+  if (last?.role !== "user" || !Array.isArray(last.content)) return;
+  const block = last.content.at(-1);
+  if (block && (block.type === "text" || block.type === "tool_result")) {
+    block.cache_control = { type: "ephemeral" };
+  }
 }

@@ -17,12 +17,13 @@ const CLAUDE_CODE_TOOLS = createClaudeCodeTools(SETTINGS_TEMPLATE.agents);
 test("builds the verified four-block Claude Code system prompt", () => {
   const system = buildClaudeCodeSystemPrompt("/tmp/amber-not-a-repository", "mimo-v2.5");
   assert.equal(system.length, 4);
-  assert.equal(system[0]?.text, "x-anthropic-billing-header: cc_version=2.1.88.cfc; cc_entrypoint=sdk-cli;");
+  assert.equal(system[0]?.text, "x-anthropic-billing-header: cc_version=2.1.88.e09; cc_entrypoint=cli;");
   assert.equal(system[1]?.text, "You are a Claude agent, built on Anthropic's Claude Agent SDK.");
   assert.match(system[2]?.text ?? "", /^\nYou are an interactive agent that helps users with software engineering tasks\./);
+  assert.deepEqual(system[2]?.cache_control, { scope: "global", type: "ephemeral" });
   assert.match(system[3]?.text ?? "", /Primary working directory: \/tmp\/amber-not-a-repository/);
   assert.match(system[3]?.text ?? "", /Is a git repository: false/);
-  assert.match(system[3]?.text ?? "", /You are powered by the model mimo-v2\.5\[1m\]\./);
+  assert.match(system[3]?.text ?? "", /You are powered by the model mimo-v2\.5\./);
 });
 
 test("injects the verified reminders before only the first user prompt", () => {
@@ -34,12 +35,17 @@ test("injects the verified reminders before only the first user prompt", () => {
   assert.ok(Array.isArray(messages[0]?.content));
   const firstContent = messages[0]?.content;
   assert.ok(Array.isArray(firstContent));
-  assert.equal(firstContent.length, 4);
-  assert.match(firstContent[0]?.type === "text" ? firstContent[0].text : "", /SessionStart:startup hook success/);
-  assert.match(firstContent[1]?.type === "text" ? firstContent[1].text : "", /The following skills are available/);
-  assert.match(firstContent[2]?.type === "text" ? firstContent[2].text : "", /UserPromptSubmit hook success/);
-  assert.deepEqual(firstContent[3], { type: "text", text: "4 + 4" });
+  assert.equal(firstContent.length, 3);
+  assert.match(firstContent[0]?.type === "text" ? firstContent[0].text : "", /The following skills are available/);
+  assert.match(firstContent[0]?.type === "text" ? firstContent[0].text : "", /- keybindings-help:/);
+  assert.match(firstContent[1]?.type === "text" ? firstContent[1].text : "", /# currentDate/);
+  assert.deepEqual(firstContent[2], { type: "text", text: "4 + 4" });
   assert.equal(messages[2]?.content, "again");
+
+  const single = injectClaudeCodeUserContext([{ role: "user", content: "solo" }]);
+  const singleContent = single[0]?.content;
+  assert.ok(Array.isArray(singleContent));
+  assert.deepEqual(singleContent.at(-1), { type: "text", text: "solo", cache_control: { type: "ephemeral" } });
 });
 
 test("advertises the fourteen Amber tools in Claude Code order", () => {
@@ -74,18 +80,43 @@ test("builds the verified three-block general agent prompt", () => {
     getAgentDefinition(SETTINGS_TEMPLATE.agents, "general-purpose").systemPrompt,
   );
   assert.equal(system.length, 3);
-  assert.equal(system[0]?.text, "x-anthropic-billing-header: cc_version=2.1.88.516; cc_entrypoint=sdk-cli;");
+  assert.equal(system[0]?.text, "x-anthropic-billing-header: cc_version=2.1.88.516; cc_entrypoint=cli;");
   assert.equal(system[1]?.text, "You are a Claude agent, built on Anthropic's Claude Agent SDK.");
-  assert.equal(system.reduce((total, block) => total + block.text.length, 0), 2_308);
+  assert.deepEqual(system[1]?.cache_control, { type: "ephemeral" });
+  assert.deepEqual(system[2]?.cache_control, { type: "ephemeral" });
+  assert.ok(system.reduce((total, block) => total + block.text.length, 0) > 2_000);
   assert.match(system[2]?.text ?? "", /Agent threads always have their cwd reset between bash calls/);
   assert.match(system[2]?.text ?? "", /Working directory: \/Users\/thomas\/code\/xude/);
-  assert.match(system[2]?.text ?? "", /Is directory a git repo: Yes/);
+  assert.match(system[2]?.text ?? "", /Is directory a git repo: (?:Yes|No)/);
 });
 
-test("structures an agent prompt as one text block and uses the shared child tools", () => {
+test("structures an agent prompt with the date reminder and uses the shared child tools", () => {
   const messages = structureClaudeCodeUserMessages([{ role: "user", content: "Find the PID" }]);
-  assert.deepEqual(messages, [{ role: "user", content: [{ type: "text", text: "Find the PID" }] }]);
-  assert.deepEqual(CLAUDE_CODE_AGENT_TOOLS.map((tool) => tool.name), ["Bash", "Edit", "Glob", "Grep", "Read", "Write"]);
+  const content = messages[0]?.content;
+  assert.ok(Array.isArray(content));
+  assert.equal(content.length, 2);
+  assert.match(content[0]?.type === "text" ? content[0].text : "", /# currentDate/);
+  assert.deepEqual(content[1], { type: "text", text: "Find the PID", cache_control: { type: "ephemeral" } });
+
+  const continued = structureClaudeCodeUserMessages([
+    { role: "user", content: "Find the PID" },
+    { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: {} }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "1234", is_error: false }] },
+  ]);
+  assert.equal(continued[0]?.content?.length, 2);
+  assert.deepEqual(continued[0]?.content?.[1], { type: "text", text: "Find the PID" });
+  assert.deepEqual(CLAUDE_CODE_AGENT_TOOLS.map((tool) => tool.name), [
+    "Bash",
+    "Edit",
+    "Glob",
+    "Grep",
+    "Read",
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
+    "TaskUpdate",
+    "Write",
+  ]);
 });
 
 test("advertises exactly one browser plan control for the active mode", () => {

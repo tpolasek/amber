@@ -42,8 +42,30 @@ test("runs Bash in an allowed directory and captures output", async () => {
   assert.equal(result.status, "complete");
   assert.equal(result.exitCode, 0);
   assert.equal(result.workingDirectory, canonicalDirectory);
-  assert.match(result.resultText, new RegExp(`Bash starting directory for this call: ${canonicalDirectory}`));
+  assert.equal(result.resultText, "amber");
   assert.match(result.statusDisplay.text, /^(?:\d+ms|\d+(?:\.\d)?s)$/);
+});
+
+test("formats failing Bash results like Claude Code", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-bash-"));
+  const executor = new BashExecutor();
+  const hooks = { onRunning: () => undefined, onOutput: () => undefined };
+
+  const bare = await executor.run(
+    { command: "exit 7", timeoutMs: 2_000 }, [directory], new AbortController().signal, hooks,
+  );
+  assert.equal(bare.status, "error");
+  assert.equal(bare.resultText, "Exit code 7");
+
+  const withStderr = await executor.run(
+    { command: "printf oops 1>&2; exit 9", timeoutMs: 2_000 }, [directory], new AbortController().signal, hooks,
+  );
+  assert.equal(withStderr.resultText, "Exit code 9\noops");
+
+  const mixed = await executor.run(
+    { command: "printf out; printf err 1>&2; exit 3", timeoutMs: 2_000 }, [directory], new AbortController().signal, hooks,
+  );
+  assert.match(mixed.resultText, /^Exit code 3\n(outerr|errout)$/);
 });
 
 test("does not leak Node watch dependency reporting into Bash descendants", async () => {

@@ -96,7 +96,7 @@ test("provider history preserves tool calls and groups their results", () => {
       kind: "tool-result", toolUseId: "tool-1",
     },
     {
-      id: "result-2", role: "user", content: "Exit code: 1", createdAt: now, status: "complete",
+      id: "result-2", role: "user", content: "Exit code 1", createdAt: now, status: "complete",
       kind: "tool-result", toolUseId: "tool-2", toolError: true,
     },
   ];
@@ -113,9 +113,56 @@ test("provider history preserves tool calls and groups their results", () => {
     {
       role: "user",
       content: [
-        { type: "tool_result", tool_use_id: "tool-1", content: "/tmp" },
-        { type: "tool_result", tool_use_id: "tool-2", content: "Exit code: 1", is_error: true },
+        { type: "tool_result", tool_use_id: "tool-1", content: "/tmp", is_error: false },
+        {
+          type: "tool_result",
+          tool_use_id: "tool-2",
+          content: "Exit code 1",
+          is_error: true,
+          cache_control: { type: "ephemeral" },
+        },
       ],
     },
   ]);
+});
+
+test("provider history emits agent results as text blocks without is_error", () => {
+  const now = new Date().toISOString();
+  const blocks = [
+    { type: "text" as const, text: "USA has the highest GDP." },
+    {
+      type: "text" as const,
+      text: "agentId: warm-oak-idea.k3m9x2q1 (use SendMessage with to: 'warm-oak-idea.k3m9x2q1' to continue this agent)\n"
+        + "<usage>total_tokens: 7546\ntool_uses: 1\nduration_ms: 5614</usage>",
+    },
+  ];
+  const messages: Message[] = [
+    {
+      id: "assistant",
+      role: "assistant",
+      content: "",
+      createdAt: now,
+      status: "complete",
+      toolCalls: [{ id: "agent-1", name: "Agent", input: {}, status: "complete", output: "" }],
+    },
+    {
+      id: "result",
+      role: "user",
+      content: "USA has the highest GDP.",
+      createdAt: now,
+      status: "complete",
+      kind: "tool-result",
+      toolUseId: "agent-1",
+      contentBlocks: blocks,
+    },
+  ];
+
+  const history = buildProviderHistory(messages);
+  const toolResult = (history[1]?.content as Array<Record<string, unknown>>)?.[0];
+  assert.deepEqual(toolResult, {
+    type: "tool_result",
+    tool_use_id: "agent-1",
+    content: blocks,
+    cache_control: { type: "ephemeral" },
+  });
 });

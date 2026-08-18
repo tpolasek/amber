@@ -147,17 +147,13 @@ function executeBash(
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
-    let stdout = "";
-    let stderr = "";
     let visibleOutput = "";
     let timedOut = false;
     let settled = false;
     let forceKillTimer: NodeJS.Timeout | undefined;
 
-    const append = (chunk: Buffer | string, stream: "stdout" | "stderr") => {
+    const append = (chunk: Buffer | string) => {
       const text = chunk.toString();
-      if (stream === "stdout") stdout += text;
-      else stderr += text;
       if (visibleOutput.length >= MAX_OUTPUT_CHARACTERS) return;
       const available = MAX_OUTPUT_CHARACTERS - visibleOutput.length;
       const visible = text.slice(0, available);
@@ -170,8 +166,8 @@ function executeBash(
       }
     };
 
-    child.stdout.on("data", (chunk) => append(chunk, "stdout"));
-    child.stderr.on("data", (chunk) => append(chunk, "stderr"));
+    child.stdout.on("data", append);
+    child.stderr.on("data", append);
     const kill = (signalName: NodeJS.Signals) => {
       if (child.pid && process.platform !== "win32") {
         try { process.kill(-child.pid, signalName); } catch { /* process already exited */ }
@@ -208,15 +204,13 @@ function executeBash(
       if (signal.aborted) return reject(abortError());
       const durationMs = Date.now() - started;
       const status = timedOut ? "timed_out" : exitCode === 0 ? "complete" : "error";
-      const sections = [
-        `Bash starting directory for this call: ${workingDirectory}`,
-        timedOut ? `Timed out after ${input.timeoutMs} ms` : `Exit code: ${exitCode ?? `signal ${closeSignal ?? "unknown"}`}`,
-        ...(stdout ? [`stdout:\n${truncate(stdout)}`] : []),
-        ...(stderr ? [`stderr:\n${truncate(stderr)}`] : []),
-      ];
+      const combined = truncate(visibleOutput).replace(/\n+$/, "");
+      const headline = timedOut
+        ? `Timed out after ${input.timeoutMs} ms`
+        : `Exit code ${exitCode ?? `signal ${closeSignal ?? "unknown"}`}`;
       resolveResult({
         output: visibleOutput || "(no output)",
-        resultText: sections.join("\n\n"),
+        resultText: status === "complete" ? combined : combined ? `${headline}\n${combined}` : headline,
         status,
         exitCode,
         durationMs,

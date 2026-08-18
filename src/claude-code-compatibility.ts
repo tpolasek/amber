@@ -12,7 +12,7 @@ import {
   TASK_LIST_TOOL,
   TASK_UPDATE_TOOL,
 } from "./planning-task-tools.js";
-import type { ProviderMessage, ProviderSystemBlock, ToolDefinition } from "./types.js";
+import type { ProviderContentBlock, ProviderMessage, ProviderSystemBlock, ToolDefinition } from "./types.js";
 
 const catalogTools = toolCatalog.tools as unknown as ToolDefinition[];
 const taskOutputIndex = catalogTools.findIndex((tool) => tool.name === "TaskOutput");
@@ -40,10 +40,14 @@ export function toolsForPlanMode(
   return [...tools, active ? EXIT_PLAN_MODE_TOOL : ENTER_PLAN_MODE_TOOL];
 }
 
-export const CLAUDE_CODE_AGENT_TOOLS = catalogTools.filter((tool) =>
-  tool.name === "Bash" || tool.name === "Edit" || tool.name === "Glob" || tool.name === "Grep" || tool.name === "Read"
-    || tool.name === "Write"
-);
+export const CLAUDE_CODE_AGENT_TOOLS: ToolDefinition[] = [
+  ...catalogTools.slice(1, taskOutputIndex),
+  TASK_CREATE_TOOL,
+  TASK_GET_TOOL,
+  TASK_LIST_TOOL,
+  TASK_UPDATE_TOOL,
+  ...catalogTools.slice(writeIndex),
+];
 
 export function buildClaudeCodeSystemPrompt(currentDirectory: string, model: string): ProviderSystemBlock[] {
   const shell = basename(process.env.SHELL ?? "unknown");
@@ -60,7 +64,7 @@ export function buildClaudeCodeSystemPrompt(currentDirectory: string, model: str
     ` - Platform: ${platform()}`,
     ` - Shell: ${shell}`,
     ` - OS Version: ${type()} ${release()}`,
-    ` - You are powered by the model ${model}[1m].`,
+    ` - You are powered by the model ${model}.`,
     "",
     "When working with tool results, write down any important information you might need later in your response, as the original tool result may be cleared later.",
   ].join("\n");
@@ -73,23 +77,40 @@ export function buildClaudeCodeSystemPrompt(currentDirectory: string, model: str
 
 export function injectClaudeCodeUserContext(messages: ProviderMessage[]): ProviderMessage[] {
   let injected = false;
-  return messages.map((message) => {
+  return messages.map((message, index) => {
     if (injected || message.role !== "user" || typeof message.content !== "string") return message;
     injected = true;
+    const promptBlock: ProviderContentBlock = { type: "text", text: message.content };
+    if (index === messages.length - 1) promptBlock.cache_control = { type: "ephemeral" };
     return {
       ...message,
       content: [
         ...(structuredClone(compatibility.userPrefix) as Array<{ type: "text"; text: string }>),
-        { type: "text", text: message.content },
+        currentDateReminder(),
+        promptBlock,
       ],
     };
   });
 }
 
+function currentDateReminder(): ProviderContentBlock {
+  const today = new Date().toISOString().slice(0, 10);
+  return {
+    type: "text",
+    text: `<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# currentDate\nToday's date is ${today}.\n\n      IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n\n`,
+  };
+}
+
 export function structureClaudeCodeUserMessages(messages: ProviderMessage[]): ProviderMessage[] {
-  return messages.map((message) => message.role === "user" && typeof message.content === "string"
-    ? { ...message, content: [{ type: "text", text: message.content }] }
-    : message);
+  let injected = false;
+  return messages.map((message, index) => {
+    if (message.role !== "user" || typeof message.content !== "string") return message;
+    const promptBlock: ProviderContentBlock = { type: "text", text: message.content };
+    if (index === messages.length - 1) promptBlock.cache_control = { type: "ephemeral" };
+    const reminder = injected ? [] : [currentDateReminder()];
+    injected = true;
+    return { ...message, content: [...reminder, promptBlock] };
+  });
 }
 
 export function buildClaudeCodeAgentSystemPrompt(
@@ -115,13 +136,13 @@ export function buildClaudeCodeAgentSystemPrompt(
     `Shell: ${shell}`,
     `OS Version: ${type()} ${release()}`,
     "</env>",
-    `You are powered by the model ${model}[1m].`,
+    `You are powered by the model ${model}.`,
   ].join("\n");
 
   return [
-    { type: "text", text: "x-anthropic-billing-header: cc_version=2.1.88.516; cc_entrypoint=sdk-cli;" },
-    structuredClone(compatibility.systemPrefix[1]) as ProviderSystemBlock,
-    { type: "text", text: prompt },
+    { type: "text", text: "x-anthropic-billing-header: cc_version=2.1.88.516; cc_entrypoint=cli;" },
+    { ...(structuredClone(compatibility.systemPrefix[1]) as ProviderSystemBlock), cache_control: { type: "ephemeral" } },
+    { type: "text", text: prompt, cache_control: { type: "ephemeral" } },
   ];
 }
 

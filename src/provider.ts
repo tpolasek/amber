@@ -72,7 +72,8 @@ export class AnthropicProvider implements LlmProvider {
         max_tokens: 32_000,
         stream: true,
         ...(options?.tools?.length ? { tools: options.tools } : {}),
-        thinking: { type: "adaptive" },
+        ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+        ...(options?.thinking === false ? {} : { thinking: { type: "adaptive" } }),
         system: options?.system
           ?? "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.",
         messages,

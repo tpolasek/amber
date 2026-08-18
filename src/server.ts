@@ -466,6 +466,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       for await (const event of activeProvider.stream(history, controller.signal, {
         tools: sessionTools(session, approvalCapable),
         system: sessionSystemPrompt(session, currentDirectory, activeProvider.model),
+        ...(session.agentType ? { temperature: 1, thinking: false } : {}),
       })) {
         if (event.type === "delta") {
           assistantMessage.content += event.text;
@@ -560,6 +561,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       for (const call of orderedCalls) {
         throwIfSessionAborted(controller.signal);
         let resultText = call.output;
+        let resultBlocks: Array<{ type: "text"; text: string }> | undefined;
         let abortAfterResult: Error | undefined;
         let endTurnAfterResult = false;
         if (call.status !== "error") {
@@ -682,6 +684,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           } else if (call.name === AGENT_TOOL_NAME) {
             const result = await agentRuns.get(call.id)!;
             resultText = result.resultText;
+            resultBlocks = result.resultBlocks;
             abortAfterResult = result.abortAfterResult;
           } else if (call.name === ASK_USER_QUESTION_TOOL_NAME) {
             const started = Date.now();
@@ -919,6 +922,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           kind: "tool-result",
           toolUseId: call.id,
           toolError: call.status !== "complete",
+          ...(resultBlocks ? { contentBlocks: resultBlocks } : {}),
         });
         await store.save(session);
         if (abortAfterResult) throw abortAfterResult;
@@ -1093,6 +1097,7 @@ function isPlanModeTool(name: string): boolean {
 
 interface AgentExecutionResult {
   resultText: string;
+  resultBlocks?: Array<{ type: "text"; text: string }>;
   abortAfterResult?: Error;
 }
 
@@ -1109,6 +1114,7 @@ async function executeAgentCall(
   call.statusDisplay = { text: "RUNNING AGENT", appendElapsed: true };
   onUpdate(call);
   let resultText = "";
+  let resultBlocks: Array<{ type: "text"; text: string }> | undefined;
   let abortAfterResult: Error | undefined;
   let child: Session | undefined;
   try {
@@ -1122,6 +1128,15 @@ async function executeAgentCall(
     await persistParent();
     onUpdate(call);
     resultText = await runSessionPrompt(child.id, input.prompt, signal);
+    const stats = await agentUsage(child.id);
+    resultBlocks = [
+      { type: "text", text: resultText },
+      {
+        type: "text",
+        text: `agentId: ${child.id} (use SendMessage with to: '${child.id}' to continue this agent)\n`
+          + `<usage>total_tokens: ${stats.totalTokens}\ntool_uses: ${stats.toolUses}\nduration_ms: ${Date.now() - started}</usage>`,
+      },
+    ];
     call.status = "complete";
     call.output = resultText;
     call.statusDisplay = { text: "AGENT COMPLETE" };
@@ -1147,7 +1162,20 @@ async function executeAgentCall(
   onUpdate(call);
   return {
     resultText,
+    ...(resultBlocks ? { resultBlocks } : {}),
     ...(abortAfterResult ? { abortAfterResult } : {}),
+  };
+}
+
+async function agentUsage(sessionId: string): Promise<{ totalTokens: number; toolUses: number }> {
+  const session = await store.get(sessionId);
+  if (!session) return { totalTokens: 0, toolUses: 0 };
+  return {
+    totalTokens: session.messages.reduce(
+      (total, message) => total + (message.usage?.input ?? 0) + (message.usage?.output ?? 0),
+      0,
+    ),
+    toolUses: session.messages.filter((message) => message.kind === "tool-result").length,
   };
 }
 
