@@ -1,5 +1,6 @@
 import { BottomScrollPin, StreamingThinkingReveal } from "./streaming-thinking.js";
 import {
+  commitCommandPrompt,
   compactHeaderPath,
   formatDuration,
   formatTime,
@@ -48,7 +49,7 @@ interface SessionSnapshot {
   planModeRequest?: PlanModeRequest;
 }
 interface QuestionSelection { labels: Set<string>; other: string; otherSelected: boolean; focusIndex: number }
-interface CommandDefinition { name: "/add-dir" | "/cwd" | "/context" | "/clear" | "/compact" | "/fork" | "/name" | "/tasks"; description: string }
+interface CommandDefinition { name: "/add-dir" | "/cwd" | "/context" | "/clear" | "/commit" | "/compact" | "/fork" | "/name" | "/tasks"; description: string }
 interface DirectoryCompletion { value: string; absolutePath: string }
 interface MarkdownRenderer { render(source: string): string }
 declare const markdownit: (options: { html: boolean; linkify: boolean; breaks: boolean; typographer: boolean }) => MarkdownRenderer;
@@ -58,6 +59,7 @@ const commands: CommandDefinition[] = [
   { name: "/cwd", description: "Show or change the current working directory" },
   { name: "/context", description: "Show token usage for the current model context" },
   { name: "/clear", description: "Erase this session's conversation and model context" },
+  { name: "/commit", description: "Commit current changes with a generated message; add 'push' to also push" },
   { name: "/compact", description: "Summarize model context while keeping the full transcript" },
   { name: "/fork", description: "Fork this session with its complete history" },
   { name: "/name", description: "Generate a session name, or pass a title" },
@@ -1483,6 +1485,16 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
   const session = state.session;
   if (!session || state.streaming) return;
   if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/compact") return runCompactCommand(command, clearComposer);
+  if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/commit") {
+    const prompt = commitCommandPrompt(command);
+    if (!prompt) {
+      notify("Usage: /commit [push]");
+      elements.prompt.focus();
+      return;
+    }
+    if (clearComposer) clearPrompt();
+    return sendMessage(prompt);
+  }
   if (clearComposer) clearPrompt();
   setBusy(true);
   try {
