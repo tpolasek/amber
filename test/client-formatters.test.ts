@@ -5,6 +5,8 @@ import {
   compactHeaderPath,
   formatDuration,
   formatTokenCountInThousands,
+  GIT_COMMAND_SUGGESTIONS,
+  gitCommandSuggestions,
   messageFrom,
   parseGitCommand,
   taskRuntime,
@@ -48,6 +50,23 @@ test("expands /commit into a commit prompt and only /commit push mentions pushin
   assert.equal(upper, push);
   assert.equal(commitCommandPrompt("/commit bad arg"), null);
   assert.equal(commitCommandPrompt("/commit push extra"), null);
+});
+
+test("suggests supported /git parameters as the command is typed", () => {
+  assert.equal(gitCommandSuggestions("/commit"), null);
+  assert.equal(gitCommandSuggestions("/g"), null);
+  assert.equal(gitCommandSuggestions("/gitignore"), null);
+  assert.deepEqual(gitCommandSuggestions("/git"), GIT_COMMAND_SUGGESTIONS);
+  assert.deepEqual(gitCommandSuggestions("/git "), GIT_COMMAND_SUGGESTIONS);
+  assert.deepEqual(gitCommandSuggestions("  /Git"), GIT_COMMAND_SUGGESTIONS);
+  assert.deepEqual((gitCommandSuggestions("/git d") ?? []).map((item) => item.value), ["/git diff"]);
+  assert.deepEqual((gitCommandSuggestions("/git show") ?? []).map((item) => item.value), ["/git show"]);
+  assert.deepEqual(
+    (gitCommandSuggestions("/git commit") ?? []).map((item) => item.value),
+    ["/git commit", "/git commit push"],
+  );
+  assert.deepEqual((gitCommandSuggestions("/git commit p") ?? []).map((item) => item.value), ["/git commit push"]);
+  assert.deepEqual(gitCommandSuggestions("/git log"), []);
 });
 
 test("parses /git subcommands into views and commit requests", () => {

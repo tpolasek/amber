@@ -5,6 +5,7 @@ import {
   formatDuration,
   formatTime,
   formatTokenCountInThousands,
+  gitCommandSuggestions,
   messageFrom,
   parseGitCommand,
   relativeTime,
@@ -50,7 +51,7 @@ interface SessionSnapshot {
   planModeRequest?: PlanModeRequest;
 }
 interface QuestionSelection { labels: Set<string>; other: string; otherSelected: boolean; focusIndex: number }
-interface CommandDefinition { name: "/add-dir" | "/cwd" | "/context" | "/clear" | "/commit" | "/compact" | "/fork" | "/git" | "/name" | "/tasks"; description: string }
+interface CommandDefinition { name: string; description: string }
 interface DirectoryCompletion { value: string; absolutePath: string }
 interface MarkdownRenderer { render(source: string): string }
 declare const markdownit: (options: { html: boolean; linkify: boolean; breaks: boolean; typographer: boolean }) => MarkdownRenderer;
@@ -1746,6 +1747,7 @@ async function openGitDialog(view: GitView): Promise<void> {
   elements.gitDialogHints.textContent = view === "diff" ? "Commit · Commit + Push · Esc close" : "Esc close";
   elements.gitCommit.hidden = view !== "diff";
   elements.gitCommitPush.hidden = view !== "diff";
+  elements.gitDialog.querySelector(".git-dialog")?.classList.toggle("git-dialog-tall", view === "diff" || view === "show");
   elements.gitDialog.hidden = false;
   const loading = document.createElement("div");
   loading.className = "tasks-empty";
@@ -2533,6 +2535,17 @@ function updateCommandMenu(): void {
   directoryCompletionRequest += 1;
   directoryCompletions = [];
   directoryCompletionCommand = null;
+  const gitMatches = gitCommandSuggestions(elements.prompt.value);
+  if (gitMatches) {
+    matchingCommands = gitMatches.map((suggestion) => ({
+      name: suggestion.value,
+      description: suggestion.description,
+    }));
+    selectedCommand = 0;
+    if (matchingCommands.length === 0) return hideCommandMenu();
+    renderCommandMenu();
+    return;
+  }
   const value = elements.prompt.value.trim().toLowerCase();
   if (!/^\/[a-z-]*$/.test(value)) return hideCommandMenu();
   matchingCommands = commands.filter((command) => command.name.startsWith(value));
@@ -2618,12 +2631,12 @@ function acceptDirectoryCompletion(directory: DirectoryCompletion): void {
 }
 
 function selectCommand(command: CommandDefinition, execute: boolean): void {
-  const acceptsPath = command.name === "/add-dir" || command.name === "/cwd";
-  elements.prompt.value = acceptsPath ? `${command.name} ` : command.name;
-  if (acceptsPath) updateCommandMenu();
+  const continuesTyping = command.name === "/add-dir" || command.name === "/cwd" || command.name === "/git";
+  elements.prompt.value = continuesTyping ? `${command.name} ` : command.name;
+  if (continuesTyping) updateCommandMenu();
   else hideCommandMenu();
   resizePrompt();
-  if (execute && !acceptsPath) {
+  if (execute && !continuesTyping) {
     if (state.streaming) queueCurrentMessage();
     else elements.composer.requestSubmit();
   }

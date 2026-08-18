@@ -336,7 +336,9 @@ button { color: inherit; }
 .tasks-stop-button:hover { border-color: #ff937c; background: rgba(255,104,77,.14); }
 .tasks-stop-button:disabled { opacity: .45; cursor: wait; }
 .git-dialog { width: min(940px, 100%); }
-.git-dialog-body { padding: 10px 14px; }
+.git-dialog-tall { height: calc(100vh - 48px); max-height: calc(100vh - 48px); }
+.git-dialog-body { min-height: 0; padding: 10px 14px; }
+.git-dialog-tall .tasks-empty { min-height: 100%; }
 .git-dialog-body pre.git-dialog-output { margin: 0; white-space: pre; overflow-wrap: normal; font-size: 12px; line-height: 1.5; }
 .git-dialog-actions { display: flex; gap: 8px; }
 .question-dialog { width: min(980px, 100%); }
@@ -429,6 +431,7 @@ button { color: inherit; }
   .provider-status { display: none; }
   .tasks-overlay { padding: 10px; }
   .tasks-dialog { max-height: calc(100vh - 20px); }
+  .git-dialog-tall { height: calc(100vh - 20px); max-height: calc(100vh - 20px); }
   .tasks-dialog-footer { align-items: flex-start; flex-direction: column; }
   .landing-actions { grid-template-columns: 1fr; }
   .question-dialog-body { min-height: 0; }

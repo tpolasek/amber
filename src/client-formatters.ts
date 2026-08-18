@@ -64,6 +64,26 @@ export type GitCommandRequest =
   | { kind: "git-view"; view: "diff" | "show" | "status" }
   | { kind: "commit"; push: boolean };
 
+export interface GitCommandSuggestion {
+  value: string;
+  description: string;
+}
+
+export const GIT_COMMAND_SUGGESTIONS: GitCommandSuggestion[] = [
+  { value: "/git diff", description: "Show unstaged working-tree changes" },
+  { value: "/git show", description: "Show the latest commit" },
+  { value: "/git status", description: "Show working-tree status" },
+  { value: "/git commit", description: "Commit current changes" },
+  { value: "/git commit push", description: "Commit current changes and push" },
+];
+
+export function gitCommandSuggestions(input: string): GitCommandSuggestion[] | null {
+  const value = input.trimStart();
+  if (!/^\/git(?:\s|$)/i.test(value)) return null;
+  const typed = value.replace(/\s+/g, " ").replace(/\s+$/, "").toLowerCase();
+  return GIT_COMMAND_SUGGESTIONS.filter((suggestion) => suggestion.value.startsWith(typed));
+}
+
 export function parseGitCommand(command: string): GitCommandRequest | null {
   const parts = command.trim().split(/\s+/);
   if (parts[0]?.toLowerCase() !== "/git") return null;
