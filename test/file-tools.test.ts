@@ -208,6 +208,43 @@ test("Edit requires exact uniqueness and preserves CRLF and file mode", async ()
   assert.equal(cachedAfterEdit.output, "Cached Read · reused earlier context");
 });
 
+test("Edit treats replacement dollar sequences as literal text", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-files-"));
+  const filePath = join(directory, "route.ts");
+  await writeFile(filePath, "const tasks = 1;\nconst after = 2;\n", "utf8");
+  const current = session();
+  await executeFileTool("Read", { file_path: filePath }, [directory], current);
+
+  await executeFileTool(
+    "Edit",
+    {
+      file_path: filePath,
+      old_string: "const tasks = 1;",
+      new_string: "const tasks = 1;\nconst git = `/git$`;",
+    },
+    [directory],
+    current,
+  );
+  assert.equal(await readFile(filePath, "utf8"), "const tasks = 1;\nconst git = `/git$`;\nconst after = 2;\n");
+
+  await executeFileTool("Read", { file_path: filePath }, [directory], current);
+  await executeFileTool(
+    "Edit",
+    {
+      file_path: filePath,
+      old_string: "const git = `/git$`;",
+      new_string: "const git = `/git$'`;\nconst extra = '$&$1';",
+      replace_all: true,
+    },
+    [directory],
+    current,
+  );
+  assert.equal(
+    await readFile(filePath, "utf8"),
+    "const tasks = 1;\nconst git = `/git$'`;\nconst extra = '$&$1';\nconst after = 2;\n",
+  );
+});
+
 test("Edit with an empty old_string creates a missing file", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-files-"));
   const filePath = join(directory, "nested", "created.txt");

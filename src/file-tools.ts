@@ -257,7 +257,7 @@ async function editTextFile(
   if (occurrences > 1 && !replaceAll) {
     throw new Error(`Found ${occurrences} matches of the string to replace, but replace_all is false. Set replace_all to true or provide more context.`);
   }
-  const updated = replaceAll ? original.replaceAll(oldString, input.new_string) : original.replace(oldString, input.new_string);
+  const updated = replaceLiteral(original, oldString, input.new_string, replaceAll);
   await atomicWrite(filePath, usesCrlf ? updated.replaceAll("\n", "\r\n") : updated);
   await updateWrittenFileState(filePath, session);
   return {
@@ -458,6 +458,14 @@ function splitLines(content: string): string[] {
 function countOccurrences(content: string, needle: string): number {
   if (!needle) return content ? 0 : 1;
   return content.split(needle).length - 1;
+}
+
+function replaceLiteral(content: string, needle: string, replacement: string, all: boolean): string {
+  if (!needle) return replacement;
+  if (all) return content.split(needle).join(replacement);
+  const index = content.indexOf(needle);
+  if (index === -1) return content;
+  return content.slice(0, index) + replacement + content.slice(index + needle.length);
 }
 
 async function atomicWrite(filePath: string, content: string): Promise<void> {
