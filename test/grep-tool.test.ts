@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, realpath, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeGrep, GREP_TOOL, parseGrepInput } from "../src/grep-tool.js";
+import { executeGrep, GREP_TOOL, isPermissionOnlyRipgrepStderr, parseGrepInput } from "../src/grep-tool.js";
 
 const signal = () => new AbortController().signal;
 
@@ -273,4 +273,53 @@ test("an aborted signal rejects the search", async () => {
     executeGrep(parseGrepInput({ pattern: "needle" }), [directory], directory, AbortSignal.abort()),
     (error: unknown) => error instanceof Error && error.name === "AbortError",
   );
+});
+
+test("isPermissionOnlyRipgrepStderr classifies stderr", () => {
+  assert.equal(isPermissionOnlyRipgrepStderr(""), false);
+  assert.equal(isPermissionOnlyRipgrepStderr("rg: /tmp/a: Permission denied (os error 13)"), true);
+  assert.equal(isPermissionOnlyRipgrepStderr("rg: error parsing glob"), false);
+  assert.equal(
+    isPermissionOnlyRipgrepStderr("rg: /tmp/a: Permission denied (os error 13)\nrg: error parsing glob"),
+    false,
+  );
+});
+
+test("returns readable matches plus a warning when a subdirectory is unreadable", async () => {
+  const directory = await fixture();
+  const locked = join(directory, "locked");
+  await mkdir(locked);
+  await writeFile(join(locked, "secret.txt"), "hidden\n");
+  await writeFile(join(directory, "visible.txt"), "needle\n");
+  await chmod(locked, 0);
+  try {
+    const files = await executeGrep(parseGrepInput({ pattern: "needle" }), [directory], directory, signal());
+    assert.ok(files.resultText.includes("visible.txt"), files.resultText);
+    assert.ok(!files.resultText.includes("secret.txt"), files.resultText);
+    assert.match(files.resultText, /permission denied.*incomplete/i, files.resultText);
+
+    const content = await executeGrep(
+      parseGrepInput({ pattern: "needle", output_mode: "content" }),
+      [directory], directory, signal(),
+    );
+    assert.match(content.resultText, /visible\.txt:1:needle/, content.resultText);
+    assert.match(content.resultText, /permission denied.*incomplete/i, content.resultText);
+  } finally {
+    await chmod(locked, 0o700);
+  }
+});
+
+test("reports a warning even when nothing is readable", async () => {
+  const directory = await fixture();
+  const locked = join(directory, "locked");
+  await mkdir(locked);
+  await writeFile(join(locked, "secret.txt"), "needle\n");
+  await chmod(locked, 0);
+  try {
+    const result = await executeGrep(parseGrepInput({ pattern: "needle" }), [directory], directory, signal());
+    assert.match(result.resultText, /No files found/);
+    assert.match(result.resultText, /permission denied.*incomplete/i, result.resultText);
+  } finally {
+    await chmod(locked, 0o700);
+  }
 });

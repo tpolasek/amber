@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, realpath, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeGlob, GLOB_TOOL, isPermissionOnlyRipgrepStderr, parseGlobInput } from "../src/glob-tool.js";
+import { isPermissionOnlyRipgrepStderr } from "../src/grep-tool.js";
+import { executeGlob, GLOB_TOOL, parseGlobInput } from "../src/glob-tool.js";
 
 const signal = () => new AbortController().signal;
 

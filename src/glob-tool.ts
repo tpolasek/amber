@@ -1,7 +1,7 @@
 import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
-import { runRipgrep, VCS_DIRECTORIES_TO_EXCLUDE } from "./grep-tool.js";
+import { isPermissionOnlyRipgrepStderr, runRipgrep, VCS_DIRECTORIES_TO_EXCLUDE } from "./grep-tool.js";
 import type { ToolDefinition } from "./types.js";
 
 const MAX_PATTERN_CHARACTERS = 10_000;
@@ -96,17 +96,6 @@ function abortError(): Error {
   const error = new Error("Glob execution aborted");
   error.name = "AbortError";
   return error;
-}
-
-// rg exits 2 when it cannot descend into a directory (common under /tmp because
-// of root-owned systemd-private-* dirs) while still writing readable matches
-// to stdout. Treat those as skippable so Glob returns what it can see.
-const PERMISSION_ERROR = /permission denied|operation not permitted|access is denied|os error 13|os error 1\b/i;
-
-export function isPermissionOnlyRipgrepStderr(stderr: string): boolean {
-  const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
-  if (lines.length === 0) return false;
-  return lines.every((line) => PERMISSION_ERROR.test(line));
 }
 
 function toRelativePath(filePath: string, currentDirectory: string): string {

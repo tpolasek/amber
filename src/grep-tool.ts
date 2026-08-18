@@ -306,6 +306,18 @@ function throwIfAborted(signal?: AbortSignal): void {
   throw abortError();
 }
 
+// rg exits 2 when it cannot descend into a directory (common under shared temp
+// dirs like /tmp because of root-owned systemd-private-* and snap dirs) while
+// still writing readable matches to stdout. Treat those as skippable so Grep
+// and Glob return partial results plus a warning instead of failing hard.
+const PERMISSION_ERROR = /permission denied|operation not permitted|access is denied|os error 13|os error 1\b/i;
+
+export function isPermissionOnlyRipgrepStderr(stderr: string): boolean {
+  const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+  if (lines.length === 0) return false;
+  return lines.every((line) => PERMISSION_ERROR.test(line));
+}
+
 function applyHeadLimit<T>(items: T[], limit: number | undefined, offset: number): { items: T[]; appliedLimit?: number } {
   // Explicit 0 = unlimited escape hatch.
   if (limit === 0) return { items: items.slice(offset) };
@@ -360,21 +372,25 @@ export async function executeGrep(
   throwIfAborted(signal);
   const args = [...buildRipgrepArgs(input), "--", searchPath];
   const run = await runRipgrep(args, searchPath, signal ?? new AbortController().signal);
-  // rg exits 0 with matches, 1 with no matches, and 2+ on error.
-  if (run.exitCode !== null && run.exitCode >= 2) {
+  // rg exits 0 with matches, 1 with no matches, and 2+ on error. Permission
+  // failures on individual directories should not hide readable matches.
+  const permissionOnly = run.exitCode !== null && run.exitCode >= 2 && isPermissionOnlyRipgrepStderr(run.stderr);
+  if (run.exitCode !== null && run.exitCode >= 2 && !permissionOnly) {
     throw new Error(`ripgrep failed (exit ${run.exitCode}): ${run.stderr.trim() || "unknown error"}`);
   }
   if (run.exitCode === null) throw new Error("ripgrep terminated unexpectedly");
   const lines = run.stdout.split("\n").filter((line) => line.length > 0);
 
+  const warning = permissionOnly ? "\n\nWarning: some directories could not be read (permission denied); results may be incomplete." : "";
+
   if (input.outputMode === "content") {
     const { items, appliedLimit } = applyHeadLimit(lines, input.headLimit, input.offset);
     const finalLines = items.map((line) => relativizeLine(line, searchPath, currentDirectory));
     const limitInfo = formatLimitInfo(appliedLimit, input.offset);
-    if (finalLines.length === 0) return noMatches(searchPath);
+    if (finalLines.length === 0) return noMatches(searchPath, warning);
     const content = finalLines.join("\n");
     const resultText = limitInfo ? `${content}\n\n[Showing results with pagination = ${limitInfo}]` : content;
-    return { output: resultText, resultText, workingDirectory: searchPath };
+    return { output: resultText + warning, resultText: resultText + warning, workingDirectory: searchPath };
   }
 
   if (input.outputMode === "count") {
@@ -397,10 +413,10 @@ export async function executeGrep(
       }
     }
     const limitInfo = formatLimitInfo(appliedLimit, input.offset);
-    if (finalLines.length === 0) return noMatches(searchPath);
+    if (finalLines.length === 0) return noMatches(searchPath, warning);
     const summary = `\n\nFound ${totalMatches} total ${plural(totalMatches, "occurrence")} across ${fileCount} ${plural(fileCount, "file")}.${limitInfo ? ` with pagination = ${limitInfo}` : ""}`;
     const resultText = `${finalLines.join("\n")}${summary}`;
-    return { output: resultText, resultText, workingDirectory: searchPath };
+    return { output: resultText + warning, resultText: resultText + warning, workingDirectory: searchPath };
   }
 
   // files_with_matches: sort by modification time (newest first) with a filename tiebreaker.
@@ -415,13 +431,13 @@ export async function executeGrep(
   const { items, appliedLimit } = applyHeadLimit(sorted, input.headLimit, input.offset);
   const filenames = items.map((filePath) => toRelativePath(filePath, currentDirectory));
   if (filenames.length === 0) {
-    return { output: "No files found", resultText: "No files found", workingDirectory: searchPath };
+    return { output: `No files found${warning}`, resultText: `No files found${warning}`, workingDirectory: searchPath };
   }
   const limitInfo = formatLimitInfo(appliedLimit, input.offset);
   const resultText = `Found ${filenames.length} ${plural(filenames.length, "file")}${limitInfo ? ` ${limitInfo}` : ""}\n${filenames.join("\n")}`;
-  return { output: resultText, resultText, workingDirectory: searchPath };
+  return { output: resultText + warning, resultText: resultText + warning, workingDirectory: searchPath };
 }
 
-function noMatches(searchPath: string): GrepResult {
-  return { output: "No matches found", resultText: "No matches found", workingDirectory: searchPath };
+function noMatches(searchPath: string, warning = ""): GrepResult {
+  return { output: `No matches found${warning}`, resultText: `No matches found${warning}`, workingDirectory: searchPath };
 }
