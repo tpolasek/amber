@@ -273,11 +273,13 @@ button { color: inherit; }
 .tasks-overlay { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; background: rgba(0,0,0,.72); backdrop-filter: blur(2px); }
 .tasks-overlay[hidden] { display: none; }
 .tasks-dialog { width: min(760px, 100%); max-height: min(680px, calc(100vh - 48px)); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid var(--amber-dim); background: #090a06; box-shadow: 0 22px 80px rgba(0,0,0,.72), inset 2px 0 0 rgba(255,178,26,.35); }
-.tasks-dialog-header { min-height: 42px; display: grid; grid-template-columns: 36px 1fr 36px; align-items: center; border-bottom: 1px solid rgba(255,178,26,.18); color: var(--amber-hot); }
-.tasks-dialog-header strong { padding: 0 8px; font-size: 13px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
-.tasks-dialog-button { height: 100%; border: 0; background: transparent; color: var(--amber-dim); cursor: pointer; font: inherit; font-size: 18px; }
-.tasks-dialog-button:hover { background: var(--amber-faint); color: var(--amber-hot); }
-.tasks-dialog-button[hidden] { visibility: hidden; display: block; }
+.tasks-dialog-header { min-height: 42px; display: grid; grid-template-columns: 36px 1fr 36px; align-items: stretch; border-bottom: 1px solid rgba(255,178,26,.18); color: var(--amber-hot); }
+.tasks-dialog-header strong { display: flex; align-items: center; padding: 0 8px; font-size: 13px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.tasks-dialog-leading { display: grid; }
+.tasks-dialog-leading > * { grid-area: 1 / 1; }
+.tasks-dialog-leading:has(#tasks-back:not([hidden])) .session-dialog-icon { display: none; }
+.tasks-dialog-button { width: 100%; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; color: var(--amber-dim); cursor: pointer; font: inherit; font-size: 18px; line-height: 1; }
+.tasks-dialog-button:hover, .tasks-dialog-button:focus-visible { background: var(--amber-faint); color: var(--amber-hot); }
 .landing-dialog { width: min(720px, 100%); display: block; overflow-y: auto; padding: clamp(28px, 5vh, 54px) clamp(20px, 5vw, 54px) 38px; text-align: center; }
 .landing-dialog .boot-sequence { margin-bottom: clamp(17px, 3vh, 30px); }
 .landing-dialog .hero-mark { margin-bottom: 18px; }
@@ -338,8 +340,10 @@ button { color: inherit; }
 .git-dialog { width: min(940px, 100%); }
 .git-dialog-tall { height: calc(100vh - 48px); max-height: calc(100vh - 48px); }
 .git-dialog-body { min-height: 0; padding: 10px 14px; }
+.git-dialog-tall .git-dialog-body { display: flex; flex-direction: column; }
+.git-dialog-tall .git-dialog-body > * { flex: 1 1 auto; min-height: 0; }
 .git-dialog-tall .tasks-empty { min-height: 100%; }
-.git-dialog-body pre.git-dialog-output { margin: 0; white-space: pre; overflow-wrap: normal; font-size: 12px; line-height: 1.5; }
+.git-dialog-body pre.git-dialog-output { max-height: none; margin: 0; border: 0; white-space: pre; overflow-wrap: normal; font-size: 12px; line-height: 1.5; }
 .git-dialog-actions { display: flex; gap: 8px; }
 .question-dialog { width: min(980px, 100%); }
 .question-dialog-header > span { display: grid; place-items: center; color: var(--amber); font-size: 16px; }

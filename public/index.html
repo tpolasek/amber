@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#100b03">
     <meta name="description" content="AMBER — browser terminal for persistent LLM agent sessions">
     <title>AMBER // Agent Terminal</title>
-    <link rel="stylesheet" href="/styles.css?v=46">
+    <link rel="stylesheet" href="/styles.css?v=49">
   </head>
   <body>
     <div class="noise" aria-hidden="true"></div>
@@ -143,7 +143,10 @@
     <div id="tasks-dialog" class="tasks-overlay" hidden>
       <section class="tasks-dialog" role="dialog" aria-modal="true" aria-labelledby="tasks-dialog-title">
         <header class="tasks-dialog-header">
-          <button id="tasks-back" class="tasks-dialog-button" type="button" aria-label="Back to task list" hidden>←</button>
+          <span class="tasks-dialog-leading">
+            <span class="session-dialog-icon" aria-hidden="true">▤</span>
+            <button id="tasks-back" class="tasks-dialog-button" type="button" aria-label="Back to task list" hidden>←</button>
+          </span>
           <strong id="tasks-dialog-title">Background tasks</strong>
           <button id="tasks-close" class="tasks-dialog-button" type="button" aria-label="Close background tasks">×</button>
         </header>
