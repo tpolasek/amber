@@ -6,6 +6,7 @@ import {
   formatTime,
   formatTokenCountInThousands,
   messageFrom,
+  parseGitCommand,
   relativeTime,
   taskRuntime,
 } from "./client-formatters.js";
@@ -49,7 +50,7 @@ interface SessionSnapshot {
   planModeRequest?: PlanModeRequest;
 }
 interface QuestionSelection { labels: Set<string>; other: string; otherSelected: boolean; focusIndex: number }
-interface CommandDefinition { name: "/add-dir" | "/cwd" | "/context" | "/clear" | "/commit" | "/compact" | "/fork" | "/name" | "/tasks"; description: string }
+interface CommandDefinition { name: "/add-dir" | "/cwd" | "/context" | "/clear" | "/commit" | "/compact" | "/fork" | "/git" | "/name" | "/tasks"; description: string }
 interface DirectoryCompletion { value: string; absolutePath: string }
 interface MarkdownRenderer { render(source: string): string }
 declare const markdownit: (options: { html: boolean; linkify: boolean; breaks: boolean; typographer: boolean }) => MarkdownRenderer;
@@ -62,6 +63,7 @@ const commands: CommandDefinition[] = [
   { name: "/commit", description: "Commit current changes with a generated message; add 'push' to also push" },
   { name: "/compact", description: "Summarize model context while keeping the full transcript" },
   { name: "/fork", description: "Fork this session with its complete history" },
+  { name: "/git", description: "Inspect the repository: diff, show, status; commit [push]" },
   { name: "/name", description: "Generate a session name, or pass a title" },
   { name: "/tasks", description: "List and manage background tasks" },
 ];
@@ -91,6 +93,7 @@ let tasksDialogSelection = 0;
 let tasksDialogDetailId: string | null = null;
 let tasksDialogSkippedList = false;
 let tasksDialogPollTimer: number | undefined;
+let gitDialogRequest = 0;
 let sessionDialogSelection = 0;
 let sessionDialogQuery = "";
 let sessionDialogReturnsToLanding = false;
@@ -174,6 +177,13 @@ const elements = {
   tasksBack: required<HTMLButtonElement>("tasks-back"),
   tasksClose: required<HTMLButtonElement>("tasks-close"),
   tasksStop: required<HTMLButtonElement>("tasks-stop"),
+  gitDialog: required<HTMLElement>("git-dialog"),
+  gitDialogTitle: required<HTMLElement>("git-dialog-title"),
+  gitDialogBody: required<HTMLElement>("git-dialog-body"),
+  gitDialogHints: required<HTMLElement>("git-dialog-hints"),
+  gitClose: required<HTMLButtonElement>("git-close"),
+  gitCommit: required<HTMLButtonElement>("git-commit"),
+  gitCommitPush: required<HTMLButtonElement>("git-commit-push"),
   questionDialog: required<HTMLElement>("question-dialog"),
   questionDialogTitle: required<HTMLElement>("question-dialog-title"),
   questionDialogBody: required<HTMLElement>("question-dialog-body"),
@@ -216,6 +226,7 @@ function wireEvents(): void {
     if (handleNewSessionDialogKeydown(event)) return;
     if (handleQuestionDialogKeydown(event)) return;
     if (handleTasksDialogKeydown(event)) return;
+    if (handleGitDialogKeydown(event)) return;
     if (handleSessionDialogKeydown(event)) return;
     if (event.key === "Escape" && state.streaming && !state.session?.parentSessionId) {
       event.preventDefault();
@@ -270,6 +281,12 @@ function wireEvents(): void {
   elements.tasksClose.addEventListener("click", closeTasksDialog);
   elements.tasksBack.addEventListener("click", showTasksList);
   elements.tasksStop.addEventListener("click", () => void stopSelectedTask());
+  elements.gitClose.addEventListener("click", closeGitDialog);
+  elements.gitCommit.addEventListener("click", () => runGitDialogCommit(false));
+  elements.gitCommitPush.addEventListener("click", () => runGitDialogCommit(true));
+  elements.gitDialog.addEventListener("click", (event) => {
+    if (event.target === elements.gitDialog) closeGitDialog();
+  });
   elements.questionClose.addEventListener("click", () => void declineQuestions());
   elements.questionSubmit.addEventListener("click", advanceOrSubmitQuestions);
   elements.modePlan.addEventListener("change", () => {
@@ -1485,6 +1502,18 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
   const session = state.session;
   if (!session || state.streaming) return;
   if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/compact") return runCompactCommand(command, clearComposer);
+  if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/git") {
+    const request = parseGitCommand(command);
+    if (!request) {
+      notify("Usage: /git diff | /git show | /git status | /git commit [push]");
+      elements.prompt.focus();
+      return;
+    }
+    if (request.kind === "commit") return runCommand(request.push ? "/commit push" : "/commit", clearComposer);
+    if (clearComposer) clearPrompt();
+    void openGitDialog(request.view);
+    return;
+  }
   if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/commit") {
     const prompt = commitCommandPrompt(command);
     if (!prompt) {
@@ -1704,6 +1733,84 @@ async function stopSelectedTask(): Promise<void> {
   } finally {
     elements.tasksStop.disabled = false;
   }
+}
+
+type GitView = "diff" | "show" | "status";
+
+async function openGitDialog(view: GitView): Promise<void> {
+  const session = state.session;
+  if (!session) return;
+  gitDialogRequest += 1;
+  const request = gitDialogRequest;
+  elements.gitDialogTitle.textContent = `Git ${view}`;
+  elements.gitDialogHints.textContent = view === "diff" ? "Commit · Commit + Push · Esc close" : "Esc close";
+  elements.gitCommit.hidden = view !== "diff";
+  elements.gitCommitPush.hidden = view !== "diff";
+  elements.gitDialog.hidden = false;
+  const loading = document.createElement("div");
+  loading.className = "tasks-empty";
+  loading.textContent = `Running git ${view}…`;
+  elements.gitDialogBody.replaceChildren(loading);
+  elements.gitClose.focus();
+  try {
+    const result = await api<{ output: string; exitCode: number | null }>(
+      `/api/sessions/${session.id}/git?command=${view}`,
+    );
+    if (request !== gitDialogRequest || elements.gitDialog.hidden) return;
+    renderGitDialogBody(view, result.output, result.exitCode);
+  } catch (error) {
+    if (request !== gitDialogRequest) return;
+    const failure = document.createElement("div");
+    failure.className = "tasks-empty";
+    failure.textContent = messageFrom(error);
+    elements.gitDialogBody.replaceChildren(failure);
+  }
+}
+
+function renderGitDialogBody(view: GitView, output: string, exitCode: number | null): void {
+  if (!output.trim() || output === "(no output)") {
+    const empty = document.createElement("div");
+    empty.className = "tasks-empty";
+    empty.textContent = view === "diff" ? "No unstaged changes" : "No output";
+    elements.gitDialogBody.replaceChildren(empty);
+    return;
+  }
+  const pre = document.createElement("pre");
+  pre.className = "git-dialog-output tool-output";
+  if (view !== "status" && exitCode === 0) {
+    pre.classList.add("tool-diff");
+    renderDiff(pre, output);
+  } else {
+    pre.textContent = output;
+  }
+  elements.gitDialogBody.replaceChildren(pre);
+}
+
+function closeGitDialog(): void {
+  gitDialogRequest += 1;
+  elements.gitDialog.hidden = true;
+  elements.prompt.focus();
+}
+
+function runGitDialogCommit(push: boolean): void {
+  if (state.streaming) {
+    notify("Wait for the current response to finish");
+    return;
+  }
+  const prompt = commitCommandPrompt(push ? "/commit push" : "/commit");
+  if (!prompt) return;
+  closeGitDialog();
+  void sendMessage(prompt);
+}
+
+function handleGitDialogKeydown(event: KeyboardEvent): boolean {
+  if (elements.gitDialog.hidden) return false;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeGitDialog();
+    return true;
+  }
+  return false;
 }
 
 function handleTasksDialogKeydown(event: KeyboardEvent): boolean {

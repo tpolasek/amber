@@ -6,6 +6,7 @@ import {
   formatDuration,
   formatTokenCountInThousands,
   messageFrom,
+  parseGitCommand,
   taskRuntime,
 } from "../src/client-formatters.js";
 
@@ -47,4 +48,18 @@ test("expands /commit into a commit prompt and only /commit push mentions pushin
   assert.equal(upper, push);
   assert.equal(commitCommandPrompt("/commit bad arg"), null);
   assert.equal(commitCommandPrompt("/commit push extra"), null);
+});
+
+test("parses /git subcommands into views and commit requests", () => {
+  assert.deepEqual(parseGitCommand("/git diff"), { kind: "git-view", view: "diff" });
+  assert.deepEqual(parseGitCommand("  /Git   SHOW  "), { kind: "git-view", view: "show" });
+  assert.deepEqual(parseGitCommand("/git status"), { kind: "git-view", view: "status" });
+  assert.deepEqual(parseGitCommand("/git commit"), { kind: "commit", push: false });
+  assert.deepEqual(parseGitCommand("/git commit push"), { kind: "commit", push: true });
+  assert.deepEqual(parseGitCommand("/Git COMMIT Push"), { kind: "commit", push: true });
+  assert.equal(parseGitCommand("/git"), null);
+  assert.equal(parseGitCommand("/git log"), null);
+  assert.equal(parseGitCommand("/git diff --cached"), null);
+  assert.equal(parseGitCommand("/git commit amend"), null);
+  assert.equal(parseGitCommand("/commit diff"), null);
 });

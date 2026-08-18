@@ -154,6 +154,23 @@
         </footer>
       </section>
     </div>
+    <div id="git-dialog" class="tasks-overlay" hidden>
+      <section class="tasks-dialog git-dialog" role="dialog" aria-modal="true" aria-labelledby="git-dialog-title">
+        <header class="tasks-dialog-header">
+          <span class="session-dialog-icon" aria-hidden="true">⑂</span>
+          <strong id="git-dialog-title">Git</strong>
+          <button id="git-close" class="tasks-dialog-button" type="button" aria-label="Close git dialog">×</button>
+        </header>
+        <div id="git-dialog-body" class="tasks-dialog-body git-dialog-body"></div>
+        <footer class="tasks-dialog-footer">
+          <span id="git-dialog-hints">Esc close</span>
+          <div class="git-dialog-actions">
+            <button id="git-commit" class="question-submit-button" type="button" hidden>COMMIT</button>
+            <button id="git-commit-push" class="question-submit-button" type="button" hidden>COMMIT + PUSH</button>
+          </div>
+        </footer>
+      </section>
+    </div>
     <div id="question-dialog" class="tasks-overlay" hidden>
       <section class="tasks-dialog question-dialog" role="dialog" aria-modal="true" aria-labelledby="question-dialog-title">
         <header class="tasks-dialog-header question-dialog-header">

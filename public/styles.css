@@ -335,6 +335,10 @@ button { color: inherit; }
 .tasks-stop-button { padding: 6px 10px; border: 1px solid rgba(255,104,77,.5); background: rgba(255,104,77,.08); color: #ff937c; cursor: pointer; font: inherit; font-size: 11px; letter-spacing: .08em; }
 .tasks-stop-button:hover { border-color: #ff937c; background: rgba(255,104,77,.14); }
 .tasks-stop-button:disabled { opacity: .45; cursor: wait; }
+.git-dialog { width: min(940px, 100%); }
+.git-dialog-body { padding: 10px 14px; }
+.git-dialog-body pre.git-dialog-output { margin: 0; white-space: pre; overflow-wrap: normal; font-size: 12px; line-height: 1.5; }
+.git-dialog-actions { display: flex; gap: 8px; }
 .question-dialog { width: min(980px, 100%); }
 .question-dialog-header > span { display: grid; place-items: center; color: var(--amber); font-size: 16px; }
 .question-dialog-body { min-height: 360px; }

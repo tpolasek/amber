@@ -59,3 +59,22 @@ export function commitCommandPrompt(command: string): string | null {
     argument === "push" ? "After creating the commit, push it to the remote." : "Do not push the commit.",
   ].join(" ");
 }
+
+export type GitCommandRequest =
+  | { kind: "git-view"; view: "diff" | "show" | "status" }
+  | { kind: "commit"; push: boolean };
+
+export function parseGitCommand(command: string): GitCommandRequest | null {
+  const parts = command.trim().split(/\s+/);
+  if (parts[0]?.toLowerCase() !== "/git") return null;
+  const subcommand = parts[1]?.toLowerCase();
+  if (subcommand === "diff" || subcommand === "show" || subcommand === "status") {
+    return parts.length === 2 ? { kind: "git-view", view: subcommand } : null;
+  }
+  if (subcommand === "commit") {
+    const argument = parts.slice(2).join(" ").trim().toLowerCase();
+    if (argument && argument !== "push") return null;
+    return { kind: "commit", push: argument === "push" };
+  }
+  return null;
+}

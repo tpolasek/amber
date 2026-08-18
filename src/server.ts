@@ -262,6 +262,34 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       : json(response, 404, { error: "Session not found" });
   }
 
+  const gitMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/git$`));
+  if (method === "GET" && gitMatch?.[1]) {
+    const session = await store.get(gitMatch[1]);
+    if (!session) return json(response, 404, { error: "Session not found" });
+    const gitCommand = url.searchParams.get("command");
+    if (gitCommand !== "diff" && gitCommand !== "show" && gitCommand !== "status") {
+      return json(response, 400, { error: "git command must be diff, show, or status" });
+    }
+    const controller = new AbortController();
+    request.once("aborted", () => controller.abort());
+    try {
+      const result = await new BashExecutor().run(
+        { command: `git ${gitCommand}`, timeoutMs: 30_000 },
+        sessionDirectories(session),
+        controller.signal,
+        { onRunning: () => undefined, onOutput: () => undefined },
+      );
+      return json(response, 200, {
+        command: gitCommand,
+        output: result.output,
+        exitCode: result.exitCode,
+        status: result.status,
+      });
+    } catch (error) {
+      return json(response, 500, { error: errorMessage(error) });
+    }
+  }
+
   const questionAnswerMatch = url.pathname.match(
     new RegExp(`^/api/sessions/${SESSION_PATH_ID}/questions/([^/]+)/answers$`),
   );
