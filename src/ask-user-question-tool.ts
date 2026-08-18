@@ -81,7 +81,7 @@ export const ASK_USER_QUESTION_TOOL: ToolDefinition = {
               description: "Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive.",
             },
           },
-          required: ["question", "header", "options", "multiSelect"],
+          required: ["question", "header", "options"],
         },
       },
     },
@@ -168,10 +168,11 @@ function parseQuestion(value: unknown, questionIndex: number): AskUserQuestion {
   if (new Set(options.map((option) => option.label)).size !== options.length) {
     throw new Error("Question texts must be unique, option labels must be unique within each question");
   }
-  if (typeof input.multiSelect !== "boolean") {
+  const multiSelect = input.multiSelect === undefined ? false : input.multiSelect;
+  if (typeof multiSelect !== "boolean") {
     throw new Error(`Question \"${question}\" multiSelect must be a boolean`);
   }
-  return { question, header, options, multiSelect: input.multiSelect };
+  return { question, header, options, multiSelect };
 }
 
 function parseOption(value: unknown, question: string, optionIndex: number): AskUserQuestionOption {

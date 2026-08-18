@@ -38,6 +38,23 @@ test("defines the complete AskUserQuestion contract and parses valid questions",
   assert.deepEqual(parseAskUserQuestionInput({ questions }), { questions });
 });
 
+test("defaults multiSelect to false when omitted and rejects non-boolean values", () => {
+  const questionSchema = ASK_USER_QUESTION_TOOL.input_schema.properties?.questions as
+    | { items?: { required?: string[] } }
+    | undefined;
+  assert.deepEqual(questionSchema?.items?.required, ["question", "header", "options"]);
+  const { multiSelect, ...withoutMultiSelect } = questions[0]!;
+  assert.equal(multiSelect, false);
+  assert.deepEqual(
+    parseAskUserQuestionInput({ questions: [withoutMultiSelect] }),
+    { questions: [questions[0]] },
+  );
+  assert.throws(
+    () => parseAskUserQuestionInput({ questions: [{ ...questions[0], multiSelect: "yes" }] }),
+    /multiSelect must be a boolean/,
+  );
+});
+
 test("validates question counts, labels, headers, and uniqueness", () => {
   assert.throws(() => parseAskUserQuestionInput({ questions: [] }), /1-4 questions/);
   assert.throws(() => parseAskUserQuestionInput({ questions: [{ ...questions[0], question: "Missing punctuation" }] }), /end with \?/);
