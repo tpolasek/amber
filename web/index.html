@@ -11,25 +11,21 @@
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
 
-    <div class="install-strip" aria-label="Install Amber">
-      <div class="install-inner">
-        <span class="install-label">INSTALL</span>
-        <code id="install-command">curl -fsSL amberagent.dev/install.sh | sh</code>
-        <button id="copy-install" class="copy-button" type="button" aria-describedby="copy-status">
-          <span class="copy-icon" aria-hidden="true">▣</span>
-          <span id="copy-label">COPY</span>
-        </button>
-        <span id="copy-status" class="sr-only" role="status" aria-live="polite"></span>
-      </div>
-    </div>
-
-    <header class="site-header">
+    <header id="top" class="site-header">
       <a class="brand" href="#top" aria-label="Amber home">
         <span class="brand-mark" aria-hidden="true">A</span>
         <span class="brand-copy"><strong>AMBER</strong><small>AGENT TERMINAL</small></span>
       </a>
+      <div class="header-install">
+        <span>INSTALL:</span>
+        <div class="header-command" aria-label="Install Amber">
+          <code>curl -fsSL amberagent.dev/install.sh | sh</code>
+          <button type="button" data-copy-install>COPY</button>
+        </div>
+      </div>
+      <span id="copy-status" class="sr-only" role="status" aria-live="polite"></span>
       <nav class="site-nav" aria-label="Primary navigation">
-        <a href="#demo">DEMO</a>
+        <button type="button">DOCS</button>
         <a href="#features">FEATURES</a>
         <a class="github-link" href="https://github.com/tpolasek/amber" target="_blank" rel="noopener noreferrer">
           GITHUB <span aria-hidden="true">↗</span>
@@ -38,31 +34,12 @@
     </header>
 
     <main id="main">
-      <section id="top" class="hero" aria-labelledby="hero-title">
-        <p class="eyebrow"><span></span> LOCAL-FIRST · PERSISTENT · AGENTIC</p>
-        <h1 id="hero-title">Agent work,<br><em>in full view.</em></h1>
-        <p class="hero-copy">Amber is a browser terminal for durable LLM sessions—built to make planning, tool calls, sub-agents, and code changes easy to follow.</p>
-        <div class="hero-actions">
-          <button class="primary-button" type="button" data-run-demo>RUN THE DEMO <span aria-hidden="true">▶</span></button>
-          <a class="text-link" href="https://github.com/tpolasek/amber" target="_blank" rel="noopener noreferrer">VIEW SOURCE <span aria-hidden="true">↗</span></a>
-        </div>
-        <div class="hero-status" aria-label="Amber capabilities">
-          <span><i></i> STREAMING RESPONSES</span>
-          <span><i></i> DURABLE SESSIONS</span>
-          <span><i></i> TOOL-AWARE UI</span>
-        </div>
-      </section>
-
       <section id="demo" class="demo-section" aria-labelledby="demo-title">
-        <div class="section-heading">
-          <div>
-            <p class="section-index">01 / INTERACTIVE DEMO</p>
-            <h2 id="demo-title">See the whole turn.</h2>
-          </div>
-          <p>Run a simulated Amber session from planning through implementation. Nothing leaves this page.</p>
+        <div class="section-heading demo-heading">
+          <p id="demo-title" class="project-summary"><strong>Amber</strong> is a persistent, browser-based agent terminal for long-running LLM work, with durable sessions, planning, sub-agents, streaming tools, background tasks, readable diffs, and Markdown responses. It is battle-tested against <strong>Claude Code</strong> through proxy output comparisons, ensuring consistent behavior and a reliable foundation. <a class="inline-demo-link" href="#demo-window" data-run-demo>Run demo&nbsp;→</a></p>
         </div>
 
-        <div class="demo-window">
+        <div id="demo-window" class="demo-window">
           <div class="window-chrome">
             <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
             <span>AMBER // DEMO SESSION</span>
@@ -108,7 +85,7 @@
                 </div>
               </div>
 
-              <footer class="demo-composer">
+              <footer id="demo-composer" class="demo-composer">
                 <span>❯</span>
                 <span class="composer-placeholder">Enter a directive…</span>
                 <button type="button" tabindex="-1">SEND <i>↵</i></button>
@@ -131,7 +108,7 @@
         <div class="section-heading">
           <div>
             <p class="section-index">02 / BUILT FOR LONG-RUNNING WORK</p>
-            <h2 id="features-title">A terminal that remembers.</h2>
+            <h2 id="features-title">Simple, clean</h2>
           </div>
           <p>Amber keeps the agent loop legible without hiding the details that matter.</p>
         </div>
@@ -139,9 +116,14 @@
         <div class="feature-grid">
           <article class="feature featured">
             <span class="feature-number">01</span>
-            <div class="feature-icon" aria-hidden="true">◇</div>
-            <h3>Persistent sessions</h3>
-            <p>Durable transcripts, stable URLs, forks, compaction, and working-directory context survive the browser tab.</p>
+            <div class="feature-icon" aria-hidden="true">⌘</div>
+            <h3>Node dependencies</h3>
+            <p>Amber runs on Node 18.17+ with only three production packages.</p>
+            <div class="dependency-box" aria-label="Runtime dependencies">
+              <code>diff</code>
+              <code>markdown-it</code>
+              <code>smol-toml</code>
+            </div>
           </article>
           <article class="feature">
             <span class="feature-number">02</span>
@@ -164,16 +146,6 @@
         </div>
       </section>
 
-      <section class="closing-cta" aria-labelledby="closing-title">
-        <div class="closing-mark" aria-hidden="true"><span>A</span></div>
-        <p class="section-index">OPEN SOURCE · RUNS LOCALLY</p>
-        <h2 id="closing-title">Give your agent<br>a proper terminal.</h2>
-        <div class="closing-command">
-          <code>curl -fsSL amberagent.dev/install.sh | sh</code>
-          <button type="button" data-copy-install>COPY</button>
-        </div>
-        <a class="text-link" href="https://github.com/tpolasek/amber" target="_blank" rel="noopener noreferrer">EXPLORE ON GITHUB <span aria-hidden="true">↗</span></a>
-      </section>
     </main>
 
     <footer class="site-footer">
@@ -181,8 +153,7 @@
         <span class="brand-mark" aria-hidden="true">A</span>
         <span class="brand-copy"><strong>AMBER</strong><small>AGENT TERMINAL</small></span>
       </a>
-      <p>Built for persistent agent work.</p>
-      <a href="https://github.com/tpolasek/amber" target="_blank" rel="noopener noreferrer">GITHUB ↗</a>
+      <p>Built by Thomas Polasek</p>
     </footer>
 
     <div id="question-overlay" class="modal-overlay" hidden>

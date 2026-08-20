@@ -24,6 +24,7 @@
     planBanner: document.querySelector("#plan-banner"),
     modePlan: document.querySelector("#mode-plan"),
     modeNormal: document.querySelector("#mode-normal"),
+    composer: document.querySelector("#demo-composer"),
     tasks: [...document.querySelectorAll(".demo-task")],
     overlay: document.querySelector("#question-overlay"),
     dialog: document.querySelector(".question-dialog"),
@@ -34,16 +35,16 @@
     otherInput: document.querySelector("#other-answer"),
     preview: document.querySelector("#preview-body"),
     previewCaption: document.querySelector("#preview-caption"),
-    copyLabel: document.querySelector("#copy-label"),
     copyStatus: document.querySelector("#copy-status"),
   };
 
   const initialTranscript = elements.transcript.innerHTML;
 
-  document.querySelectorAll("[data-run-demo]").forEach((button) => {
-    button.addEventListener("click", () => {
-      document.querySelector("#demo").scrollIntoView({ behavior: "smooth", block: "start" });
-      window.setTimeout(runDemo, STEP_DELAY === 80 ? 0 : 350);
+  document.querySelectorAll("[data-run-demo]").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      runDemo();
+      document.querySelector("#demo-window").scrollIntoView({ behavior: "smooth", block: "start" });
     });
   });
 
@@ -88,7 +89,6 @@
     if (event.key === "Tab") trapDialogFocus(event);
   });
 
-  document.querySelector("#copy-install").addEventListener("click", (event) => copyInstall(event.currentTarget));
   document.querySelectorAll("[data-copy-install]").forEach((button) => {
     button.addEventListener("click", () => copyInstall(button));
   });
@@ -109,7 +109,7 @@
       copied = document.execCommand("copy");
       textarea.remove();
     }
-    const label = button.querySelector("#copy-label") || button;
+    const label = button;
     const original = label.textContent;
     label.textContent = copied ? "COPIED" : "SELECT COMMAND";
     elements.copyStatus.textContent = copied ? "Install command copied to clipboard." : "Could not copy the install command.";
@@ -118,6 +118,7 @@
 
   function runDemo() {
     resetDemo();
+    elements.composer.hidden = true;
     state.running = true;
     elements.runLabel.textContent = "RUNNING";
     updateDemoStatus("PLANNING", "Inspecting the current session UI", 12);
