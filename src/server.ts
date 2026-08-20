@@ -67,14 +67,18 @@ import type { Message, Session, TokenUsage, ToolCall } from "./types.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(sourceDirectory, "../..");
-const workspaceRoot = await realpath(projectRoot);
+const isPackaged = Boolean((process as NodeJS.Process & { pkg?: unknown }).pkg);
+const workspaceRoot = await realpath(isPackaged ? process.cwd() : projectRoot);
 const publicDirectory = join(projectRoot, "public");
 const clientScript = join(sourceDirectory, "client.js");
 const clientFormattersScript = join(sourceDirectory, "client-formatters.js");
 const streamingThinkingScript = join(sourceDirectory, "streaming-thinking.js");
 const toolDisplayScript = join(sourceDirectory, "tool-display.js");
 const markdownScript = join(projectRoot, "node_modules", "markdown-it", "dist", "browser", "markdown-it.umd.min.js");
-const dataDirectory = resolve(process.env.DATA_DIR ?? join(projectRoot, "data", "sessions"));
+const defaultDataDirectory = isPackaged
+  ? join(homedir(), ".amber", "sessions")
+  : join(projectRoot, "data", "sessions");
+const dataDirectory = resolve(process.env.DATA_DIR ?? defaultDataDirectory);
 const planDirectory = join(homedir(), ".amber", "plans");
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "127.0.0.1";

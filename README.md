@@ -10,6 +10,30 @@ npm run build
 npm start
 ```
 
+## Standalone binaries
+
+Build a self-contained Linux x86_64 binary (no Node.js or npm required on the destination):
+
+```bash
+npm run package:linux
+```
+
+On Apple Silicon macOS, build the macOS binary:
+
+```bash
+npm run package:macos
+```
+
+The outputs are `release/amber-linux` and `release/amber-macos`. `npm run package` builds the artifact for the current system. Run the platform-specific build on Linux x86_64 or Apple Silicon macOS with Node.js 22 or newer; the resulting executable includes Node.js and all npm dependencies.
+
+Install a local build to `~/.local/bin/amber`:
+
+```bash
+./install.sh
+```
+
+When no local `release` artifact is present, the installer downloads the matching binary from the latest GitHub release. Set `AMBER_VERSION=v0.1.0` to install a particular release, or `AMBER_INSTALL_DIR=/another/bin` to override the user-local install directory.
+
 On its first start, Amber creates `~/.amber/settings.toml`:
 
 ```toml
