@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#080906">
+    <meta name="description" content="Amber is a persistent, browser-based agent terminal with planning, sub-agents, tool output, and durable sessions.">
+    <title>Amber — Agent Terminal</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <div class="install-strip" aria-label="Install Amber">
+      <div class="install-inner">
+        <span class="install-label">INSTALL</span>
+        <code id="install-command">curl -fsSL amberagent.dev/install.sh | sh</code>
+        <button id="copy-install" class="copy-button" type="button" aria-describedby="copy-status">
+          <span class="copy-icon" aria-hidden="true">▣</span>
+          <span id="copy-label">COPY</span>
+        </button>
+        <span id="copy-status" class="sr-only" role="status" aria-live="polite"></span>
+      </div>
+    </div>
+
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="Amber home">
+        <span class="brand-mark" aria-hidden="true">A</span>
+        <span class="brand-copy"><strong>AMBER</strong><small>AGENT TERMINAL</small></span>
+      </a>
+      <nav class="site-nav" aria-label="Primary navigation">
+        <a href="#demo">DEMO</a>
+        <a href="#features">FEATURES</a>
+        <a class="github-link" href="https://github.com/tpolasek/amber" target="_blank" rel="noopener noreferrer">
+          GITHUB <span aria-hidden="true">↗</span>
+        </a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section id="top" class="hero" aria-labelledby="hero-title">
+        <p class="eyebrow"><span></span> LOCAL-FIRST · PERSISTENT · AGENTIC</p>
+        <h1 id="hero-title">Agent work,<br><em>in full view.</em></h1>
+        <p class="hero-copy">Amber is a browser terminal for durable LLM sessions—built to make planning, tool calls, sub-agents, and code changes easy to follow.</p>
+        <div class="hero-actions">
+          <button class="primary-button" type="button" data-run-demo>RUN THE DEMO <span aria-hidden="true">▶</span></button>
+          <a class="text-link" href="https://github.com/tpolasek/amber" target="_blank" rel="noopener noreferrer">VIEW SOURCE <span aria-hidden="true">↗</span></a>
+        </div>
+        <div class="hero-status" aria-label="Amber capabilities">
+          <span><i></i> STREAMING RESPONSES</span>
+          <span><i></i> DURABLE SESSIONS</span>
+          <span><i></i> TOOL-AWARE UI</span>
+        </div>
+      </section>
+
+      <section id="demo" class="demo-section" aria-labelledby="demo-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-index">01 / INTERACTIVE DEMO</p>
+            <h2 id="demo-title">See the whole turn.</h2>
+          </div>
+          <p>Run a simulated Amber session from planning through implementation. Nothing leaves this page.</p>
+        </div>
+
+        <div class="demo-window">
+          <div class="window-chrome">
+            <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+            <span>AMBER // DEMO SESSION</span>
+            <span class="window-secure">◇ LOCAL SIMULATION</span>
+          </div>
+
+          <div class="amber-app">
+            <aside class="demo-sidebar" aria-label="Simulated Amber sidebar">
+              <div class="demo-brand">
+                <span class="mini-mark">A</span>
+                <span><strong>AMBER</strong><small>AGENT TERMINAL</small></span>
+              </div>
+              <button class="fake-new-session" type="button" tabindex="-1"><span>＋</span> NEW SESSION</button>
+              <p class="sidebar-label">SELECT MODE <i></i></p>
+              <div class="mode-switch" aria-label="Current simulated mode">
+                <span id="mode-plan" class="active">PLAN</span>
+                <span id="mode-normal">NORMAL</span>
+              </div>
+              <p class="sidebar-label">ACTIVE TASKS <i></i></p>
+              <div id="demo-tasks" class="demo-tasks">
+                <div class="demo-task active"><b>Inspect session UI</b><small>IN PROGRESS</small></div>
+                <div class="demo-task"><b>Confirm placement</b><small>PENDING</small></div>
+                <div class="demo-task"><b>Implement status</b><small>PENDING</small></div>
+              </div>
+              <div class="context-meter"><span>CTX</span><i><b></b></i><span>18k</span></div>
+            </aside>
+
+            <div class="demo-terminal">
+              <header class="terminal-bar">
+                <div><strong>compact-status-panel</strong><span>/Users/demo/project</span></div>
+                <p><i></i> CONNECTED</p>
+              </header>
+              <div id="plan-banner" class="plan-banner"><span>◇ PLAN MODE</span><code>~/.amber/plans/demo-session.md</code></div>
+
+              <div id="demo-transcript" class="demo-transcript" aria-live="polite" aria-label="Simulated Amber transcript">
+                <article class="message user-message">
+                  <div class="message-rail">❯</div>
+                  <div class="message-body">Add a compact status panel for the active session. Plan it first, then implement it.</div>
+                </article>
+                <div id="demo-placeholder" class="demo-placeholder">
+                  <span class="prompt-caret">▌</span>
+                  <p>Press <strong>Run the demo</strong> to watch Amber work.</p>
+                </div>
+              </div>
+
+              <footer class="demo-composer">
+                <span>❯</span>
+                <span class="composer-placeholder">Enter a directive…</span>
+                <button type="button" tabindex="-1">SEND <i>↵</i></button>
+              </footer>
+            </div>
+          </div>
+
+          <div class="demo-controls">
+            <div class="demo-progress" aria-hidden="true">
+              <i id="demo-progress-bar"></i>
+            </div>
+            <p><span id="demo-step">READY</span><small id="demo-caption">Planning → question → edit → result</small></p>
+            <button id="open-question" class="secondary-button" type="button">OPEN QUESTION</button>
+            <button id="run-demo" class="primary-button compact" type="button"><span id="run-label">RUN DEMO</span> <span aria-hidden="true">▶</span></button>
+          </div>
+        </div>
+      </section>
+
+      <section id="features" class="features-section" aria-labelledby="features-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-index">02 / BUILT FOR LONG-RUNNING WORK</p>
+            <h2 id="features-title">A terminal that remembers.</h2>
+          </div>
+          <p>Amber keeps the agent loop legible without hiding the details that matter.</p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="feature featured">
+            <span class="feature-number">01</span>
+            <div class="feature-icon" aria-hidden="true">◇</div>
+            <h3>Persistent sessions</h3>
+            <p>Durable transcripts, stable URLs, forks, compaction, and working-directory context survive the browser tab.</p>
+          </article>
+          <article class="feature">
+            <span class="feature-number">02</span>
+            <div class="feature-icon" aria-hidden="true">↳</div>
+            <h3>Visible sub-agents</h3>
+            <p>Follow delegated work into linked sub-sessions while the main conversation stays focused.</p>
+          </article>
+          <article class="feature">
+            <span class="feature-number">03</span>
+            <div class="feature-icon" aria-hidden="true">±</div>
+            <h3>Readable tool output</h3>
+            <p>Streaming commands, background tasks, file reads, and expanded diffs get purpose-built treatments.</p>
+          </article>
+          <article class="feature">
+            <span class="feature-number">04</span>
+            <div class="feature-icon" aria-hidden="true">?</div>
+            <h3>Planning with you</h3>
+            <p>Plan mode, durable task lists, and structured questions keep important decisions in your hands.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="closing-cta" aria-labelledby="closing-title">
+        <div class="closing-mark" aria-hidden="true"><span>A</span></div>
+        <p class="section-index">OPEN SOURCE · RUNS LOCALLY</p>
+        <h2 id="closing-title">Give your agent<br>a proper terminal.</h2>
+        <div class="closing-command">
+          <code>curl -fsSL amberagent.dev/install.sh | sh</code>
+          <button type="button" data-copy-install>COPY</button>
+        </div>
+        <a class="text-link" href="https://github.com/tpolasek/amber" target="_blank" rel="noopener noreferrer">EXPLORE ON GITHUB <span aria-hidden="true">↗</span></a>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <a class="brand footer-brand" href="#top">
+        <span class="brand-mark" aria-hidden="true">A</span>
+        <span class="brand-copy"><strong>AMBER</strong><small>AGENT TERMINAL</small></span>
+      </a>
+      <p>Built for persistent agent work.</p>
+      <a href="https://github.com/tpolasek/amber" target="_blank" rel="noopener noreferrer">GITHUB ↗</a>
+    </footer>
+
+    <div id="question-overlay" class="modal-overlay" hidden>
+      <section class="question-dialog" role="dialog" aria-modal="true" aria-labelledby="question-title" aria-describedby="question-guidance">
+        <header class="dialog-header">
+          <span aria-hidden="true">?</span>
+          <strong>AMBER HAS A QUESTION</strong>
+          <button id="question-close" type="button" aria-label="Decline to answer">×</button>
+        </header>
+        <div class="dialog-body">
+          <div class="question-choices">
+            <span class="question-chip">PLACEMENT</span>
+            <h2 id="question-title">Where should the session status panel live?</h2>
+            <p id="question-guidance">Choose one option so Amber can finish the implementation plan.</p>
+            <div id="question-options" class="question-options" role="radiogroup" aria-labelledby="question-title">
+              <button class="question-option" type="button" role="radio" aria-checked="false" data-answer="Sidebar footer">
+                <span class="option-marker">○</span>
+                <span><strong>Sidebar footer (Recommended)</strong><small>Keeps status visible without competing with the session title.</small></span>
+              </button>
+              <button class="question-option" type="button" role="radio" aria-checked="false" data-answer="Top bar">
+                <span class="option-marker">○</span>
+                <span><strong>Top bar</strong><small>Puts status near the active session name and working directory.</small></span>
+              </button>
+              <button class="question-option" type="button" role="radio" aria-checked="false" data-answer="Both surfaces">
+                <span class="option-marker">○</span>
+                <span><strong>Both surfaces</strong><small>Maximizes visibility, but repeats the same information.</small></span>
+              </button>
+              <div class="question-option other-option" role="radio" aria-checked="false" data-other>
+                <span class="option-marker">○</span>
+                <label><strong>Other</strong><input id="other-answer" type="text" maxlength="32000" placeholder="Type something…"></label>
+              </div>
+            </div>
+          </div>
+          <aside class="question-preview" aria-label="Selected option preview">
+            <strong>PREVIEW</strong>
+            <div id="preview-body" class="preview-body">
+              <div class="preview-sidebar">
+                <p>ACTIVE TASKS</p>
+                <span>Inspect session UI <i>DONE</i></span>
+                <span>Confirm placement <i>ACTIVE</i></span>
+                <div><b>CTX</b><em></em><b>18k</b></div>
+              </div>
+              <p id="preview-caption">Focus an option to preview its placement.</p>
+            </div>
+          </aside>
+        </div>
+        <footer class="dialog-footer">
+          <span>↑/↓ focus · Space select · Esc decline</span>
+          <button id="question-submit" type="button" disabled>SUBMIT ANSWER</button>
+        </footer>
+      </section>
+    </div>
+
+    <script src="./script.js"></script>
+  </body>
+</html>
