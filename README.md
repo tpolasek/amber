@@ -1,6 +1,6 @@
 # AMBER
 
-AMBER is a simple, local web interface for persistent AI coding sessions. The server uses Node's standard library, the browser client is vanilla TypeScript, and there is no frontend framework or database.
+AMBER is a simple, local web interface for persistent AI coding sessions. It supports both Anthropic- and OpenAI-compatible providers. The server uses Node's standard library, the browser client is vanilla TypeScript, and there is no frontend framework or database.
 
 ## Install and run
 
@@ -36,13 +36,13 @@ npm run dev
 
 ## Configure `settings.toml`
 
-AMBER reads `~/.amber/settings.toml`. Providers use either the Anthropic Messages API or OpenAI Responses API and discover their available models from `/v1/models`.
+AMBER reads `~/.amber/settings.toml`. Each provider is configured with `api = "anthropic"` (Anthropic Messages API) or `api = "openai"` (OpenAI Responses API); `api` defaults to `"anthropic"` when omitted. Either way, providers discover their available models from `/v1/models`.
 
 ```toml
 default_provider = "zai"
 
 [providers.zai]
-api = "anthropic"
+api = "anthropic"        # "anthropic" (default) or "openai"
 auth_key = "your-key"
 auth_url = "https://api.z.ai/api/anthropic"
 default_model = "glm-5.3" # Optional; otherwise uses the first discovered model.
@@ -70,7 +70,7 @@ readOnly = true
 model = "zai/glm-5.3" # Optional; otherwise inherits the session model.
 ```
 
-Provider credentials belong under `[providers.<name>]`, never under an agent. Models are referenced as `provider/model`. Select a session's model from the model name in the browser's top-right corner.
+Provider credentials belong under `[providers.<name>]`, never under an agent. `api` selects the provider's protocol: `"anthropic"` (the default) or `"openai"`. OpenAI-protocol providers accept slashed model ids such as `xiaomi/mimo-v2-pro`, so OpenRouter-style backends work. Models are referenced as `provider/model`. Select a session's model from the model name in the browser's top-right corner.
 
 Environment variables can override the default provider:
 

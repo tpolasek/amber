@@ -84,6 +84,15 @@ Rules:
 
 export const SETTINGS_TEMPLATE_SOURCE = `${stringify(SETTINGS_TEMPLATE).trimEnd()}
 # model = "<INSERT_AGENT_MODEL_HERE>"
+
+# The provider above uses the Anthropic Messages API (api = "anthropic", the default).
+# To add an OpenAI Responses API provider, uncomment and fill in:
+# [providers.openai]
+# api = "openai"
+# auth_key = "<INSERT_OPENAI_KEY_HERE>"
+# auth_url = "https://api.openai.com"
+# default_model = "gpt-5.4"
+# thinking_level = "high"
 `;
 
 export async function loadSettings(homeDirectory = homedir()): Promise<AmberSettings> {
