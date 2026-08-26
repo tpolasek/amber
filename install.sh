@@ -60,5 +60,26 @@ echo "Amber installed at $install_directory/amber"
 
 case ":$PATH:" in
   *":$install_directory:"*) ;;
-  *) echo "Add $install_directory to PATH, then run: amber" ;;
+  *)
+    printf "%s is not on your PATH. Add it automatically? [y/N] " "$install_directory"
+    read -r answer || answer=""
+    case "$answer" in
+      y|Y|yes|Yes|YES)
+        case "${SHELL:-}" in
+          */zsh) shell_config=$HOME/.zshrc ;;
+          */bash) shell_config=$HOME/.bashrc ;;
+          *) shell_config=$HOME/.profile ;;
+        esac
+        {
+          printf '\n# Added by Amber installer\n'
+          printf 'export PATH="%s:$PATH"\n' "$install_directory"
+        } >> "$shell_config"
+        echo "Added $install_directory to PATH in $shell_config"
+        echo "Restart your shell, or run: export PATH=\"$install_directory:\$PATH\""
+        ;;
+      *)
+        echo "Add $install_directory to PATH, then run: amber"
+        ;;
+    esac
+    ;;
 esac
