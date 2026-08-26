@@ -46,7 +46,7 @@ test("streaming thinking follows the bottom until the user scrolls away and retu
   const pin = new BottomScrollPin();
   assert.equal(pin.shouldFollowBottom(), true);
 
-  pin.update(120, 200, 500);
+  pin.update(120, 200, 500, true);
   assert.equal(pin.shouldFollowBottom(), false);
 
   pin.update(293, 200, 500);
@@ -56,7 +56,7 @@ test("streaming thinking follows the bottom until the user scrolls away and retu
 test("scrolling to the bottom re-enables following", () => {
   const pin = new BottomScrollPin();
   const element = { scrollTop: 0, scrollHeight: 500, clientHeight: 200 };
-  pin.update(100, 200, 500);
+  pin.update(100, 200, 500, true);
   assert.equal(pin.shouldFollowBottom(), false);
 
   pin.scrollToBottom(element);
@@ -65,21 +65,37 @@ test("scrolling to the bottom re-enables following", () => {
   assert.equal(pin.shouldFollowBottom(), true);
 });
 
-test("user scrolling away from a programmatic bottom scroll still unpins", () => {
+test("user scrolling up after a programmatic bottom scroll still unpins", () => {
   const pin = new BottomScrollPin();
   const element = { scrollTop: 0, scrollHeight: 500, clientHeight: 200 };
   pin.scrollToBottom(element);
 
-  pin.update(150, 200, 500);
+  pin.update(150, 200, 500, true);
   assert.equal(pin.shouldFollowBottom(), false);
 
   pin.update(300, 200, 500);
   assert.equal(pin.shouldFollowBottom(), true);
 });
 
+test("layout growth and anchoring after a programmatic scroll do not unpin", () => {
+  const pin = new BottomScrollPin();
+  const element = { scrollTop: 0, scrollHeight: 500, clientHeight: 200 };
+  pin.scrollToBottom(element);
+
+  // Content expands after the snap (tool diff or image finishes loading).
+  pin.update(300, 200, 800);
+  assert.equal(pin.shouldFollowBottom(), true);
+  // Scroll anchoring nudges scrollTop upward while earlier content settles.
+  pin.update(297, 200, 800);
+  assert.equal(pin.shouldFollowBottom(), true);
+
+  pin.update(100, 200, 800, true);
+  assert.equal(pin.shouldFollowBottom(), false);
+});
+
 test("reset explicitly restores sticky mode", () => {
   const pin = new BottomScrollPin();
-  pin.update(100, 200, 500);
+  pin.update(100, 200, 500, true);
   assert.equal(pin.shouldFollowBottom(), false);
 
   pin.reset();

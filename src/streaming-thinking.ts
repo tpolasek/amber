@@ -65,9 +65,10 @@ export class StreamingThinkingReveal {
 export class BottomScrollPin {
   private followingBottom = true;
 
-  update(scrollTop: number, clientHeight: number, scrollHeight: number): void {
+  update(scrollTop: number, clientHeight: number, scrollHeight: number, userScrolledAway = false): void {
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-    this.followingBottom = distanceFromBottom <= STREAMING_THINKING_BOTTOM_THRESHOLD_PX;
+    if (distanceFromBottom <= STREAMING_THINKING_BOTTOM_THRESHOLD_PX) this.followingBottom = true;
+    else if (userScrolledAway) this.followingBottom = false;
   }
 
   shouldFollowBottom(): boolean {

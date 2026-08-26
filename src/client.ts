@@ -1,4 +1,8 @@
-import { BottomScrollPin, StreamingThinkingReveal } from "./streaming-thinking.js";
+import {
+  BottomScrollPin,
+  STREAMING_THINKING_BOTTOM_THRESHOLD_PX,
+  StreamingThinkingReveal,
+} from "./streaming-thinking.js";
 import {
   commitCommandPrompt,
   compactHeaderPath,
@@ -342,13 +346,40 @@ function wireEvents(): void {
   });
   elements.toggleSidebar.addEventListener("click", () => document.body.classList.add("sidebar-open"));
   elements.closeSidebar.addEventListener("click", () => document.body.classList.remove("sidebar-open"));
+  let lastTranscriptScrollTop = elements.transcript.scrollTop;
+  let userScrollUpIntent = false;
+  let lastTouchY = 0;
   elements.transcript.addEventListener("scroll", () => {
-    transcriptScrollPin.update(
-      elements.transcript.scrollTop,
-      elements.transcript.clientHeight,
-      elements.transcript.scrollHeight,
-    );
+    const { scrollTop, clientHeight, scrollHeight } = elements.transcript;
+    const scrolledUp = scrollTop < lastTranscriptScrollTop - 1;
+    lastTranscriptScrollTop = scrollTop;
+    // Only an explicit user scroll upwards may unpin following; programmatic
+    // scrolls and layout growth (loaded diffs, anchoring) must stay snapped.
+    if (scrollHeight - scrollTop - clientHeight <= STREAMING_THINKING_BOTTOM_THRESHOLD_PX) userScrollUpIntent = false;
+    transcriptScrollPin.update(scrollTop, clientHeight, scrollHeight, scrolledUp && userScrollUpIntent);
   }, { passive: true });
+  elements.transcript.addEventListener("wheel", (event) => {
+    userScrollUpIntent = event.deltaY < 0;
+  }, { passive: true });
+  elements.transcript.addEventListener("touchstart", (event) => {
+    lastTouchY = event.touches[0]?.clientY ?? 0;
+  }, { passive: true });
+  elements.transcript.addEventListener("touchmove", (event) => {
+    const touchY = event.touches[0]?.clientY;
+    if (touchY !== undefined) userScrollUpIntent = touchY > lastTouchY;
+    lastTouchY = touchY ?? lastTouchY;
+  }, { passive: true });
+  elements.transcript.addEventListener("mousedown", (event) => {
+    // Scrollbar drags: the press landed inside the element's scrollbar gutter.
+    const bounds = elements.transcript.getBoundingClientRect();
+    if (event.clientX > bounds.left + elements.transcript.clientWidth) userScrollUpIntent = true;
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("input, textarea, [contenteditable='true'], [contenteditable='']")) return;
+    if (event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home") userScrollUpIntent = true;
+  });
   elements.prompt.addEventListener("focus", stickScrollToBottom);
   elements.composer.addEventListener("submit", (event) => {
     event.preventDefault();
