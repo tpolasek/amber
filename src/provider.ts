@@ -18,15 +18,6 @@ export interface AnthropicProviderOptions {
   thinkingLevel?: ThinkingLevel;
 }
 
-const CLAUDE_CODE_BETAS = [
-  "claude-code-20250219",
-  "context-1m-2025-08-07",
-  "interleaved-thinking-2025-05-14",
-  "context-management-2025-06-27",
-  "prompt-caching-scope-2026-01-05",
-  "effort-2025-11-24",
-].join(",");
-
 interface AnthropicEvent {
   type?: string;
   index?: number;
@@ -66,9 +57,6 @@ export class AnthropicProvider implements LlmProvider {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": CLAUDE_CODE_BETAS,
-        "user-agent": "claude-cli/2.1.88 (undefined, sdk-cli)",
         "x-stainless-package-version": "0.74.0",
         authorization: `Bearer ${this.#authToken}`,
       },
@@ -143,7 +131,6 @@ export const anthropicDriver: ProviderDriver = {
       if (afterId) url.searchParams.set("after_id", afterId);
       const response = await fetcher(url, {
         headers: {
-          "anthropic-version": "2023-06-01",
           authorization: `Bearer ${connection.authKey}`,
         },
       });

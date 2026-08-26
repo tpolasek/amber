@@ -7,8 +7,6 @@ import { AnthropicProvider } from "../src/provider.js";
 test("uses bearer auth and parses Anthropic-compatible streaming events", async (context) => {
   let receivedAuthorization = "";
   let receivedPath = "";
-  let receivedBetas = "";
-  let receivedUserAgent = "";
   let receivedSdkVersion = "";
   let receivedModel = "";
   let receivedThinking: unknown;
@@ -18,8 +16,6 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
   const gateway = createServer(async (request, response) => {
     receivedAuthorization = request.headers.authorization ?? "";
     receivedPath = request.url ?? "";
-    receivedBetas = String(request.headers["anthropic-beta"] ?? "");
-    receivedUserAgent = request.headers["user-agent"] ?? "";
     receivedSdkVersion = String(request.headers["x-stainless-package-version"] ?? "");
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -67,8 +63,6 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
 
   assert.equal(receivedAuthorization, "Bearer test-token");
   assert.equal(receivedPath, "/v1/messages?beta=true");
-  assert.equal(receivedBetas, "claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24");
-  assert.equal(receivedUserAgent, "claude-cli/2.1.88 (undefined, sdk-cli)");
   assert.equal(receivedSdkVersion, "0.74.0");
   assert.equal(receivedModel, "glm-test");
   assert.equal(receivedMaxTokens, 32_000);
