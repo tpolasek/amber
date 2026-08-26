@@ -45,14 +45,13 @@ body::before {
 .skip-link { position: fixed; top: 8px; left: 8px; z-index: 100; padding: 9px 12px; background: var(--amber); color: #201500; transform: translateY(-150%); }
 .skip-link:focus { transform: translateY(0); }
 
-.site-header { width: min(var(--max-width), calc(100% - 40px)); height: 74px; margin: 0 auto; display: grid; grid-template-columns: auto minmax(280px, 580px) auto; align-items: center; gap: clamp(20px, 4vw, 54px); border-bottom: 1px solid rgba(255,178,26,.12); }
+.site-header { width: min(var(--max-width), calc(100% - 40px)); height: 74px; margin: 0 auto; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: clamp(20px, 4vw, 54px); border-bottom: 1px solid rgba(255,178,26,.12); }
 .brand { display: flex; align-items: center; gap: 11px; text-decoration: none; }
 .brand-mark { width: 31px; height: 35px; display: grid; place-items: center; clip-path: polygon(50% 0, 100% 24%, 100% 76%, 50% 100%, 0 76%, 0 24%); background: var(--amber); color: #171000; font-size: 16px; font-weight: 900; filter: drop-shadow(0 0 9px rgba(255,178,26,.25)); }
 .brand-copy { display: grid; gap: 2px; }
 .brand-copy strong { color: var(--amber-hot); font-size: 14px; letter-spacing: .22em; }
 .brand-copy small { color: var(--muted); font-size: 9px; letter-spacing: .21em; }
-.header-install { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; }
-.header-install > span { color: var(--amber-dim); font-size: 9px; font-weight: 700; letter-spacing: .1em; }
+.header-install { min-width: 0; }
 .header-command { min-width: 0; min-height: 38px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; border: 1px solid var(--amber-dim); background: #0a0b07; }
 .header-command code { min-width: 0; overflow: hidden; padding: 0 13px; color: #d4b97f; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .header-command button { align-self: stretch; padding: 0 12px; border: 0; border-left: 1px solid var(--amber-line); background: var(--amber-faint); color: var(--amber); cursor: pointer; font-size: 9px; letter-spacing: .1em; }
@@ -263,8 +262,6 @@ body.modal-open { overflow: hidden; }
   .site-nav { gap: 0; }
   .site-nav .github-link { padding: 8px; font-size: 8px; }
   .header-command { min-height: 34px; }
-  .header-install { gap: 6px; }
-  .header-install > span { font-size: 7px; }
   .header-command code { padding: 0 8px; font-size: 8px; }
   .header-command button { padding: 0 8px; font-size: 8px; }
   .demo-section { padding: 18px 0 24px; }

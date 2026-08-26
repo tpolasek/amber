@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const INSTALL_COMMAND = "curl -fsSL amberagent.dev/install.sh | sh";
+  const INSTALL_COMMAND = "curl -fsSL https://raw.githubusercontent.com/tpolasek/amber/main/install.sh | sh";
   const STEP_DELAY = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 80 : 720;
   const state = {
     running: false,
