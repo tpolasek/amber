@@ -97,6 +97,7 @@ const askUserQuestions = new AskUserQuestionManager();
 const planModeApprovals = new PlanModeApprovalManager();
 const agentRunToken = randomUUID();
 const SESSION_PATH_ID = "([a-z0-9.-]+)";
+const sessionEventSubscribers = new Map<string, Set<ServerResponse>>();
 
 interface AutomaticNameRun {
   controller: AbortController;
@@ -134,6 +135,10 @@ const shutdown = () => {
   planModeApprovals.stopAll();
   for (const run of automaticNameRuns.values()) run.controller.abort();
   automaticNameRuns.clear();
+  for (const subscribers of sessionEventSubscribers.values()) {
+    for (const response of subscribers) response.end();
+  }
+  sessionEventSubscribers.clear();
   server.close();
 };
 process.once("SIGINT", shutdown);
@@ -195,6 +200,11 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return session
       ? json(response, 200, await sessionSnapshot(session))
       : json(response, 404, { error: "Session not found" });
+  }
+
+  const sessionEventsMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/events$`));
+  if (method === "GET" && sessionEventsMatch?.[1]) {
+    return observeSessionEvents(request, response, sessionEventsMatch[1]);
   }
   if (method === "DELETE" && sessionMatch?.[1]) {
     if (activeSessions.has(sessionMatch[1])) return json(response, 409, { error: "Wait for the current response to finish" });
@@ -463,11 +473,12 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     connection: "keep-alive",
     "x-accel-buffering": "no",
   });
-  sendEvent(response, "start", { userMessage, assistantMessage });
   const bashExecutor = new BashExecutor();
   activeSessions.register(sessionId, session.parentSessionId, controller, session);
+  const emit = (event: string, data: unknown) => emitSessionEvent(sessionId, response, event, data);
+  emit("start", { userMessage, assistantMessage });
   const onAutomaticName = (title: string) => {
-    if (!response.destroyed && !response.writableEnded) sendEvent(response, "session_named", { title });
+    if (!response.destroyed && !response.writableEnded) emit("session_named", { title });
   };
   const existingNameRun = automaticNameRuns.get(sessionId);
   if (existingNameRun) existingNameRun.listeners.add(onAutomaticName);
@@ -502,11 +513,11 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       })) {
         if (event.type === "delta") {
           assistantMessage.content += event.text;
-          sendEvent(response, "delta", { text: event.text });
+          emit("delta", { text: event.text });
           await checkpointSession();
         } else if (event.type === "thinking_delta") {
           assistantMessage.thinking = (assistantMessage.thinking ?? "") + event.thinking;
-          sendEvent(response, "thinking_delta", { thinking: event.thinking });
+          emit("thinking_delta", { thinking: event.thinking });
           await checkpointSession();
         } else if (event.type === "thinking_signature_delta") {
           assistantMessage.thinkingSignature = (assistantMessage.thinkingSignature ?? "") + event.signature;
@@ -521,7 +532,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           };
           toolDrafts.set(event.index, { call, inputJson: "" });
           (assistantMessage.toolCalls ??= []).push(call);
-          sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+          emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
         } else if (event.type === "tool_input_delta") {
           const draft = toolDrafts.get(event.index);
           if (draft) draft.inputJson += event.partialJson;
@@ -546,7 +557,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         }
       }
       await store.save(session);
-      sendEvent(response, "assistant_complete", { message: assistantMessage });
+      emit("assistant_complete", { message: assistantMessage });
       throwIfSessionAborted(controller.signal);
 
       if (toolDrafts.size === 0) {
@@ -554,7 +565,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           session.agentStatus = "complete";
           await store.save(session);
         }
-        sendEvent(response, "done", { message: assistantMessage, session });
+        emit("done", { message: assistantMessage, session });
         return;
       }
 
@@ -583,7 +594,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           call,
           controller.signal,
           persistAgentLinks,
-          (updatedCall) => sendEvent(response, "tool_update", {
+          (updatedCall) => emit("tool_update", {
             messageId: assistantMessage.id,
             toolCall: updatedCall,
           }),
@@ -607,21 +618,21 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               call.startedAt = new Date(started).toISOString();
               call.statusDisplay = { text: "AWAITING APPROVAL" };
               await store.save(session);
-              sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+              emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
               const decisionPromise = planModeApprovals.waitForDecision(
                 sessionId,
                 call.id,
                 "enter",
                 controller.signal,
               );
-              sendEvent(response, "plan_mode_request", { toolUseId: call.id, kind: "enter" });
+              emit("plan_mode_request", { toolUseId: call.id, kind: "enter" });
               const decision = await decisionPromise;
               if (decision.approved) {
                 const filePath = session.planMode?.planFilePath ?? planFilePath(planDirectory, session.id);
                 await ensurePlanFile(filePath);
                 session.planMode = { active: true, planFilePath: filePath };
                 allowedDirectories = sessionDirectories(session);
-                sendEvent(response, "plan_mode_state", { planMode: session.planMode });
+                emit("plan_mode_state", { planMode: session.planMode });
                 call.status = "complete";
                 call.output = "";
                 call.statusDisplay = { text: "PLAN MODE" };
@@ -652,14 +663,14 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               call.startedAt = new Date(started).toISOString();
               call.statusDisplay = { text: "AWAITING APPROVAL" };
               await store.save(session);
-              sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+              emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
               const decisionPromise = planModeApprovals.waitForDecision(
                 sessionId,
                 call.id,
                 "exit",
                 controller.signal,
               );
-              sendEvent(response, "plan_mode_request", {
+              emit("plan_mode_request", {
                 toolUseId: call.id,
                 kind: "exit",
                 plan,
@@ -670,7 +681,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               if (decision.approved && !decision.newSession) {
                 session.planMode.active = false;
                 allowedDirectories = sessionDirectories(session);
-                sendEvent(response, "plan_mode_state", { planMode: session.planMode });
+                emit("plan_mode_state", { planMode: session.planMode });
                 call.status = "complete";
                 call.output = "";
                 call.statusDisplay = { text: "APPROVED" };
@@ -687,7 +698,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                   kind: "plan-banner",
                   ...(decision.newSessionId ? { forkedSessionId: decision.newSessionId } : {}),
                 });
-                sendEvent(response, "plan_mode_state", { planMode: session.planMode });
+                emit("plan_mode_state", { planMode: session.planMode });
                 call.status = "complete";
                 call.output = "";
                 call.statusDisplay = { text: "DELEGATED" };
@@ -724,11 +735,11 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             call.startedAt = new Date(started).toISOString();
             call.statusDisplay = { text: "AWAITING ANSWER" };
             await store.save(session);
-            sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+            emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
             try {
               const { questions } = parseAskUserQuestionInput(call.input);
               const answersPromise = askUserQuestions.waitForAnswers(sessionId, call.id, questions, controller.signal);
-              sendEvent(response, "ask_user_question", { toolUseId: call.id, questions });
+              emit("ask_user_question", { toolUseId: call.id, questions });
               const answers = await answersPromise;
               call.status = "complete";
               call.output = JSON.stringify({ answers });
@@ -747,14 +758,14 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             try {
               const input = parseBashInput(call.input);
               await store.save(session);
-              sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+              emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
               if (input.runInBackground) {
                 const started = Date.now();
                 call.status = "running";
                 call.startedAt = new Date(started).toISOString();
                 call.timeoutMs = input.timeoutMs;
                 call.statusDisplay = { text: "STARTING", appendElapsed: true };
-                sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+                emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
                 await store.save(session);
                 const task = await backgroundTasks.start(sessionId, input, allowedDirectories, controller.signal);
                 const message = `Command running in background with ID: ${task.id}. Use TaskOutput to read its output and status.`;
@@ -774,12 +785,12 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                     call.workingDirectory = workingDirectory;
                     call.timeoutMs = input.timeoutMs;
                     call.statusDisplay = statusDisplay;
-                    sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+                    emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
                     await store.save(session);
                   },
                   onOutput: (chunk) => {
                     call.output += chunk;
-                    sendEvent(response, "tool_output", { messageId: assistantMessage.id, toolUseId: call.id, chunk });
+                    emit("tool_output", { messageId: assistantMessage.id, toolUseId: call.id, chunk });
                     void checkpointSession().catch((error) => {
                       console.error(`Could not checkpoint session ${sessionId}:`, error);
                     });
@@ -806,7 +817,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             const started = Date.now();
             call.status = "running";
             call.startedAt = new Date(started).toISOString();
-            sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+            emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
             try {
               const result = await executeTaskOutput(
                 backgroundTasks,
@@ -829,7 +840,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             const started = Date.now();
             call.status = "running";
             call.startedAt = new Date(started).toISOString();
-            sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+            emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
             try {
               const result = executeTaskStop(backgroundTasks, sessionId, parseTaskStopInput(call.input));
               call.status = "complete";
@@ -846,7 +857,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             const started = Date.now();
             call.status = "running";
             call.startedAt = new Date(started).toISOString();
-            sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+            emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
             try {
               archiveCompletedPlanningTasks(session);
               const result = executePlanningTaskTool(call.name, call.input, session);
@@ -861,7 +872,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             }
             call.durationMs = Date.now() - started;
             call.completedAt = new Date().toISOString();
-            sendEvent(response, "planning_tasks_update", {
+            emit("planning_tasks_update", {
               tasks: session.planningTasks ?? [],
               archiveHighWaterMark: session.planningTaskArchiveHighWaterMark ?? 0,
             });
@@ -870,7 +881,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             call.status = "running";
             call.startedAt = new Date(started).toISOString();
             if (typeof call.input.file_path === "string") call.filePath = call.input.file_path;
-            sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+            emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
             try {
               const result = await executeFileTool(
                 call.name,
@@ -897,7 +908,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             const started = Date.now();
             call.status = "running";
             call.startedAt = new Date(started).toISOString();
-            sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+            emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
             try {
               const result = await executeGrep(
                 parseGrepInput(call.input),
@@ -920,7 +931,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             const started = Date.now();
             call.status = "running";
             call.startedAt = new Date(started).toISOString();
-            sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+            emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
             try {
               const result = await executeGlob(
                 parseGlobInput(call.input),
@@ -944,7 +955,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             call.output = `Unknown tool: ${call.name}`;
           }
         }
-        sendEvent(response, "tool_update", { messageId: assistantMessage.id, toolCall: call });
+        emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
         session.messages.push({
           id: randomUUID(),
           role: "user",
@@ -960,7 +971,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         if (abortAfterResult) throw abortAfterResult;
         throwIfSessionAborted(controller.signal);
         if (endTurnAfterResult) {
-          sendEvent(response, "done", { message: assistantMessage, session });
+          emit("done", { message: assistantMessage, session });
           return;
         }
       }
@@ -975,7 +986,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       assistantMessage = createAssistantMessage();
       session.messages.push(assistantMessage);
       await store.save(session);
-      sendEvent(response, "continuation", { assistantMessage });
+      emit("continuation", { assistantMessage });
     }
   } catch (error) {
     // A tool-output checkpoint may still be queued when an abort arrives.
@@ -987,7 +998,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     if (session.parentSessionId) session.agentStatus = "error";
     await store.save(session);
     const message = error instanceof Error && error.name === "AbortError" ? "Generation stopped" : errorMessage(error);
-    if (!response.writableEnded) sendEvent(response, "error", { error: message, message: assistantMessage });
+    if (!response.writableEnded) emit("error", { error: message, message: assistantMessage, session });
   } finally {
     automaticNameRuns.get(sessionId)?.listeners.delete(onAutomaticName);
     activeSessions.unregister(sessionId, controller);
@@ -1509,6 +1520,61 @@ function json(response: ServerResponse, status: number, body: unknown): void {
 function sendEvent(response: ServerResponse, event: string, data: unknown): void {
   if (response.destroyed || response.writableEnded) return;
   response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+function emitSessionEvent(sessionId: string, response: ServerResponse, event: string, data: unknown): void {
+  sendEvent(response, event, data);
+  const subscribers = sessionEventSubscribers.get(sessionId);
+  if (!subscribers) return;
+  for (const subscriber of subscribers) sendEvent(subscriber, event, data);
+  if (event !== "done" && event !== "error") return;
+  for (const subscriber of subscribers) subscriber.end();
+  sessionEventSubscribers.delete(sessionId);
+}
+
+async function observeSessionEvents(
+  request: IncomingMessage,
+  response: ServerResponse,
+  sessionId: string,
+): Promise<void> {
+  const session = activeSessions.session(sessionId) ?? await store.get(sessionId);
+  if (!session) return json(response, 404, { error: "Session not found" });
+
+  response.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive",
+    "x-accel-buffering": "no",
+  });
+  sendEvent(response, "snapshot", await sessionSnapshot(session));
+  const waitingForAgentStart = session.agentStatus === "running";
+  if (!activeSessions.has(sessionId) && !waitingForAgentStart) {
+    response.end();
+    return;
+  }
+
+  const subscribers = sessionEventSubscribers.get(sessionId) ?? new Set<ServerResponse>();
+  subscribers.add(response);
+  sessionEventSubscribers.set(sessionId, subscribers);
+  const heartbeat = setInterval(() => {
+    if (!response.destroyed && !response.writableEnded) response.write(": keep-alive\n\n");
+  }, 15_000);
+  const cleanup = () => {
+    clearInterval(heartbeat);
+    subscribers.delete(response);
+    if (subscribers.size === 0 && sessionEventSubscribers.get(sessionId) === subscribers) {
+      sessionEventSubscribers.delete(sessionId);
+    }
+  };
+  request.once("aborted", cleanup);
+  response.once("close", cleanup);
+
+  // The run can finish between the initial snapshot and subscription setup.
+  if (!activeSessions.has(sessionId) && !waitingForAgentStart) {
+    const completed = await store.get(sessionId);
+    if (completed) sendEvent(response, "snapshot", await sessionSnapshot(completed));
+    response.end();
+  }
 }
 
 async function sessionSnapshot(session: Session): Promise<Record<string, unknown>> {

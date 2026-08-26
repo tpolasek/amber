@@ -83,8 +83,12 @@ const toolOutputDisclosurePreferences = new Map<string, boolean>();
 interface StreamingThinkingState {
   reveal: StreamingThinkingReveal;
   container: HTMLElement;
-  scrollPin: BottomScrollPin;
   onScroll: () => void;
+}
+interface SessionStreamContext {
+  session: Session;
+  assistantMessage: Message | null;
+  assistantElement: HTMLElement | null;
 }
 const streamingThinkingStates = new WeakMap<HTMLElement, StreamingThinkingState>();
 const transcriptScrollPin = new BottomScrollPin();
@@ -110,8 +114,9 @@ let questionSelections = new Map<string, QuestionSelection>();
 let questionSubmitting = false;
 let planModeRequest: PlanModeRequest | null = null;
 let planModeSubmitting = false;
-let sessionRunPollTimer: number | undefined;
-let sessionRunRefreshPending = false;
+let sessionRunController: AbortController | null = null;
+let sessionRunId: string | null = null;
+let sessionRunReconnectTimer: number | undefined;
 let queuedMessage: { sessionId: string; content: string } | null = null;
 let pendingPlanHandoff: { sessionId: string; prompt: string } | null = null;
 
@@ -321,6 +326,7 @@ function wireEvents(): void {
       elements.transcript.scrollHeight,
     );
   }, { passive: true });
+  elements.prompt.addEventListener("focus", stickScrollToBottom);
   elements.composer.addEventListener("submit", (event) => {
     event.preventDefault();
     if (state.streaming) abortCurrentSession();
@@ -412,7 +418,7 @@ function openLandingDialog(): void {
   elements.newSessionDialog.hidden = true;
   elements.sessionDialog.hidden = true;
   elements.landingDialog.hidden = false;
-  syncSessionRunPolling();
+  syncSessionRunUpdates();
   elements.landingNewSession.focus();
 }
 
@@ -595,39 +601,58 @@ async function loadSession(id: string): Promise<void> {
   document.body.classList.remove("sidebar-open");
 }
 
-function syncSessionRunPolling(): void {
+function syncSessionRunUpdates(): void {
   const session = state.session;
-  const shouldPoll = Boolean(session) && (session!.parentSessionId
+  const shouldObserve = Boolean(session) && state.controller === null && (session!.parentSessionId
     ? session!.agentStatus === "running" || session!.messages.some((message) => message.status === "streaming")
-    : state.streaming && state.controller === null);
-  if (shouldPoll && sessionRunPollTimer === undefined) {
-    sessionRunPollTimer = window.setInterval(() => void refreshSessionRun(), 750);
-  } else if (!shouldPoll && sessionRunPollTimer !== undefined) {
-    window.clearInterval(sessionRunPollTimer);
-    sessionRunPollTimer = undefined;
+    : state.streaming);
+  if (!shouldObserve) {
+    stopSessionRunUpdates();
+    return;
   }
+  if (sessionRunId === session!.id && sessionRunController) return;
+  stopSessionRunUpdates();
+  sessionRunId = session!.id;
+  sessionRunController = new AbortController();
+  void observeSessionRun(session!.id, sessionRunController);
 }
 
-async function refreshSessionRun(): Promise<void> {
-  const current = state.session;
-  if (!current || sessionRunRefreshPending) return;
-  sessionRunRefreshPending = true;
+function stopSessionRunUpdates(): void {
+  if (sessionRunReconnectTimer !== undefined) {
+    window.clearTimeout(sessionRunReconnectTimer);
+    sessionRunReconnectTimer = undefined;
+  }
+  sessionRunController?.abort();
+  sessionRunController = null;
+  sessionRunId = null;
+}
+
+async function observeSessionRun(sessionId: string, controller: AbortController): Promise<void> {
   try {
-    const snapshot = await api<SessionSnapshot>(`/api/sessions/${current.id}`);
-    if (state.session?.id !== current.id) return;
-    decorateStreamingMessage(snapshot);
-    const session = snapshot.session;
-    const detachedRootRun = !session.parentSessionId;
-    const wasStreaming = state.streaming;
-    if (detachedRootRun) setStreaming(snapshot.active);
-    syncPendingInteraction(snapshot);
-    updateRenderedSession(session);
-    if (detachedRootRun && wasStreaming && !snapshot.active) sendQueuedMessage(session.id);
-  } catch {
-    // Keep the current snapshot visible during a transient refresh failure.
+    const response = await fetch(`/api/sessions/${sessionId}/events`, { signal: controller.signal });
+    if (!response.ok) throw new Error(await responseError(response));
+    if (!response.body) throw new Error("Server returned no event stream");
+    const current = state.session;
+    if (!current || current.id !== sessionId) return;
+    const context = createSessionStreamContext(current);
+    await readEventStream(response.body, (event, data) => applySessionEvent(context, event, data));
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === "AbortError")) {
+      // A short reconnect covers transient network failures without reverting to polling.
+      if (state.session?.id === sessionId) {
+        sessionRunReconnectTimer = window.setTimeout(() => {
+          sessionRunReconnectTimer = undefined;
+          sessionRunController = null;
+          sessionRunId = null;
+          syncSessionRunUpdates();
+        }, 750);
+      }
+    }
   } finally {
-    sessionRunRefreshPending = false;
-    syncSessionRunPolling();
+    if (sessionRunController === controller) {
+      sessionRunController = null;
+      sessionRunId = null;
+    }
   }
 }
 
@@ -764,8 +789,7 @@ async function sendMessage(queuedContent?: string): Promise<void> {
   if (queuedContent === undefined) clearPrompt();
   setStreaming(true);
   state.controller = new AbortController();
-  let assistantElement: HTMLElement | null = null;
-  let assistantMessage: Message | null = null;
+  const context = createSessionStreamContext(session);
   let detachedActive = false;
   try {
     const response = await fetch(`/api/sessions/${session.id}/messages`, {
@@ -777,73 +801,7 @@ async function sendMessage(queuedContent?: string): Promise<void> {
     if (!response.ok) throw new Error(await responseError(response));
     if (!response.body) throw new Error("Server returned no stream");
 
-    await readEventStream(response.body, (event, data) => {
-      if (event === "start") {
-        const payload = data as { userMessage: Message; assistantMessage: Message };
-        session.messages.push(payload.userMessage, payload.assistantMessage);
-        assistantMessage = payload.assistantMessage;
-        assistantElement = appendMessage(payload.assistantMessage);
-        elements.emptyState.hidden = true;
-        renderHeader();
-        appendMessage(payload.userMessage, assistantElement);
-      } else if (event === "delta") {
-        const message = assistantMessage;
-        if (message?.role === "assistant") {
-          message.streamingThinking = false;
-          message.content += (data as { text: string }).text;
-          updateMessage(assistantElement, message);
-        }
-      } else if (event === "thinking_delta") {
-        const message = assistantMessage;
-        if (message?.role === "assistant") {
-          message.streamingThinking = true;
-          message.thinking = (message.thinking ?? "") + (data as { thinking: string }).thinking;
-          updateMessage(assistantElement, message);
-        }
-      } else if (event === "assistant_complete") {
-        const message = (data as { message: Message }).message;
-        assistantMessage = message;
-        const index = session.messages.findIndex((candidate) => candidate.id === message.id);
-        if (index >= 0) session.messages[index] = message;
-        if (message.usage) session.contextTokens = message.usage.input;
-        updateMessage(assistantElement, message);
-        renderContextMeter();
-      } else if (event === "tool_update") {
-        applyToolUpdate(session, data as { messageId: string; toolCall: ToolCall });
-      } else if (event === "tool_output") {
-        applyToolOutput(session, data as { messageId: string; toolUseId: string; chunk: string });
-      } else if (event === "planning_tasks_update") {
-        const payload = data as { tasks: PlanningTask[]; archiveHighWaterMark: number };
-        session.planningTasks = payload.tasks;
-        session.planningTaskArchiveHighWaterMark = payload.archiveHighWaterMark;
-        renderPlanningTasks();
-      } else if (event === "ask_user_question") {
-        openQuestionDialog(data as AskUserQuestionRequest);
-      } else if (event === "plan_mode_request") {
-        openPlanModeDialog(data as PlanModeRequest);
-      } else if (event === "plan_mode_state") {
-        session.planMode = (data as { planMode: SessionPlanMode }).planMode;
-        renderPlanMode();
-      } else if (event === "continuation") {
-        assistantMessage = (data as { assistantMessage: Message }).assistantMessage;
-        session.messages.push(assistantMessage);
-        assistantElement = appendMessage(assistantMessage);
-      } else if (event === "session_named") {
-        if (state.session?.id === session.id) {
-          state.session.title = (data as { title: string }).title;
-          renderHeader();
-        }
-      } else if (event === "done") {
-        const payload = data as { message: Message; session: Session };
-        state.session = payload.session;
-        renderSession();
-      } else if (event === "error") {
-        const payload = data as { error: string; message?: Message };
-        if (payload.message) updateMessage(assistantElement, payload.message);
-        notify(payload.error);
-      }
-      scrollTranscriptToBottom();
-    });
+    await readEventStream(response.body, (event, data) => applySessionEvent(context, event, data));
   } catch (error) {
     if (!(error instanceof DOMException && error.name === "AbortError")) notify(messageFrom(error));
     detachedActive = await refreshCurrentSession();
@@ -861,10 +819,122 @@ async function sendMessage(queuedContent?: string): Promise<void> {
         sendQueuedMessage(session.id);
       }
     }
-    syncSessionRunPolling();
+    syncSessionRunUpdates();
     await loadSessionList();
     elements.prompt.focus();
   }
+}
+
+function createSessionStreamContext(session: Session): SessionStreamContext {
+  const assistantMessage = [...session.messages].reverse().find((message) =>
+    message.role === "assistant" && message.status === "streaming",
+  ) ?? null;
+  return {
+    session,
+    assistantMessage,
+    assistantElement: assistantMessage
+      ? elements.transcript.querySelector<HTMLElement>(`.message[data-message-id="${CSS.escape(assistantMessage.id)}"]`)
+      : null,
+  };
+}
+
+function setStreamAssistant(context: SessionStreamContext, message: Message | null): void {
+  context.assistantMessage = message;
+  context.assistantElement = message
+    ? elements.transcript.querySelector<HTMLElement>(`.message[data-message-id="${CSS.escape(message.id)}"]`)
+    : null;
+}
+
+function applySessionEvent(context: SessionStreamContext, event: string, data: unknown): void {
+  if (state.session?.id !== context.session.id) return;
+  if (event === "snapshot") {
+    const snapshot = data as SessionSnapshot;
+    const wasStreaming = state.streaming;
+    decorateStreamingMessage(snapshot);
+    context.session = snapshot.session;
+    if (!snapshot.session.parentSessionId) setStreaming(snapshot.active);
+    syncPendingInteraction(snapshot);
+    updateRenderedSession(snapshot.session);
+    setStreamAssistant(context, createSessionStreamContext(snapshot.session).assistantMessage);
+    if (!snapshot.session.parentSessionId && wasStreaming && !snapshot.active) sendQueuedMessage(snapshot.session.id);
+  } else if (event === "start") {
+    const payload = data as { userMessage: Message; assistantMessage: Message };
+    if (!context.session.messages.some((message) => message.id === payload.userMessage.id)) {
+      context.session.messages.push(payload.userMessage, payload.assistantMessage);
+      context.assistantElement = appendMessage(payload.assistantMessage);
+      appendMessage(payload.userMessage, context.assistantElement);
+    }
+    context.assistantMessage = payload.assistantMessage;
+    context.assistantElement ??= elements.transcript.querySelector<HTMLElement>(
+      `.message[data-message-id="${CSS.escape(payload.assistantMessage.id)}"]`,
+    );
+    elements.emptyState.hidden = true;
+    renderHeader();
+  } else if (event === "delta" || event === "thinking_delta") {
+    const message = context.assistantMessage;
+    if (message?.role === "assistant") {
+      if (event === "delta") {
+        message.streamingThinking = false;
+        message.content += (data as { text: string }).text;
+      } else {
+        message.streamingThinking = true;
+        message.thinking = (message.thinking ?? "") + (data as { thinking: string }).thinking;
+      }
+      updateMessage(context.assistantElement, message);
+    }
+  } else if (event === "assistant_complete") {
+    const message = (data as { message: Message }).message;
+    const index = context.session.messages.findIndex((candidate) => candidate.id === message.id);
+    if (index >= 0) context.session.messages[index] = message;
+    if (message.usage) context.session.contextTokens = message.usage.input;
+    setStreamAssistant(context, message);
+    updateMessage(context.assistantElement, message);
+    renderContextMeter();
+  } else if (event === "tool_update") {
+    applyToolUpdate(context.session, data as { messageId: string; toolCall: ToolCall });
+  } else if (event === "tool_output") {
+    applyToolOutput(context.session, data as { messageId: string; toolUseId: string; chunk: string });
+  } else if (event === "planning_tasks_update") {
+    const payload = data as { tasks: PlanningTask[]; archiveHighWaterMark: number };
+    context.session.planningTasks = payload.tasks;
+    context.session.planningTaskArchiveHighWaterMark = payload.archiveHighWaterMark;
+    renderPlanningTasks();
+  } else if (event === "ask_user_question") {
+    openQuestionDialog(data as AskUserQuestionRequest);
+  } else if (event === "plan_mode_request") {
+    openPlanModeDialog(data as PlanModeRequest);
+  } else if (event === "plan_mode_state") {
+    context.session.planMode = (data as { planMode: SessionPlanMode }).planMode;
+    renderPlanMode();
+  } else if (event === "continuation") {
+    const message = (data as { assistantMessage: Message }).assistantMessage;
+    context.session.messages.push(message);
+    context.assistantMessage = message;
+    context.assistantElement = appendMessage(message);
+  } else if (event === "session_named") {
+    context.session.title = (data as { title: string }).title;
+    renderHeader();
+  } else if (event === "done") {
+    const session = (data as { session: Session }).session;
+    context.session = session;
+    if (!session.parentSessionId && state.controller === null) setStreaming(false);
+    updateRenderedSession(session);
+    setStreamAssistant(context, null);
+  } else if (event === "error") {
+    const payload = data as { error: string; message?: Message; session?: Session };
+    if (payload.session) {
+      context.session = payload.session;
+      if (!payload.session.parentSessionId && state.controller === null) setStreaming(false);
+      updateRenderedSession(payload.session);
+    } else if (payload.message) {
+      const index = context.session.messages.findIndex((message) => message.id === payload.message!.id);
+      if (index >= 0) context.session.messages[index] = payload.message;
+      updateMessage(context.assistantElement, payload.message);
+    }
+    setStreamAssistant(context, null);
+    notify(payload.error);
+  }
+  scrollTranscriptToBottom();
 }
 
 async function executePlanHandoff(handoff: { sessionId: string; prompt: string }): Promise<void> {
@@ -1938,7 +2008,7 @@ function renderSession(): void {
   renderPlanningTasks();
   renderContextMeter();
   renderQueuedMessage();
-  syncSessionRunPolling();
+  syncSessionRunUpdates();
   if (sameSession && !wasFollowingBottom) elements.transcript.scrollTop = previousScrollTop;
   else transcriptScrollPin.scrollToBottom(elements.transcript);
 }
@@ -1988,7 +2058,7 @@ function updateRenderedSession(session: Session): void {
   renderPlanningTasks();
   renderContextMeter();
   renderQueuedMessage();
-  syncSessionRunPolling();
+  syncSessionRunUpdates();
   if (wasFollowingBottom) transcriptScrollPin.scrollToBottom(elements.transcript);
   else elements.transcript.scrollTop = previousScrollTop;
 }
@@ -2297,8 +2367,11 @@ function updateStreamingThinkingReveal(
   let state = streamingThinkingStates.get(element);
   if (!state) {
     container.replaceChildren();
-    const scrollPin = new BottomScrollPin();
-    const onScroll = () => scrollPin.update(container.scrollTop, container.clientHeight, container.scrollHeight);
+    const onScroll = () => transcriptScrollPin.update(
+      container.scrollTop,
+      container.clientHeight,
+      container.scrollHeight,
+    );
     container.addEventListener("scroll", onScroll, { passive: true });
     const reveal = new StreamingThinkingReveal((displayed) => {
       if (!element.isConnected) {
@@ -2306,14 +2379,9 @@ function updateStreamingThinkingReveal(
         return;
       }
       container.innerHTML = markdown.render(displayed) + '<span class="cursor-block"></span>';
-      if (scrollPin.shouldFollowBottom()) {
-        requestAnimationFrame(() => {
-          if (scrollPin.shouldFollowBottom() && element.isConnected) scrollPin.scrollToBottom(container);
-        });
-      }
       scrollTranscriptToBottom();
     });
-    state = { reveal, container, scrollPin, onScroll };
+    state = { reveal, container, onScroll };
     streamingThinkingStates.set(element, state);
     if (resumeExisting) reveal.resume(thinking);
     else reveal.update(thinking);
@@ -2760,10 +2828,17 @@ function setPromptValue(value: string): void {
 function scrollTranscriptToBottom(): void {
   if (!transcriptScrollPin.shouldFollowBottom()) return;
   requestAnimationFrame(() => {
-    if (transcriptScrollPin.shouldFollowBottom()) {
-      transcriptScrollPin.scrollToBottom(elements.transcript);
-    }
+    if (!transcriptScrollPin.shouldFollowBottom()) return;
+    transcriptScrollPin.scrollToBottom(elements.transcript);
+    elements.transcript.querySelectorAll<HTMLElement>(".streaming-thinking .thinking-content").forEach((container) => {
+      transcriptScrollPin.scrollToBottom(container);
+    });
   });
+}
+
+function stickScrollToBottom(): void {
+  transcriptScrollPin.reset();
+  scrollTranscriptToBottom();
 }
 
 function required<T extends HTMLElement>(id: string): T {

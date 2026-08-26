@@ -64,21 +64,8 @@ export class StreamingThinkingReveal {
 
 export class BottomScrollPin {
   private followingBottom = true;
-  private programmaticScrollTop: number | null = null;
 
   update(scrollTop: number, clientHeight: number, scrollHeight: number): void {
-    // Scroll events dispatch a frame after the scrollTop assignment and are coalesced
-    // per frame, so this event corresponds to the latest assignment: if the position
-    // matches it, this is our own scroll-to-bottom (content streamed in meanwhile can
-    // make the distance look large) rather than the user scrolling away. Consume the
-    // record either way so a later user scroll through the stale position cannot be
-    // mistaken for ours.
-    const programmaticScrollTop = this.programmaticScrollTop;
-    this.programmaticScrollTop = null;
-    if (programmaticScrollTop !== null && Math.abs(scrollTop - programmaticScrollTop) < 1) {
-      this.followingBottom = true;
-      return;
-    }
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
     this.followingBottom = distanceFromBottom <= STREAMING_THINKING_BOTTOM_THRESHOLD_PX;
   }
@@ -88,14 +75,11 @@ export class BottomScrollPin {
   }
 
   scrollToBottom(element: { scrollTop: number; scrollHeight: number; clientHeight: number }): void {
-    const target = element.scrollHeight - element.clientHeight;
-    this.programmaticScrollTop = target;
-    element.scrollTop = target;
+    element.scrollTop = element.scrollHeight - element.clientHeight;
   }
 
   reset(): void {
     this.followingBottom = true;
-    this.programmaticScrollTop = null;
   }
 }
 
