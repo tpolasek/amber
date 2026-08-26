@@ -25,7 +25,7 @@ import { executePlanningTaskTool, PLANNING_TASK_TOOLS } from "./planning-task-to
 import { executeFileTool, FILE_TOOLS } from "./file-tools.js";
 import { executeGrep, GREP_TOOL, parseGrepInput } from "./grep-tool.js";
 import { executeGlob, GLOB_TOOL, parseGlobInput } from "./glob-tool.js";
-import { completeDirectories, completeDirectoryRoots } from "./directory-completion.js";
+import { completeDirectories, completeDirectoryRoots, completeFiles } from "./directory-completion.js";
 import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
 import { AGENT_TOOL_NAME, getAgentDefinition, parseAgentInput, startAgentRuns } from "./agent-tool.js";
 import { ActiveSessionRuns, abortSessionOperations } from "./session-aborts.js";
@@ -1301,14 +1301,19 @@ async function listDirectoryCompletions(response: ServerResponse, sessionId: str
   const session = await store.get(sessionId);
   if (!session) return json(response, 404, { error: "Session not found" });
   const command = url.searchParams.get("command");
-  if (command !== "cwd" && command !== "add-dir") {
-    return json(response, 400, { error: "Directory completion requires command=cwd or command=add-dir" });
+  if (command !== "cwd" && command !== "add-dir" && command !== "file") {
+    return json(response, 400, { error: "Path completion requires command=cwd, command=add-dir, or command=file" });
   }
   const fragment = url.searchParams.get("path") ?? "";
   if (fragment.includes("\0") || fragment.includes("\n") || fragment.length > 4_096) {
     return json(response, 400, { error: "Invalid directory completion path" });
   }
   const currentDirectory = sessionWorkingDirectory(session);
+  if (command === "file") {
+    return json(response, 200, {
+      directories: await completeFiles(fragment, currentDirectory, sessionDirectoryRoots(session)),
+    });
+  }
   if (command === "cwd" && fragment === "") {
     return json(response, 200, { directories: await completeDirectoryRoots(sessionDirectoryRoots(session)) });
   }

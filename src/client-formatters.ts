@@ -49,6 +49,34 @@ export function messageFrom(error: unknown): string {
   return error instanceof Error ? error.message : "Something went wrong";
 }
 
+export interface PromptFileReference {
+  start: number;
+  end: number;
+  path: string;
+}
+
+export function promptFileReferenceAt(input: string, caret: number): PromptFileReference | null {
+  if (caret < 0 || caret > input.length) return null;
+  const match = input.slice(0, caret).match(/(?:^|\s)@([^\s@]*)$/);
+  if (!match || match[1] === undefined) return null;
+  const start = caret - match[1].length - 1;
+  let end = caret;
+  while (end < input.length && !/\s/.test(input[end]!)) end += 1;
+  return { start, end, path: match[1] };
+}
+
+export function replacePromptFileReference(
+  input: string,
+  reference: PromptFileReference,
+  path: string,
+): { value: string; caret: number } {
+  const replacement = `@${path}`;
+  return {
+    value: `${input.slice(0, reference.start)}${replacement}${input.slice(reference.end)}`,
+    caret: reference.start + replacement.length,
+  };
+}
+
 export function commitCommandPrompt(command: string): string | null {
   const argument = command.trim().split(/\s+/).slice(1).join(" ").trim().toLowerCase();
   if (argument && argument !== "push") return null;

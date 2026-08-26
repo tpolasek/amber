@@ -9,6 +9,8 @@ import {
   gitCommandSuggestions,
   messageFrom,
   parseGitCommand,
+  promptFileReferenceAt,
+  replacePromptFileReference,
   taskRuntime,
 } from "../src/client-formatters.js";
 
@@ -81,4 +83,24 @@ test("parses /git subcommands into views and commit requests", () => {
   assert.equal(parseGitCommand("/git diff --cached"), null);
   assert.equal(parseGitCommand("/git commit amend"), null);
   assert.equal(parseGitCommand("/commit diff"), null);
+});
+
+test("finds and replaces the file reference at the prompt caret", () => {
+  assert.deepEqual(promptFileReferenceAt("Review @src/ser", 15), {
+    start: 7,
+    end: 15,
+    path: "src/ser",
+  });
+  assert.deepEqual(promptFileReferenceAt("@README.md then continue", 10), {
+    start: 0,
+    end: 10,
+    path: "README.md",
+  });
+  assert.equal(promptFileReferenceAt("email@example.com", 17), null);
+  assert.equal(promptFileReferenceAt("Review @src/file", 7), null);
+
+  assert.deepEqual(
+    replacePromptFileReference("Review @src/ser then continue", { start: 7, end: 15, path: "src/ser" }, "src/server.ts"),
+    { value: "Review @src/server.ts then continue", caret: 21 },
+  );
 });

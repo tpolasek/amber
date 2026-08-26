@@ -8,8 +8,11 @@ import {
   gitCommandSuggestions,
   messageFrom,
   parseGitCommand,
+  promptFileReferenceAt,
   relativeTime,
+  replacePromptFileReference,
   taskRuntime,
+  type PromptFileReference,
 } from "./client-formatters.js";
 import {
   diffLineClass,
@@ -53,7 +56,7 @@ interface SessionSnapshot {
 }
 interface QuestionSelection { labels: Set<string>; other: string; otherSelected: boolean; focusIndex: number }
 interface CommandDefinition { name: string; description: string }
-interface DirectoryCompletion { value: string; absolutePath: string }
+interface DirectoryCompletion { value: string; absolutePath: string; kind?: "directory" | "file" }
 interface MarkdownRenderer { render(source: string): string }
 declare const markdownit: (options: { html: boolean; linkify: boolean; breaks: boolean; typographer: boolean }) => MarkdownRenderer;
 
@@ -75,6 +78,7 @@ let matchingCommands: CommandDefinition[] = [];
 let selectedCommand = 0;
 let directoryCompletions: DirectoryCompletion[] = [];
 let directoryCompletionCommand: "/add-dir" | "/cwd" | null = null;
+let fileReferenceCompletion: PromptFileReference | null = null;
 let directoryCompletionRequest = 0;
 let historyPosition = -1;
 let historyDraft = "";
@@ -375,7 +379,7 @@ function wireEvents(): void {
       }
       if (event.key === "Enter" || event.key === "Tab") {
         const directory = directoryCompletions[selectedCommand];
-        if (directory && directoryCompletionCommand) {
+        if (directory && (directoryCompletionCommand || fileReferenceCompletion)) {
           event.preventDefault();
           acceptDirectoryCompletion(directory);
           return;
@@ -404,6 +408,12 @@ function wireEvents(): void {
     historyPosition = -1;
     resizePrompt();
     updateCommandMenu();
+  });
+  elements.prompt.addEventListener("click", updateCommandMenu);
+  elements.prompt.addEventListener("keyup", (event) => {
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End") {
+      updateCommandMenu();
+    }
   });
   elements.historyQuery.addEventListener("input", updateHistorySearch);
   elements.historyQuery.addEventListener("keydown", (event) => {
@@ -2776,9 +2786,16 @@ function updateCommandMenu(): void {
     void updateDirectoryCompletions(`/${directoryMatch[1].toLowerCase()}` as "/add-dir" | "/cwd", directoryMatch[2]);
     return;
   }
+  const fileReference = promptFileReferenceAt(elements.prompt.value, elements.prompt.selectionStart);
+  if (fileReference) {
+    matchingCommands = [];
+    void updateFileCompletions(fileReference);
+    return;
+  }
   directoryCompletionRequest += 1;
   directoryCompletions = [];
   directoryCompletionCommand = null;
+  fileReferenceCompletion = null;
   const gitMatches = gitCommandSuggestions(elements.prompt.value);
   if (gitMatches) {
     matchingCommands = gitMatches.map((suggestion) => ({
@@ -2805,6 +2822,7 @@ async function updateDirectoryCompletions(command: "/add-dir" | "/cwd", path: st
   const request = ++directoryCompletionRequest;
   directoryCompletions = [];
   directoryCompletionCommand = command;
+  fileReferenceCompletion = null;
   selectedCommand = 0;
   elements.commandMenu.hidden = true;
   try {
@@ -2813,6 +2831,33 @@ async function updateDirectoryCompletions(command: "/add-dir" | "/cwd", path: st
       `/api/sessions/${session.id}/directory-completions?${query}`,
     );
     if (request !== directoryCompletionRequest || elements.prompt.value !== sourceValue) return;
+    directoryCompletions = result.directories;
+    if (directoryCompletions.length === 0) return hideCommandMenu();
+    renderDirectoryMenu();
+  } catch {
+    if (request === directoryCompletionRequest) hideCommandMenu();
+  }
+}
+
+async function updateFileCompletions(reference: PromptFileReference): Promise<void> {
+  const session = state.session;
+  if (!session) return hideCommandMenu();
+  const sourceValue = elements.prompt.value;
+  const sourceCaret = elements.prompt.selectionStart;
+  const request = ++directoryCompletionRequest;
+  directoryCompletions = [];
+  directoryCompletionCommand = null;
+  fileReferenceCompletion = reference;
+  selectedCommand = 0;
+  elements.commandMenu.hidden = true;
+  try {
+    const query = new URLSearchParams({ command: "file", path: reference.path });
+    const result = await api<{ directories: DirectoryCompletion[] }>(
+      `/api/sessions/${session.id}/directory-completions?${query}`,
+    );
+    if (request !== directoryCompletionRequest
+      || elements.prompt.value !== sourceValue
+      || elements.prompt.selectionStart !== sourceCaret) return;
     directoryCompletions = result.directories;
     if (directoryCompletions.length === 0) return hideCommandMenu();
     renderDirectoryMenu();
@@ -2868,9 +2913,19 @@ function renderDirectoryMenu(): void {
 }
 
 function acceptDirectoryCompletion(directory: DirectoryCompletion): void {
-  if (!directoryCompletionCommand) return;
-  setPromptValue(`${directoryCompletionCommand} ${directory.value}`);
-  hideCommandMenu();
+  if (fileReferenceCompletion) {
+    const result = replacePromptFileReference(elements.prompt.value, fileReferenceCompletion, directory.value);
+    elements.prompt.value = result.value;
+    elements.prompt.setSelectionRange(result.caret, result.caret);
+    resizePrompt();
+    if (directory.kind === "directory") updateCommandMenu();
+    else hideCommandMenu();
+  } else if (directoryCompletionCommand) {
+    setPromptValue(`${directoryCompletionCommand} ${directory.value}`);
+    hideCommandMenu();
+  } else {
+    return;
+  }
   elements.prompt.focus();
 }
 
@@ -2892,6 +2947,7 @@ function hideCommandMenu(): void {
   matchingCommands = [];
   directoryCompletions = [];
   directoryCompletionCommand = null;
+  fileReferenceCompletion = null;
   selectedCommand = 0;
   elements.commandMenu.hidden = true;
 }

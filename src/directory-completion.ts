@@ -10,11 +10,33 @@ export interface DirectoryCompletion {
   absolutePath: string;
 }
 
+export interface FileCompletion extends DirectoryCompletion {
+  kind: "directory" | "file";
+}
+
 export async function completeDirectories(
   fragment: string,
   baseDirectory: string,
   allowedRoots?: string[],
 ): Promise<DirectoryCompletion[]> {
+  const completions = await completePathEntries(fragment, baseDirectory, "directories", allowedRoots);
+  return completions.map(({ value, absolutePath }) => ({ value, absolutePath }));
+}
+
+export async function completeFiles(
+  fragment: string,
+  baseDirectory: string,
+  allowedRoots?: string[],
+): Promise<FileCompletion[]> {
+  return completePathEntries(fragment, baseDirectory, "files", allowedRoots);
+}
+
+async function completePathEntries(
+  fragment: string,
+  baseDirectory: string,
+  mode: "directories" | "files",
+  allowedRoots?: string[],
+): Promise<FileCompletion[]> {
   const parts = completionParts(fragment, baseDirectory);
   let parentDirectory: string;
   try {
@@ -36,17 +58,23 @@ export async function completeDirectories(
   const candidates = entries
     .filter((entry) => (prefix.startsWith(".") || !entry.name.startsWith("."))
       && entry.name.toLocaleLowerCase().startsWith(prefix)
-      && (entry.isDirectory() || entry.isSymbolicLink()))
+      && (mode === "files" || entry.isDirectory() || entry.isSymbolicLink()))
     .sort((left, right) => left.name.localeCompare(right.name));
 
-  const completions: DirectoryCompletion[] = [];
+  const completions: FileCompletion[] = [];
   for (const entry of candidates) {
     if (completions.length >= MAX_DIRECTORY_COMPLETIONS) break;
     try {
       const absolutePath = await realpath(join(parentDirectory, entry.name));
-      if (!(await stat(absolutePath)).isDirectory()) continue;
+      const entryStat = await stat(absolutePath);
+      const kind = entryStat.isDirectory() ? "directory" : entryStat.isFile() ? "file" : undefined;
+      if (!kind || mode === "directories" && kind !== "directory") continue;
       if (allowedRoots && !pathAllowed(absolutePath, allowedRoots)) continue;
-      completions.push({ value: `${parts.displayPrefix}${entry.name}`, absolutePath });
+      completions.push({
+        value: `${parts.displayPrefix}${entry.name}${mode === "files" && kind === "directory" ? sep : ""}`,
+        absolutePath,
+        kind,
+      });
     } catch {
       // Ignore entries that disappear or cannot be resolved while completing.
     }
