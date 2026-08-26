@@ -88,6 +88,18 @@ Build and development dependencies are also small:
 
 The packaged binary includes everything needed to run AMBER; Node.js and npm are not required on the destination machine.
 
+### Optional: ripgrep
+
+The Grep and Glob tools search with **ripgrep** when it is installed and fall back to the system **grep** otherwise, so it is not a hard requirement. Installing ripgrep and keeping its **rg** binary on PATH is recommended for the best search performance; multiline pattern matching requires it.
+
+```bash
+brew install ripgrep        # macOS
+sudo apt install ripgrep    # Debian/Ubuntu
+sudo dnf install ripgrep    # Fedora
+sudo pacman -S ripgrep      # Arch Linux
+cargo install ripgrep       # any platform with Rust
+```
+
 ## Useful commands
 
 ```bash

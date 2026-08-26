@@ -3,7 +3,17 @@ import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, realpath, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeGrep, GREP_TOOL, isPermissionOnlyRipgrepStderr, parseGrepInput } from "../src/grep-tool.js";
+import {
+  basenameGlob,
+  buildGrepArgs,
+  executeGrep,
+  expandBracePattern,
+  GREP_TOOL,
+  isPermissionOnlyRipgrepStderr,
+  isRipgrepAvailable,
+  parseGrepInput,
+  VCS_DIRECTORIES_TO_EXCLUDE,
+} from "../src/grep-tool.js";
 
 const signal = () => new AbortController().signal;
 
@@ -260,11 +270,71 @@ test("multiline patterns span lines only with multiline enabled", async () => {
     executeGrep(parseGrepInput({ pattern: "start\\nend", output_mode: "content" }), [directory], directory, signal()),
     /multiline/,
   );
-  const multiline = await executeGrep(
-    parseGrepInput({ pattern: "start\\nend", output_mode: "content", multiline: true }),
-    [directory], directory, signal(),
+  if (await isRipgrepAvailable()) {
+    const multiline = await executeGrep(
+      parseGrepInput({ pattern: "start\\nend", output_mode: "content", multiline: true }),
+      [directory], directory, signal(),
+    );
+    assert.match(multiline.resultText, /span\.txt:1:start/);
+  } else {
+    await assert.rejects(
+      executeGrep(
+        parseGrepInput({ pattern: "start\\nend", output_mode: "content", multiline: true }),
+        [directory], directory, signal(),
+      ),
+      /multiline search requires ripgrep/,
+    );
+  }
+});
+
+test("buildGrepArgs translates search options to grep flags", () => {
+  const excludeDirs = VCS_DIRECTORIES_TO_EXCLUDE.flatMap((directory) => ["--exclude-dir", directory]);
+  assert.deepEqual(buildGrepArgs(parseGrepInput({ pattern: "needle" })), [
+    "-r", ...excludeDirs, "-l", "-e", "needle",
+  ]);
+  assert.deepEqual(buildGrepArgs(parseGrepInput({ pattern: "needle", output_mode: "content", "-C": 2 })), [
+    "-r", ...excludeDirs, "-n", "-C", "2", "-e", "needle",
+  ]);
+  assert.deepEqual(buildGrepArgs(parseGrepInput({ pattern: "needle", output_mode: "count", "-i": true })), [
+    "-r", ...excludeDirs, "-i", "-c", "-e", "needle",
+  ]);
+  assert.deepEqual(
+    buildGrepArgs(parseGrepInput({ pattern: "needle", glob: "**/*.{ts,md}" })),
+    [
+      "-r", ...excludeDirs, "-l", "-e", "needle",
+      "--include", "*.ts", "--include", "*.md",
+    ],
   );
-  assert.match(multiline.resultText, /span\.txt:1:start/);
+  assert.deepEqual(
+    buildGrepArgs(parseGrepInput({ pattern: "needle", glob: "*.ts,!keep.ts" })),
+    [
+      "-r", ...excludeDirs, "-l", "-e", "needle",
+      "--include", "*.ts", "--exclude", "keep.ts",
+    ],
+  );
+  assert.deepEqual(
+    buildGrepArgs(parseGrepInput({ pattern: "needle", type: "ts" })),
+    ["-r", ...excludeDirs, "-l", "-e", "needle",
+      "--include", "*.cts", "--include", "*.mts", "--include", "*.ts", "--include", "*.tsx"],
+  );
+  assert.deepEqual(buildGrepArgs(parseGrepInput({ pattern: "needle", type: "zig" })), [
+    "-r", ...excludeDirs, "-l", "-e", "needle", "--include", "*.zig",
+  ]);
+  // rg ANDs type with glob; the grep fallback cannot, so the explicit glob wins.
+  assert.deepEqual(
+    buildGrepArgs(parseGrepInput({ pattern: "needle", type: "md", glob: "*.ts" })),
+    ["-r", ...excludeDirs, "-l", "-e", "needle", "--include", "*.ts"],
+  );
+});
+
+test("glob helpers flatten braces and path segments for grep", () => {
+  assert.deepEqual(expandBracePattern("*.{ts,tsx}"), ["*.ts", "*.tsx"]);
+  assert.deepEqual(expandBracePattern("*.{ts,md},*.js"), ["*.ts,*.js", "*.md,*.js"]);
+  assert.deepEqual(expandBracePattern("*.ts"), ["*.ts"]);
+  assert.equal(basenameGlob("**/*.ts"), "*.ts");
+  assert.equal(basenameGlob("src/**/*.ts"), "*.ts");
+  assert.equal(basenameGlob("*.ts"), "*.ts");
+  assert.throws(() => expandBracePattern("{a,b}".repeat(7)), /more than 100 alternatives/);
 });
 
 test("an aborted signal rejects the search", async () => {

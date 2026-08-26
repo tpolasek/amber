@@ -12,6 +12,12 @@ const MAX_PATTERN_CHARACTERS = 10_000;
 // Version control system directories excluded from searches because they add noise.
 export const VCS_DIRECTORIES_TO_EXCLUDE = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"] as const;
 
+// Matches rg's --max-columns so long lines (minified bundles, embedded assets) are
+// elided instead of flooding output.
+const MAX_COLUMNS = 500;
+const OMITTED_LONG_LINE = "[Omitted long matching line]";
+const MAX_EXPANDED_GLOB_PATTERNS = 100;
+
 // Default cap on grep results when head_limit is unspecified. Unbounded content-mode
 // greps can exhaust the conversation context. Pass head_limit=0 explicitly for unlimited.
 const DEFAULT_HEAD_LIMIT = 250;
@@ -171,7 +177,7 @@ function buildRipgrepArgs(input: GrepInput): string[] {
   for (const directory of VCS_DIRECTORIES_TO_EXCLUDE) {
     args.push("--glob", `!${directory}`);
   }
-  args.push("--max-columns", "500");
+  args.push("--max-columns", String(MAX_COLUMNS));
   if (input.multiline) args.push("-U", "--multiline-dotall");
   if (input.caseInsensitive) args.push("-i");
   if (input.outputMode === "files_with_matches") args.push("-l");
@@ -188,6 +194,108 @@ function buildRipgrepArgs(input: GrepInput): string[] {
   args.push("-e", input.pattern);
   if (input.type) args.push("--type", input.type);
   if (input.glob) for (const pattern of splitGlobPatterns(input.glob)) args.push("--glob", pattern);
+  return args;
+}
+
+// grep --include/--exclude globs are matched against file basenames only, and neither
+// BSD nor GNU grep expands braces, so "{ts,md}" lists and "src/**/*.ts" path scoping
+// must be flattened before they can filter a grep invocation. Flattening drops
+// directory scoping, so "src/**/*.ts" broadens to every "*.ts" at any depth.
+export function expandBracePattern(pattern: string): string[] {
+  const match = /^(.*?)\{([^{}]*)\}(.*)$/.exec(pattern);
+  if (!match) return [pattern];
+  const before = match[1] ?? "";
+  const alternatives = match[2] ?? "";
+  const after = match[3] ?? "";
+  const expanded = alternatives
+    .split(",")
+    .flatMap((alternative) => expandBracePattern(`${before}${alternative}${after}`));
+  // Nested brace groups multiply exponentially; cap them so a hostile pattern cannot
+  // block the event loop before the timeout or abort handling can run.
+  if (expanded.length > MAX_EXPANDED_GLOB_PATTERNS) {
+    throw new Error(`glob pattern expands to more than ${MAX_EXPANDED_GLOB_PATTERNS} alternatives`);
+  }
+  return expanded;
+}
+
+export function basenameGlob(pattern: string): string {
+  const segments = pattern.split("/");
+  return segments[segments.length - 1] || pattern;
+}
+
+// True when the pattern contains an actual newline or a "\\n" escape that rg would
+// reject outside multiline mode. Escaped backslashes ("\\\\n") are stripped first so
+// they do not masquerade as the escape.
+function patternContainsNewlineEscape(pattern: string): boolean {
+  return pattern.includes("\n") || pattern.replace(/\\\\/g, "  ").includes("\\n");
+}
+
+// rg --type expansions (from `rg --type-list`) for the grep fallback; unknown types
+// fall back to "*.<type>", which covers the common extension-named types.
+const GREP_TYPE_GLOBS: Record<string, readonly string[]> = {
+  c: ["*.c", "*.h"],
+  cpp: ["*.cpp", "*.cc", "*.cxx", "*.c++", "*.h", "*.hpp", "*.hh", "*.hxx", "*.h++"],
+  css: ["*.css", "*.scss"],
+  go: ["*.go"],
+  html: ["*.html", "*.htm"],
+  java: ["*.java", "*.jsp", "*.jspx", "*.properties"],
+  js: ["*.cjs", "*.js", "*.jsx", "*.mjs", "*.vue"],
+  json: ["*.json", "*.sarif", "composer.lock"],
+  markdown: ["*.markdown", "*.md", "*.mdown", "*.mdwn", "*.mdx", "*.mkd", "*.mkdn"],
+  py: ["*.py", "*.pyi"],
+  rust: ["*.rs"],
+  ts: ["*.cts", "*.mts", "*.ts", "*.tsx"],
+  yaml: ["*.yaml", "*.yml"],
+};
+
+const GREP_TYPE_ALIASES: Record<string, string> = {
+  golang: "go",
+  md: "markdown",
+  python: "py",
+  rs: "rust",
+  yml: "yaml",
+};
+
+function grepTypeGlobs(type: string): string[] {
+  const canonical = GREP_TYPE_ALIASES[type] ?? type;
+  return GREP_TYPE_GLOBS[canonical] ? [...GREP_TYPE_GLOBS[canonical]] : [`*.${canonical}`];
+}
+
+// Fallback translation for environments without ripgrep. grep searches hidden files
+// by default, so neither --hidden nor VCS --glob exclusions map directly (directories
+// use --exclude-dir instead). Directories recurse with -r; single files omit it and
+// pass -h so the filename prefix matches ripgrep's single-file output. Multiline
+// matching has no equivalent and is rejected before reaching this builder.
+export function buildGrepArgs(input: GrepInput, searchPathIsDirectory = true): string[] {
+  const args = searchPathIsDirectory ? ["-r"] : ["-h"];
+  for (const directory of VCS_DIRECTORIES_TO_EXCLUDE) {
+    args.push("--exclude-dir", directory);
+  }
+  if (input.caseInsensitive) args.push("-i");
+  if (input.outputMode === "files_with_matches") args.push("-l");
+  else if (input.outputMode === "count") args.push("-c");
+  if (input.outputMode === "content") {
+    if (input.showLineNumbers) args.push("-n");
+    if (input.context !== undefined) args.push("-C", String(input.context));
+    else {
+      if (input.contextBefore !== undefined) args.push("-B", String(input.contextBefore));
+      if (input.contextAfter !== undefined) args.push("-A", String(input.contextAfter));
+    }
+  }
+  args.push("-e", input.pattern);
+  // grep ORs --include globs while rg ANDs type with glob filters, so honoring both
+  // would widen results beyond rg's; the explicit glob wins when both are provided.
+  if (input.type && !input.glob) {
+    for (const glob of grepTypeGlobs(input.type)) args.push("--include", glob);
+  }
+  if (input.glob) {
+    for (const pattern of splitGlobPatterns(input.glob)) {
+      const negated = pattern.startsWith("!");
+      for (const expanded of expandBracePattern(negated ? pattern.slice(1) : pattern)) {
+        args.push(negated ? "--exclude" : "--include", basenameGlob(expanded));
+      }
+    }
+  }
   return args;
 }
 
@@ -221,22 +329,52 @@ function joinHome(requested: string): string {
   return requested === "~" ? homedir() : resolve(homedir(), requested.slice(2));
 }
 
-interface RipgrepRun {
+export interface SearchProcessRun {
   exitCode: number | null;
   stdout: string;
   stderr: string;
 }
 
-export function runRipgrep(args: string[], searchPath: string, signal: AbortSignal): Promise<RipgrepRun> {
+// ripgrep is preferred but not required; when it is missing the tools fall back to
+// the system grep. Probe once per process so every search does not pay detection cost.
+let ripgrepAvailability: Promise<boolean> | undefined;
+
+export function isRipgrepAvailable(): Promise<boolean> {
+  ripgrepAvailability ??= new Promise((resolve) => {
+    const child = spawn("rg", ["--version"], { env: bashChildEnvironment(), stdio: "ignore" });
+    child.once("error", () => resolve(false));
+    child.once("close", (exitCode) => resolve(exitCode === 0));
+  });
+  return ripgrepAvailability;
+}
+
+export function runSearchProcess(
+  command: "rg" | "grep",
+  args: string[],
+  searchPath: string,
+  signal: AbortSignal,
+  maxLineLength?: number,
+): Promise<SearchProcessRun> {
   return new Promise((resolveRun, reject) => {
     // The search path may be a single file; processes can only start in directories.
-    const child = spawn("rg", args, {
+    const child = spawn(command, args, {
       cwd: dirname(searchPath),
       env: bashChildEnvironment(),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
+    // grep has no --max-columns equivalent, so over-long lines are elided as they
+    // stream in; otherwise a single minified line could exhaust the output cap.
+    let pendingLine = "";
+    const elide = (text: string): string => {
+      if (maxLineLength === undefined) return text;
+      pendingLine += text;
+      const lines = pendingLine.split("\n");
+      pendingLine = lines.pop() ?? "";
+      const elided = lines.map((line) => (line.length > maxLineLength ? OMITTED_LONG_LINE : line));
+      return lines.length > 0 ? `${elided.join("\n")}\n` : "";
+    };
     let outputTooLarge = false;
     let timedOut = false;
     let settled = false;
@@ -258,7 +396,7 @@ export function runRipgrep(args: string[], searchPath: string, signal: AbortSign
     }, GREP_TIMEOUT_MS);
 
     child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
+      stdout += elide(chunk.toString());
       if (!outputTooLarge && stdout.length > MAX_GREP_OUTPUT_CHARACTERS) {
         outputTooLarge = true;
         stop();
@@ -274,7 +412,7 @@ export function runRipgrep(args: string[], searchPath: string, signal: AbortSign
       if (forceKillTimer) clearTimeout(forceKillTimer);
       signal.removeEventListener("abort", abort);
       reject((error as NodeJS.ErrnoException).code === "ENOENT"
-        ? new Error("ripgrep (rg) was not found on PATH; install ripgrep to use the Grep tool")
+        ? new Error(`${command} was not found on PATH; install ripgrep (rg) or grep to use the Grep and Glob tools`)
         : error);
     });
     child.once("close", (exitCode) => {
@@ -284,10 +422,14 @@ export function runRipgrep(args: string[], searchPath: string, signal: AbortSign
       if (forceKillTimer) clearTimeout(forceKillTimer);
       signal.removeEventListener("abort", abort);
       if (signal.aborted) return reject(abortError());
-      if (timedOut) return reject(new Error(`ripgrep timed out after ${GREP_TIMEOUT_MS / 1000}s`));
+      if (maxLineLength !== undefined && pendingLine.length > 0) {
+        stdout += pendingLine.length > maxLineLength ? OMITTED_LONG_LINE : pendingLine;
+        pendingLine = "";
+      }
+      if (timedOut) return reject(new Error(`${command} timed out after ${GREP_TIMEOUT_MS / 1000}s`));
       if (outputTooLarge) {
         return reject(new Error(
-          `ripgrep output exceeded ${MAX_GREP_OUTPUT_CHARACTERS.toLocaleString()} characters; narrow the pattern or use head_limit and offset`,
+          `${command} output exceeded ${MAX_GREP_OUTPUT_CHARACTERS.toLocaleString()} characters; narrow the pattern or use head_limit and offset`,
         ));
       }
       resolveRun({ exitCode, stdout, stderr });
@@ -370,16 +512,36 @@ export async function executeGrep(
   if (!currentDirectory) throw new Error("No current working directory is configured");
   const searchPath = await resolveSearchPath(input.path, allowedDirectories, currentDirectory);
   throwIfAborted(signal);
-  const args = [...buildRipgrepArgs(input), "--", searchPath];
-  const run = await runRipgrep(args, searchPath, signal ?? new AbortController().signal);
+  const command: "rg" | "grep" = (await isRipgrepAvailable()) ? "rg" : "grep";
+  if (command === "grep") {
+    if (input.multiline) throw new Error("multiline search requires ripgrep (rg), which was not found on PATH");
+    // rg rejects the "\\n" escape outside multiline mode; reject it here too, since grep
+    // would otherwise silently treat the escape as a literal "n" and match nothing.
+    // Doubling ("\\\\n") is an escaped backslash plus "n", which rg allows through.
+    if (patternContainsNewlineEscape(input.pattern)) {
+      throw new Error('the literal "\\n" is not allowed in a regex; enable multiline (requires ripgrep)');
+    }
+  }
+  const args = [
+    ...(command === "rg"
+      ? buildRipgrepArgs(input)
+      : buildGrepArgs(input, (await stat(searchPath)).isDirectory())),
+    "--",
+    searchPath,
+  ];
+  // rg elides long lines itself via --max-columns; the grep fallback needs it done here.
+  const maxLineLength = command === "grep" && input.outputMode === "content" ? MAX_COLUMNS : undefined;
+  const run = await runSearchProcess(command, args, searchPath, signal ?? new AbortController().signal, maxLineLength);
   // rg exits 0 with matches, 1 with no matches, and 2+ on error. Permission
   // failures on individual directories should not hide readable matches.
   const permissionOnly = run.exitCode !== null && run.exitCode >= 2 && isPermissionOnlyRipgrepStderr(run.stderr);
   if (run.exitCode !== null && run.exitCode >= 2 && !permissionOnly) {
-    throw new Error(`ripgrep failed (exit ${run.exitCode}): ${run.stderr.trim() || "unknown error"}`);
+    throw new Error(`${command} failed (exit ${run.exitCode}): ${run.stderr.trim() || "unknown error"}`);
   }
-  if (run.exitCode === null) throw new Error("ripgrep terminated unexpectedly");
-  const lines = run.stdout.split("\n").filter((line) => line.length > 0);
+  if (run.exitCode === null) throw new Error(`${command} terminated unexpectedly`);
+  let lines = run.stdout.split("\n").filter((line) => line.length > 0);
+  // grep -c reports "path:0" for files without matches; rg omits them entirely.
+  if (input.outputMode === "count") lines = lines.filter((line) => !/(^|:)0$/.test(line));
 
   const warning = permissionOnly ? "\n\nWarning: some directories could not be read (permission denied); results may be incomplete." : "";
 

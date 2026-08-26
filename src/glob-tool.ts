@@ -1,7 +1,14 @@
 import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
-import { isPermissionOnlyRipgrepStderr, runRipgrep, VCS_DIRECTORIES_TO_EXCLUDE } from "./grep-tool.js";
+import {
+  basenameGlob,
+  expandBracePattern,
+  isPermissionOnlyRipgrepStderr,
+  isRipgrepAvailable,
+  runSearchProcess,
+  VCS_DIRECTORIES_TO_EXCLUDE,
+} from "./grep-tool.js";
 import type { ToolDefinition } from "./types.js";
 
 const MAX_PATTERN_CHARACTERS = 10_000;
@@ -114,18 +121,35 @@ export async function executeGlob(
   if (!currentDirectory) throw new Error("No current working directory is configured");
   const searchPath = await resolveSearchPath(input.path, allowedDirectories, currentDirectory);
   if (signal?.aborted) throw abortError();
-  const args = ["--files", "--hidden"];
-  for (const directory of VCS_DIRECTORIES_TO_EXCLUDE) {
-    args.push("--glob", `!${directory}`);
+  const command: "rg" | "grep" = (await isRipgrepAvailable()) ? "rg" : "grep";
+  const args: string[] = [];
+  if (command === "rg") {
+    args.push("--files", "--hidden");
+    for (const directory of VCS_DIRECTORIES_TO_EXCLUDE) {
+      args.push("--glob", `!${directory}`);
+    }
+    args.push("--glob", input.pattern, "--", searchPath);
+  } else {
+    // grep has no --files mode; listing files whose contents match the empty pattern
+    // covers every file with at least one line (0-byte files are not listed), filtered
+    // to the pattern with --include/--exclude globs.
+    args.push("-r", "-l", "-e", "");
+    for (const directory of VCS_DIRECTORIES_TO_EXCLUDE) {
+      args.push("--exclude-dir", directory);
+    }
+    const negated = input.pattern.startsWith("!");
+    for (const pattern of expandBracePattern(negated ? input.pattern.slice(1) : input.pattern)) {
+      args.push(negated ? "--exclude" : "--include", basenameGlob(pattern));
+    }
+    args.push("--", searchPath);
   }
-  args.push("--glob", input.pattern, "--", searchPath);
-  const run = await runRipgrep(args, searchPath, signal ?? new AbortController().signal);
+  const run = await runSearchProcess(command, args, searchPath, signal ?? new AbortController().signal);
   // rg exits 0 with files, 1 with no matches, and 2+ on error. Permission
   // failures on individual directories should not hide readable matches.
   if (run.exitCode !== null && run.exitCode >= 2 && !isPermissionOnlyRipgrepStderr(run.stderr)) {
-    throw new Error(`ripgrep failed (exit ${run.exitCode}): ${run.stderr.trim() || "unknown error"}`);
+    throw new Error(`${command} failed (exit ${run.exitCode}): ${run.stderr.trim() || "unknown error"}`);
   }
-  if (run.exitCode === null) throw new Error("ripgrep terminated unexpectedly");
+  if (run.exitCode === null) throw new Error(`${command} terminated unexpectedly`);
   const lines = run.stdout.split("\n").filter((line) => line.length > 0);
 
   // Sort by modification time (newest first) with a filename tiebreaker.
