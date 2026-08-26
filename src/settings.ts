@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parse, stringify } from "smol-toml";
 import type { AgentDefinition } from "./agent-tool.js";
+import type { ProviderProtocol, ThinkingLevel } from "./types.js";
 
 export interface AmberSettings {
   default_provider?: string;
@@ -10,14 +11,13 @@ export interface AmberSettings {
   agents: AgentDefinition[];
 }
 
-export type ThinkingLevel = "low" | "medium" | "high" | "max";
-
 export interface ModelSettings {
   thinking_level?: ThinkingLevel;
   compact_tokens?: number;
 }
 
 export interface ProviderSettings extends ModelSettings {
+  api: ProviderProtocol;
   auth_key: string;
   auth_url: string;
   default_model?: string;
@@ -43,6 +43,7 @@ export const SETTINGS_TEMPLATE = {
   default_provider: "default",
   providers: {
     default: {
+      api: "anthropic",
       auth_key: "<INSERT_AUTH_KEY_HERE>",
       auth_url: "<INSERT_AUTH_URL_HERE>",
       default_model: "<INSERT_DEFAULT_MODEL_HERE>",
@@ -150,10 +151,12 @@ function parseProviders(value: unknown, settingsPath: string): Record<string, Pr
       throw new Error(`${settingsPath}: providers.${name} must be a table`);
     }
     const provider = candidate as Record<string, unknown>;
+    const api = parseProviderProtocol(provider.api, `${settingsPath}: providers.${name}.api`);
     const authKey = requiredString(provider.auth_key, `${settingsPath}: providers.${name}.auth_key`);
     const authUrl = requiredString(provider.auth_url, `${settingsPath}: providers.${name}.auth_url`);
     const defaultModel = optionalString(provider.default_model, `${settingsPath}: providers.${name}.default_model`);
     providers[name] = {
+      api,
       auth_key: authKey,
       auth_url: authUrl,
       ...(defaultModel ? { default_model: defaultModel } : {}),
@@ -182,7 +185,7 @@ function parseModels(value: unknown, field: string): Record<string, ModelSetting
 function parseModelSettings(value: Record<string, unknown>, field: string): ModelSettings {
   const thinkingLevel = value.thinking_level;
   if (thinkingLevel !== undefined && !isThinkingLevel(thinkingLevel)) {
-    throw new Error(`${field}.thinking_level must be low, medium, high, or max`);
+    throw new Error(`${field}.thinking_level must be none, low, medium, high, xhigh, or max`);
   }
   const compactTokens = value.compact_tokens;
   if (compactTokens !== undefined
@@ -207,6 +210,7 @@ function parseLegacyProvider(settings: Record<string, unknown>, settingsPath: st
   if (!authKey && !defaultModel) return {};
   return {
     default: {
+      api: "anthropic",
       auth_key: authKey,
       auth_url: authUrl,
       ...(defaultModel ? { default_model: defaultModel, models: { [defaultModel]: {} } } : { models: {} }),
@@ -225,7 +229,14 @@ function optionalString(value: unknown, field: string): string | undefined {
 }
 
 function isThinkingLevel(value: unknown): value is ThinkingLevel {
-  return value === "low" || value === "medium" || value === "high" || value === "max";
+  return value === "none" || value === "low" || value === "medium"
+    || value === "high" || value === "xhigh" || value === "max";
+}
+
+function parseProviderProtocol(value: unknown, field: string): ProviderProtocol {
+  if (value === undefined || value === "anthropic") return "anthropic";
+  if (value === "openai") return "openai";
+  throw new Error(`${field} must be anthropic or openai`);
 }
 
 export function configuredSetting(value: string | undefined): string | undefined {

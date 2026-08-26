@@ -34,7 +34,12 @@ export function buildProviderHistory(
         : message.role === "assistant" && (message.thinking || message.toolCalls?.length)
           ? [
               ...(message.thinking && message.thinkingSignature
-                ? [{ type: "thinking" as const, thinking: message.thinking, signature: message.thinkingSignature }]
+                ? [{
+                    type: "thinking" as const,
+                    thinking: message.thinking,
+                    signature: message.thinkingSignature,
+                    ...(message.thinkingProvider ? { provider: message.thinkingProvider } : {}),
+                  }]
                 : []),
               ...(message.content ? [{ type: "text" as const, text: message.content }] : []),
               ...(message.toolCalls ?? []).map((call) => ({

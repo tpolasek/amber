@@ -9,6 +9,7 @@ test("discovers every provider model and merges configured overrides", async () 
     default_provider: "zai",
     providers: {
       zai: {
+        api: "anthropic",
         auth_key: "zai-key",
         auth_url: "https://zai.example.test/anthropic",
         default_model: "glm-5.3",
@@ -20,6 +21,7 @@ test("discovers every provider model and merges configured overrides", async () 
         },
       },
       deepseek: {
+        api: "anthropic",
         auth_key: "deepseek-key",
         auth_url: "https://deepseek.example.test/anthropic",
         models: {},
@@ -50,6 +52,7 @@ test("discovers every provider model and merges configured overrides", async () 
     {
       key: "zai/glm-5.3",
       provider: "zai",
+      api: "anthropic",
       model: "glm-5.3",
       displayName: "GLM 5.3",
       thinkingLevel: "low",
@@ -58,6 +61,7 @@ test("discovers every provider model and merges configured overrides", async () 
     {
       key: "zai/glm-5.3-flash",
       provider: "zai",
+      api: "anthropic",
       model: "glm-5.3-flash",
       displayName: "GLM 5.3 Flash",
       thinkingLevel: "max",
@@ -66,6 +70,7 @@ test("discovers every provider model and merges configured overrides", async () 
     {
       key: "zai/custom-glm",
       provider: "zai",
+      api: "anthropic",
       model: "custom-glm",
       displayName: "custom-glm",
       thinkingLevel: "high",
@@ -74,6 +79,7 @@ test("discovers every provider model and merges configured overrides", async () 
     {
       key: "deepseek/deepseek-v4",
       provider: "deepseek",
+      api: "anthropic",
       model: "deepseek-v4",
       displayName: "DeepSeek V4",
       thinkingLevel: "max",
@@ -90,6 +96,7 @@ test("uses explicit models when discovery is unavailable", async () => {
   const settings: AmberSettings = {
     providers: {
       zai: {
+        api: "anthropic",
         auth_key: "key",
         auth_url: "https://zai.example.test",
         default_model: "glm-5.3",
@@ -108,7 +115,7 @@ test("uses explicit models when discovery is unavailable", async () => {
 test("requires discovery when no models are configured", async () => {
   const settings: AmberSettings = {
     providers: {
-      deepseek: { auth_key: "key", auth_url: "https://deepseek.example.test", models: {} },
+      deepseek: { api: "anthropic", auth_key: "key", auth_url: "https://deepseek.example.test", models: {} },
     },
     agents: [],
   };
@@ -133,4 +140,52 @@ test("preserves API-key authentication for environment overrides", async () => {
   assert.equal(headers.get("x-api-key"), "api-key");
   assert.equal(headers.get("authorization"), null);
   assert.equal(catalog.defaultModel, "default/claude-test");
+});
+
+test("discovers OpenAI models with bearer auth and creates an OpenAI provider", async () => {
+  let requestUrl = "";
+  let requestHeaders = new Headers();
+  const fetcher: typeof fetch = async (input, init) => {
+    requestUrl = String(input);
+    requestHeaders = new Headers(init?.headers);
+    return Response.json({ object: "list", data: [{ id: "gpt-test" }, { id: "gpt-fast" }] });
+  };
+  const catalog = await ProviderCatalog.load({}, {
+    default_provider: "openai",
+    providers: {
+      openai: {
+        api: "openai",
+        auth_key: "openai-key",
+        auth_url: "https://api.openai.com/v1",
+        default_model: "gpt-test",
+        thinking_level: "high",
+        models: {},
+      },
+    },
+    agents: [],
+  }, fetcher);
+
+  assert.equal(requestUrl, "https://api.openai.com/v1/models");
+  assert.equal(requestHeaders.get("authorization"), "Bearer openai-key");
+  assert.equal(requestHeaders.get("anthropic-version"), null);
+  assert.deepEqual(catalog.models.map(({ key, api }) => ({ key, api })), [
+    { key: "openai/gpt-test", api: "openai" },
+    { key: "openai/gpt-fast", api: "openai" },
+  ]);
+  assert.equal(catalog.defaultModel, "openai/gpt-test");
+  assert.equal(catalog.provider(undefined).protocol, "openai");
+});
+
+test("defaults each protocol to its own top thinking level", async () => {
+  const fetcher: typeof fetch = async () => Response.json({ data: [{ id: "model-test" }] });
+  const settings = (api: "anthropic" | "openai") => ({
+    default_provider: "provider",
+    providers: { provider: { api, auth_key: "key", auth_url: "https://example.test", models: {} } },
+    agents: [],
+  });
+  const anthropic = await ProviderCatalog.load({}, settings("anthropic"), fetcher);
+  const openai = await ProviderCatalog.load({}, settings("openai"), fetcher);
+
+  assert.equal(anthropic.models[0]?.thinkingLevel, "max");
+  assert.equal(openai.models[0]?.thinkingLevel, "xhigh");
 });

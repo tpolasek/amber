@@ -14,6 +14,7 @@ test("generates a session title without mutating or exposing UI-only history", a
   let receivedMessages: ProviderMessage[] = [];
   const provider: LlmProvider = {
     name: "Test",
+    protocol: "anthropic",
     model: "test-model",
     mode: "live",
     async *stream(history: ProviderMessage[]): AsyncGenerator<StreamEvent> {

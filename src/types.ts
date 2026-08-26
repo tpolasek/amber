@@ -1,5 +1,7 @@
 export type MessageRole = "user" | "assistant";
 export type MessageStatus = "streaming" | "complete" | "error";
+export type ProviderProtocol = "anthropic" | "openai";
+export type ThinkingLevel = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface TokenUsage {
   input: number;
@@ -45,6 +47,7 @@ export interface Message {
   content: string;
   thinking?: string;
   thinkingSignature?: string;
+  thinkingProvider?: ProviderProtocol;
   createdAt: string;
   status: MessageStatus;
   kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result";
@@ -122,7 +125,7 @@ export interface ProviderCacheControl {
 }
 
 export type ProviderContentBlock =
-  | { type: "thinking"; thinking: string; signature: string }
+  | { type: "thinking"; thinking: string; signature: string; provider?: ProviderProtocol }
   | { type: "text"; text: string; cache_control?: ProviderCacheControl }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
   | { type: "tool_result"; tool_use_id: string; content: string | Array<{ type: "text"; text: string }>; is_error?: boolean; cache_control?: ProviderCacheControl };
@@ -168,6 +171,7 @@ export type StreamEvent =
 export interface LlmProvider {
   readonly name: string;
   readonly model: string;
+  readonly protocol: ProviderProtocol;
   readonly mode: "live";
   stream(messages: ProviderMessage[], signal: AbortSignal, options?: StreamOptions): AsyncGenerator<StreamEvent>;
 }

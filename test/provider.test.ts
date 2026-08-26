@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { createProvider } from "../src/provider.js";
+import { createProvider, AnthropicProvider } from "../src/provider.js";
 
 test("uses bearer auth and parses Anthropic-compatible streaming events", async (context) => {
   let receivedAuthorization = "";
@@ -89,6 +89,35 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
     { type: "usage", usage: { output: 2 } },
     { type: "done", stopReason: "end_turn" },
   ]);
+});
+
+test("clamps openai-only thinking levels to the anthropic effort ceiling", async (context) => {
+  let receivedOutputConfig: unknown;
+  const gateway = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { output_config?: unknown };
+    receivedOutputConfig = body.output_config;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n');
+  });
+  gateway.listen(0, "127.0.0.1");
+  await once(gateway, "listening");
+  context.after(() => gateway.close());
+  const address = gateway.address();
+  assert(address && typeof address === "object");
+
+  const provider = new AnthropicProvider({
+    authToken: "test-token",
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    model: "glm-test",
+    thinkingLevel: "xhigh",
+  });
+  for await (const _event of provider.stream([{ role: "user", content: "Hi" }], new AbortController().signal)) {
+    /* consume */
+  }
+
+  assert.deepEqual(receivedOutputConfig, { effort: "max" });
 });
 
 test("requires credentials and an explicit model", () => {

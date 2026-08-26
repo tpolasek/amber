@@ -36,16 +36,17 @@ npm run dev
 
 ## Configure `settings.toml`
 
-AMBER reads `~/.amber/settings.toml`. Providers use an Anthropic-compatible API and discover their available models from `/v1/models`.
+AMBER reads `~/.amber/settings.toml`. Providers use either the Anthropic Messages API or OpenAI Responses API and discover their available models from `/v1/models`.
 
 ```toml
 default_provider = "zai"
 
 [providers.zai]
+api = "anthropic"
 auth_key = "your-key"
 auth_url = "https://api.z.ai/api/anthropic"
 default_model = "glm-5.3" # Optional; otherwise uses the first discovered model.
-thinking_level = "max"    # low, medium, high, or max
+thinking_level = "max"    # none, low, medium, high, xhigh, or max; levels beyond an API's ceiling are clamped.
 compact_tokens = 200000   # Automatically compact context at this size.
 
 # Override a discovered model or add a custom model.
@@ -53,10 +54,13 @@ compact_tokens = 200000   # Automatically compact context at this size.
 thinking_level = "low"
 compact_tokens = 100000
 
-# Add another provider.
-[providers.other]
-auth_key = "another-key"
-auth_url = "https://example.com/anthropic"
+# Add OpenAI alongside Anthropic-compatible providers.
+[providers.openai]
+api = "openai"
+auth_key = "your-openai-key"
+auth_url = "https://api.openai.com"
+default_model = "gpt-5.4"
+thinking_level = "high"
 
 [[agents]]
 type = "explore"
@@ -76,6 +80,8 @@ export ANTHROPIC_BASE_URL="https://api.z.ai/api/anthropic"
 export ANTHROPIC_MODEL="glm-5.3"
 amber
 ```
+
+For an OpenAI default provider, use `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL` instead.
 
 ## Dependencies
 

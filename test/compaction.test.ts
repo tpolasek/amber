@@ -16,6 +16,7 @@ test("generates a trimmed summary without mutating the supplied history", async 
   const progress: number[] = [];
   const provider: LlmProvider = {
     name: "Test",
+    protocol: "anthropic",
     model: "test-model",
     mode: "live",
     async *stream(messages: ProviderMessage[]): AsyncGenerator<StreamEvent> {
@@ -44,6 +45,7 @@ test("strips the drafting analysis and formats the summary block", () => {
 test("rejects an empty compaction response", async () => {
   const provider: LlmProvider = {
     name: "Test",
+    protocol: "anthropic",
     model: "test-model",
     mode: "live",
     async *stream(): AsyncGenerator<StreamEvent> {

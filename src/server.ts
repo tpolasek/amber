@@ -546,10 +546,12 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           emit("delta", { text: event.text });
           await checkpointSession();
         } else if (event.type === "thinking_delta") {
+          assistantMessage.thinkingProvider = activeProvider.protocol;
           assistantMessage.thinking = (assistantMessage.thinking ?? "") + event.thinking;
           emit("thinking_delta", { thinking: event.thinking });
           await checkpointSession();
         } else if (event.type === "thinking_signature_delta") {
+          assistantMessage.thinkingProvider = activeProvider.protocol;
           assistantMessage.thinkingSignature = (assistantMessage.thinkingSignature ?? "") + event.signature;
           await checkpointSession();
         } else if (event.type === "tool_use_start") {

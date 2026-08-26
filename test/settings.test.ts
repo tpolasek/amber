@@ -28,6 +28,7 @@ test("loads an existing settings file without replacing it", async () => {
     default_provider: "zai",
     providers: {
       zai: {
+        api: "anthropic",
         auth_key: "saved-key",
         auth_url: "https://example.test/anthropic",
         default_model: "glm-5.3",
@@ -54,13 +55,13 @@ test("loads settings with no configured agents", async () => {
   await mkdir(settingsDirectory);
   await writeFile(join(settingsDirectory, "settings.toml"), stringify({
     providers: {
-      zai: { auth_key: "saved-key", auth_url: "https://example.test", models: {} },
+      zai: { api: "anthropic", auth_key: "saved-key", auth_url: "https://example.test", models: {} },
     },
   }), "utf8");
 
   assert.deepEqual(await loadSettings(homeDirectory), {
     providers: {
-      zai: { auth_key: "saved-key", auth_url: "https://example.test", models: {} },
+      zai: { api: "anthropic", auth_key: "saved-key", auth_url: "https://example.test", models: {} },
     },
     agents: [],
   });
@@ -153,6 +154,7 @@ test("accepts legacy top-level provider settings", async () => {
   assert.deepEqual(await loadSettings(homeDirectory), {
     providers: {
       default: {
+        api: "anthropic",
         auth_key: "legacy-key",
         auth_url: "https://legacy.test",
         default_model: "legacy-model",
@@ -173,4 +175,29 @@ test("does not migrate legacy JSON settings", async () => {
   assert.deepEqual(await loadSettings(homeDirectory), SETTINGS_TEMPLATE);
   assert.equal(JSON.parse(await readFile(legacyPath, "utf8")).auth_key, "legacy-key");
   assert.deepEqual(parse(await readFile(join(settingsDirectory, "settings.toml"), "utf8")), SETTINGS_TEMPLATE);
+});
+
+test("loads OpenAI providers and extended reasoning levels", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const settingsDirectory = join(homeDirectory, ".amber");
+  await mkdir(settingsDirectory);
+  await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+    providers: {
+      openai: {
+        api: "openai",
+        auth_key: "openai-key",
+        auth_url: "https://api.openai.com/v1",
+        thinking_level: "xhigh",
+        models: { "gpt-test": { thinking_level: "none" } },
+      },
+    },
+  }), "utf8");
+
+  assert.deepEqual((await loadSettings(homeDirectory)).providers.openai, {
+    api: "openai",
+    auth_key: "openai-key",
+    auth_url: "https://api.openai.com/v1",
+    thinking_level: "xhigh",
+    models: { "gpt-test": { thinking_level: "none" } },
+  });
 });
