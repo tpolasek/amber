@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { browserUrl, openBrowser } from "./browser-launch.js";
 import { SessionStore } from "./store.js";
 import { createProvider } from "./provider.js";
 import { loadSettings } from "./settings.js";
@@ -121,8 +122,10 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`\n  AMBER agent online at http://${host}:${port}`);
+  const url = browserUrl(host, port);
+  console.log(`\n  AMBER agent online at ${url}`);
   console.log(`  provider: ${provider.name} / ${provider.model} (${provider.mode})\n`);
+  openBrowser(url);
 });
 
 let shuttingDown = false;
