@@ -76,9 +76,7 @@ const clientFormattersScript = join(sourceDirectory, "client-formatters.js");
 const streamingThinkingScript = join(sourceDirectory, "streaming-thinking.js");
 const toolDisplayScript = join(sourceDirectory, "tool-display.js");
 const markdownScript = join(projectRoot, "node_modules", "markdown-it", "dist", "browser", "markdown-it.umd.min.js");
-const defaultDataDirectory = isPackaged
-  ? join(homedir(), ".amber", "sessions")
-  : join(projectRoot, "data", "sessions");
+const defaultDataDirectory = join(homedir(), ".amber", "data", "sessions");
 const dataDirectory = resolve(process.env.DATA_DIR ?? defaultDataDirectory);
 const planDirectory = join(homedir(), ".amber", "plans");
 const port = Number(process.env.PORT ?? 3000);
