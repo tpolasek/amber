@@ -14,7 +14,7 @@ export PATH="$HOME/.local/bin:$PATH"
 amber
 ```
 
-The first run creates `~/.amber/settings.toml`. Add your provider credentials, then run `amber` again. AMBER opens its local browser interface automatically.
+The first run creates **~/.amber/settings.toml**. Add your provider credentials, then run **amber** again. AMBER opens its local browser interface automatically.
 
 ### Run from source
 
@@ -34,9 +34,9 @@ For development with automatic rebuilds:
 npm run dev
 ```
 
-## Configure `settings.toml`
+## Configure **settings.toml**
 
-AMBER reads `~/.amber/settings.toml`. Each provider is configured with `api = "anthropic"` (Anthropic Messages API) or `api = "openai"` (OpenAI Responses API); `api` defaults to `"anthropic"` when omitted. Either way, providers discover their available models from `/v1/models`.
+AMBER reads **~/.amber/settings.toml**. Each provider is configured with **api = "anthropic"** (Anthropic Messages API) or **api = "openai"** (OpenAI Responses API); **api** defaults to **"anthropic"** when omitted. Either way, providers discover their available models from **/v1/models**.
 
 ```toml
 default_provider = "zai"
@@ -70,21 +70,21 @@ readOnly = true
 model = "zai/glm-5.3" # Optional; otherwise inherits the session model.
 ```
 
-Provider credentials belong under `[providers.<name>]`, never under an agent. All provider configuration comes from `settings.toml`; no environment variables are used. `api` selects the provider's protocol: `"anthropic"` (the default) or `"openai"`. OpenAI-protocol providers accept slashed model ids such as `xiaomi/mimo-v2-pro`, so OpenRouter-style backends work. Models are referenced as `provider/model`. Select a session's model from the model name in the browser's top-right corner.
+Provider credentials belong under **[providers.\<name>]**, never under an agent. All provider configuration comes from **settings.toml**; no environment variables are used. **api** selects the provider's protocol: **"anthropic"** (the default) or **"openai"**. OpenAI-protocol providers accept slashed model ids such as **xiaomi/mimo-v2-pro**, so OpenRouter-style backends work. Models are referenced as **provider/model**. Select a session's model from the model name in the browser's top-right corner.
 
 ## Dependencies
 
 AMBER intentionally has only three direct runtime npm dependencies:
 
-- `diff` — unified diff generation
-- `markdown-it` — safe Markdown rendering
-- `smol-toml` — `settings.toml` parsing
+- **diff** — unified diff generation
+- **markdown-it** — safe Markdown rendering
+- **smol-toml** — **settings.toml** parsing
 
 Build and development dependencies are also small:
 
-- `typescript`
-- `@types/node`
-- `@yao-pkg/pkg` — standalone binary packaging
+- **typescript**
+- **@types/node**
+- **@yao-pkg/pkg** — standalone binary packaging
 
 The packaged binary includes everything needed to run AMBER; Node.js and npm are not required on the destination machine.
 
@@ -97,4 +97,4 @@ npm run package:macos    # Build the Apple Silicon binary
 npm run package:linux    # Build the Linux x86_64 binary
 ```
 
-AMBER binds to `127.0.0.1:3000` by default and is intended for local, single-user use.
+AMBER binds to **127.0.0.1:3000** by default and is intended for local, single-user use.
