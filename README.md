@@ -1,4 +1,5 @@
 # AMBER
+<img width="1365" height="787" alt="image" src="https://github.com/user-attachments/assets/d4c61c39-40a1-4044-9afd-4d767ed55aa6" />
 
 AMBER is a simple, local web interface for persistent AI coding sessions. It supports both Anthropic- and OpenAI-compatible providers. The server uses Node's standard library, the browser client is vanilla TypeScript, and there is no frontend framework or database.
 
