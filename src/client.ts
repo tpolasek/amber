@@ -32,9 +32,10 @@ interface Message { id: string; role: "user" | "assistant"; content: string; thi
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
 type PlanningTaskStatus = "pending" | "in_progress" | "completed";
 interface PlanningTask { id: string; subject: string; description: string; activeForm: string; status: PlanningTaskStatus; owner: string; blocks: string[]; blockedBy: string[]; metadata: Record<string, unknown> }
-interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error"; planningTasks?: PlanningTask[]; planningTaskArchiveHighWaterMark?: number; contextTokens?: number; planMode?: SessionPlanMode }
+interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; model?: string; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error"; planningTasks?: PlanningTask[]; planningTaskArchiveHighWaterMark?: number; contextTokens?: number; planMode?: SessionPlanMode }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
-interface Config { provider: string; model: string; mode: "live"; homeDirectory: string; workspaceRoot: string }
+interface AvailableModel { key: string; provider: string; model: string; displayName: string; thinkingLevel: "low" | "medium" | "high" | "max"; compactTokens?: number }
+interface Config { provider: string; model: string; defaultModel: string; models: AvailableModel[]; mode: "live"; homeDirectory: string; workspaceRoot: string }
 interface BackgroundTask { id: string; type: "local_bash"; command: string; description: string; workingDirectory: string; status: "running" | "completed" | "failed" | "timed_out" | "killed"; stdout: string; stderr: string; exitCode: number | null; startedAt: string; completedAt?: string; durationMs?: number }
 interface AskUserQuestionOption { label: string; description: string; preview?: string }
 interface AskUserQuestion { question: string; header: string; options: AskUserQuestionOption[]; multiSelect: boolean }
@@ -102,6 +103,8 @@ let gitDialogRequest = 0;
 let sessionDialogSelection = 0;
 let sessionDialogQuery = "";
 let sessionDialogReturnsToLanding = false;
+let modelDialogSelection = 0;
+let modelDialogQuery = "";
 let newSessionReplace = false;
 let newSessionCreating = false;
 let newSessionReturnsToLanding = false;
@@ -156,6 +159,7 @@ const elements = {
   sessionTitle: required<HTMLElement>("session-title"),
   sessionDirectories: required<HTMLElement>("session-directories"),
   model: required<HTMLElement>("model-label"),
+  modelSelector: required<HTMLButtonElement>("model-selector"),
   providerDot: required<HTMLElement>("provider-dot"),
   modeBanner: required<HTMLElement>("mode-banner"),
   modePlan: required<HTMLInputElement>("mode-plan"),
@@ -176,6 +180,10 @@ const elements = {
   sessionDialog: required<HTMLElement>("session-dialog"),
   sessionDialogClose: required<HTMLButtonElement>("session-dialog-close"),
   sessionSearch: required<HTMLInputElement>("session-search"),
+  modelDialog: required<HTMLElement>("model-dialog"),
+  modelDialogClose: required<HTMLButtonElement>("model-dialog-close"),
+  modelSearch: required<HTMLInputElement>("model-search"),
+  modelList: required<HTMLElement>("model-list"),
   tasksDialog: required<HTMLElement>("tasks-dialog"),
   tasksDialogTitle: required<HTMLElement>("tasks-dialog-title"),
   tasksDialogBody: required<HTMLElement>("tasks-dialog-body"),
@@ -234,6 +242,7 @@ function wireEvents(): void {
     if (handleTasksDialogKeydown(event)) return;
     if (handleGitDialogKeydown(event)) return;
     if (handleSessionDialogKeydown(event)) return;
+    if (handleModelDialogKeydown(event)) return;
     if (event.key === "Escape" && state.streaming && !state.session?.parentSessionId) {
       event.preventDefault();
       handleEscapeAbort();
@@ -310,6 +319,16 @@ function wireEvents(): void {
   });
   elements.sessionDialog.addEventListener("click", (event) => {
     if (event.target === elements.sessionDialog) closeSessionDialog();
+  });
+  elements.modelSelector.addEventListener("click", openModelDialog);
+  elements.modelDialogClose.addEventListener("click", closeModelDialog);
+  elements.modelSearch.addEventListener("input", () => {
+    modelDialogQuery = elements.modelSearch.value;
+    modelDialogSelection = 0;
+    renderModelList();
+  });
+  elements.modelDialog.addEventListener("click", (event) => {
+    if (event.target === elements.modelDialog) closeModelDialog();
   });
   elements.questionDialog.addEventListener("click", (event) => {
     if (event.target === elements.questionDialog) void declineQuestions();
@@ -412,6 +431,7 @@ function wireEvents(): void {
 function openLandingDialog(): void {
   if (state.streaming) return;
   state.session = null;
+  renderModelStatus();
   renderPlanMode();
   sessionDialogReturnsToLanding = false;
   newSessionReturnsToLanding = false;
@@ -776,6 +796,134 @@ function handleSessionDialogKeydown(event: KeyboardEvent): boolean {
   return true;
 }
 
+function openModelDialog(): void {
+  const session = state.session;
+  const config = state.config;
+  if (!session || !config || session.parentSessionId || state.streaming) return;
+  modelDialogQuery = "";
+  elements.modelSearch.value = "";
+  const currentModel = session.model ?? config.defaultModel;
+  const currentIndex = config.models.findIndex((model) => model.key === currentModel);
+  modelDialogSelection = currentIndex >= 0 ? currentIndex : 0;
+  renderModelList();
+  elements.modelDialog.hidden = false;
+  elements.modelSearch.focus();
+  elements.modelList.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
+}
+
+function closeModelDialog(): void {
+  elements.modelDialog.hidden = true;
+  elements.prompt.focus();
+}
+
+function filteredModels(): AvailableModel[] {
+  const models = state.config?.models ?? [];
+  const query = modelDialogQuery.trim().toLocaleLowerCase();
+  if (!query) return models;
+  return models.filter((model) => [model.key, model.provider, model.model, model.displayName, model.thinkingLevel]
+    .some((value) => value.toLocaleLowerCase().includes(query)));
+}
+
+function renderModelList(): void {
+  elements.modelList.replaceChildren();
+  const models = filteredModels();
+  modelDialogSelection = Math.min(modelDialogSelection, Math.max(0, models.length - 1));
+  if (models.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "session-archive-empty";
+    empty.textContent = "No matching models";
+    elements.modelList.append(empty);
+    return;
+  }
+  const activeModel = state.session?.model ?? state.config?.defaultModel;
+  let previousProvider = "";
+  models.forEach((model, index) => {
+    if (model.provider !== previousProvider) {
+      const heading = document.createElement("div");
+      heading.className = "tasks-section-title";
+      heading.textContent = model.provider;
+      elements.modelList.append(heading);
+      previousProvider = model.provider;
+    }
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "tasks-row";
+    button.classList.toggle("selected", index === modelDialogSelection);
+    const marker = document.createElement("span");
+    marker.className = "tasks-row-marker";
+    marker.textContent = model.key === activeModel ? "●" : "○";
+    const main = document.createElement("span");
+    main.className = "tasks-row-main";
+    const title = document.createElement("strong");
+    title.textContent = model.displayName;
+    const details = document.createElement("small");
+    details.textContent = `${model.model} · thinking ${model.thinkingLevel}`
+      + (model.compactTokens ? ` · auto-compact ${model.compactTokens.toLocaleString()} tokens` : "");
+    main.append(title, details);
+    const status = document.createElement("span");
+    status.className = "tasks-row-status";
+    status.textContent = model.key === activeModel ? "ACTIVE" : "";
+    button.append(marker, main, status);
+    button.addEventListener("click", () => void selectModel(model));
+    elements.modelList.append(button);
+  });
+}
+
+async function selectModel(model: AvailableModel): Promise<void> {
+  const session = state.session;
+  if (!session || session.parentSessionId || state.streaming) return;
+  if ((session.model ?? state.config?.defaultModel) === model.key) return closeModelDialog();
+  setBusy(true);
+  try {
+    const result = await api<{ session: Session }>(`/api/sessions/${session.id}/model`, {
+      method: "POST",
+      body: JSON.stringify({ model: model.key }),
+    });
+    state.session = result.session;
+    renderHeader();
+    renderContextMeter();
+    closeModelDialog();
+    notify(`Model selected · ${model.key}`);
+  } catch (error) {
+    notify(messageFrom(error));
+  } finally {
+    setBusy(false);
+    if (elements.modelDialog.hidden) elements.prompt.focus();
+    else elements.modelSearch.focus();
+  }
+}
+
+function handleModelDialogKeydown(event: KeyboardEvent): boolean {
+  if (elements.modelDialog.hidden) return false;
+  const models = filteredModels();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeModelDialog();
+  } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+    event.preventDefault();
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    modelDialogSelection = Math.max(0, Math.min(models.length - 1, modelDialogSelection + direction));
+    renderModelList();
+    elements.modelList.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
+  } else if (event.key === "Enter") {
+    const model = models[modelDialogSelection];
+    if (model) {
+      event.preventDefault();
+      void selectModel(model);
+    }
+  } else if (document.activeElement !== elements.modelSearch
+    && !event.ctrlKey && !event.metaKey && !event.altKey
+    && /^[\p{L}\p{N}]$/u.test(event.key)) {
+    event.preventDefault();
+    elements.modelSearch.focus();
+    elements.modelSearch.value += event.key;
+    modelDialogQuery = elements.modelSearch.value;
+    modelDialogSelection = 0;
+    renderModelList();
+  }
+  return true;
+}
+
 async function sendMessage(queuedContent?: string): Promise<void> {
   const session = state.session;
   const content = (queuedContent ?? elements.prompt.value).trim();
@@ -858,7 +1006,18 @@ function applySessionEvent(context: SessionStreamContext, event: string, data: u
     setStreamAssistant(context, createSessionStreamContext(snapshot.session).assistantMessage);
     if (!snapshot.session.parentSessionId && wasStreaming && !snapshot.active) sendQueuedMessage(snapshot.session.id);
   } else if (event === "start") {
-    const payload = data as { userMessage: Message; assistantMessage: Message };
+    const payload = data as { session?: Session; userMessage: Message; assistantMessage: Message };
+    if (payload.session) {
+      context.session = payload.session;
+      updateRenderedSession(payload.session);
+      const streamedAssistant = payload.session.messages.find((message) => message.id === payload.assistantMessage.id)
+        ?? payload.assistantMessage;
+      setStreamAssistant(context, streamedAssistant);
+      elements.emptyState.hidden = true;
+      renderHeader();
+      scrollTranscriptToBottom();
+      return;
+    }
     if (!context.session.messages.some((message) => message.id === payload.userMessage.id)) {
       context.session.messages.push(payload.userMessage, payload.assistantMessage);
       context.assistantElement = appendMessage(payload.assistantMessage);
@@ -1973,8 +2132,8 @@ async function runCompactCommand(command: string, clearComposer = true): Promise
 
 function renderConfig(): void {
   if (!state.config) return;
-  elements.model.textContent = state.config.model;
   elements.providerDot.classList.remove("demo");
+  renderModelStatus();
   renderPlanMode();
 }
 
@@ -2110,6 +2269,7 @@ function renderHeader(): void {
   if (!session || !config) return;
   elements.sessionTitle.textContent = session.title;
   elements.sessionTitle.title = session.title;
+  renderModelStatus();
   elements.sessionDirectories.replaceChildren();
   const currentDirectory = session.cwd ?? config.workspaceRoot;
   const directories = [...new Set([...(session.directories ?? []), currentDirectory])];
@@ -2127,6 +2287,16 @@ function renderHeader(): void {
     elements.sessionDirectories.append(item);
   }
   document.title = `${session.title} · AMBER`;
+}
+
+function renderModelStatus(): void {
+  const config = state.config;
+  const session = state.session;
+  if (!config) return;
+  const model = session?.model ?? config.defaultModel;
+  elements.model.textContent = model;
+  elements.model.title = model;
+  elements.modelSelector.disabled = !session || Boolean(session.parentSessionId) || state.streaming;
 }
 
 function renderPlanningTasks(): void {
@@ -2171,12 +2341,16 @@ function renderContextMeter(): void {
   const tokens = session?.contextTokens
     ?? session?.messages.reduce((largest, message) => Math.max(largest, message.usage?.input ?? 0), 0)
     ?? 0;
-  const level = tokens < 100_000 ? "green" : tokens <= 150_000 ? "yellow" : "red";
+  const activeModel = state.config?.models.find((model) => model.key === (session?.model ?? state.config?.defaultModel));
+  const limit = activeModel?.compactTokens ?? 200_000;
+  const ratio = tokens / limit;
+  const level = ratio < .5 ? "green" : ratio <= .75 ? "yellow" : "red";
   elements.contextMeter.classList.remove("context-green", "context-yellow", "context-red");
   elements.contextMeter.classList.add(`context-${level}`);
-  elements.contextMeterBar.style.width = `${Math.min(100, tokens / 2_000)}%`;
+  elements.contextMeterBar.style.width = `${Math.min(100, ratio * 100)}%`;
   elements.contextMeterValue.textContent = `${formatTokenCountInThousands(tokens)}k`;
-  elements.contextMeter.title = `${tokens.toLocaleString()} cached + uncached input tokens`;
+  elements.contextMeter.title = `${tokens.toLocaleString()} cached + uncached input tokens`
+    + (activeModel?.compactTokens ? ` · auto-compacts at ${activeModel.compactTokens.toLocaleString()}` : "");
 }
 
 function renderSessionList(): void {
@@ -2536,6 +2710,7 @@ function setStreaming(streaming: boolean): void {
   elements.submit.classList.toggle("stop", streaming);
   elements.submit.querySelector("span")!.textContent = streaming ? "STOP" : "SEND";
   elements.prompt.disabled = false;
+  renderModelStatus();
   renderPlanMode();
 }
 
@@ -2546,6 +2721,7 @@ function setBusy(busy: boolean): void {
   elements.submit.classList.remove("stop");
   elements.submit.querySelector("span")!.textContent = busy ? "WAIT" : "SEND";
   elements.prompt.disabled = busy;
+  renderModelStatus();
   renderPlanMode();
 }
 

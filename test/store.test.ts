@@ -100,6 +100,7 @@ test("forks a session with independent history and a provenance banner", async (
   original.directories = ["/tmp/example-workspace"];
   original.cwd = "/tmp/example-workspace/subdirectory";
   original.addDirInitialized = true;
+  original.model = "zai/glm-5.3";
   original.fileReadState = {
     "/tmp/example-workspace/file.txt": { mtimeMs: 1, size: 4, hash: "hash", full: true },
   };
@@ -123,6 +124,7 @@ test("forks a session with independent history and a provenance banner", async (
   assert.notEqual(fork.directories, original.directories);
   assert.equal(fork.cwd, original.cwd);
   assert.equal(fork.addDirInitialized, true);
+  assert.equal(fork.model, "zai/glm-5.3");
   assert.deepEqual(fork.fileReadState, original.fileReadState);
   assert.notEqual(fork.fileReadState, original.fileReadState);
   fork.messages[0]!.content = "Changed only in the fork";
@@ -147,6 +149,7 @@ test("creates linked agent sub-sessions using the parent id and a short uuid", a
   const parent = await store.create();
   parent.directories = ["/tmp/example-workspace"];
   parent.cwd = "/tmp/example-workspace";
+  parent.model = "zai/glm-5.3";
   await store.save(parent);
 
   const child = await store.createAgentSession(parent, "code-review", "Review latest diff");
@@ -155,6 +158,7 @@ test("creates linked agent sub-sessions using the parent id and a short uuid", a
   assert.equal(child.agentType, "code-review");
   assert.equal(child.agentStatus, "running");
   assert.equal(child.title, "Review latest diff");
+  assert.equal(child.model, "zai/glm-5.3");
   assert.equal(child.messages[0]?.kind, "agent-banner");
   assert.equal(child.messages[0]?.sourceSessionId, parent.id);
   assert.deepEqual(child.directories, parent.directories);

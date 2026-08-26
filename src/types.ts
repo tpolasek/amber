@@ -70,6 +70,7 @@ export interface Session {
   createdAt: string;
   updatedAt: string;
   messages: Message[];
+  model?: string;
   compaction?: SessionCompaction;
   directories?: string[];
   cwd?: string;

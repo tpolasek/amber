@@ -16,8 +16,7 @@ test("creates a settings template on first load", async () => {
   assert.deepEqual(settings, SETTINGS_TEMPLATE);
   assert.deepEqual(parse(source), SETTINGS_TEMPLATE);
   assert.match(source, /# model = "<INSERT_AGENT_MODEL_HERE>"/);
-  assert.match(source, /# auth_key = "<INSERT_AGENT_AUTH_KEY_HERE>"/);
-  assert.match(source, /# auth_url = "<INSERT_AGENT_AUTH_URL_HERE>"/);
+  assert.doesNotMatch(source, /INSERT_AGENT_AUTH/);
   assert.equal((await stat(settingsPath)).mode & 0o777, 0o600);
 });
 
@@ -26,9 +25,19 @@ test("loads an existing settings file without replacing it", async () => {
   const settingsDirectory = join(homeDirectory, ".amber");
   const settingsPath = join(settingsDirectory, "settings.toml");
   const expected = {
-    auth_key: "saved-key",
-    auth_url: "https://example.test/anthropic",
-    default_model: "saved-model",
+    default_provider: "zai",
+    providers: {
+      zai: {
+        auth_key: "saved-key",
+        auth_url: "https://example.test/anthropic",
+        default_model: "glm-5.3",
+        thinking_level: "max",
+        compact_tokens: 200_000,
+        models: {
+          "glm-5.3": { compact_tokens: 100_000 },
+        },
+      },
+    },
     agents: structuredClone(SETTINGS_TEMPLATE.agents),
   };
   await mkdir(settingsDirectory);
@@ -44,30 +53,33 @@ test("loads settings with no configured agents", async () => {
   const settingsDirectory = join(homeDirectory, ".amber");
   await mkdir(settingsDirectory);
   await writeFile(join(settingsDirectory, "settings.toml"), stringify({
-    auth_key: "saved-key",
-    default_model: "saved-model",
+    providers: {
+      zai: { auth_key: "saved-key", auth_url: "https://example.test", models: {} },
+    },
   }), "utf8");
 
   assert.deepEqual(await loadSettings(homeDirectory), {
-    auth_key: "saved-key",
-    default_model: "saved-model",
+    providers: {
+      zai: { auth_key: "saved-key", auth_url: "https://example.test", models: {} },
+    },
     agents: [],
   });
 });
 
-test("loads optional provider settings for each agent", async () => {
+test("loads a qualified provider model for each agent", async () => {
   const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
   const settingsDirectory = join(homeDirectory, ".amber");
   await mkdir(settingsDirectory);
   await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+    providers: {
+      zai: { auth_key: "saved-key", auth_url: "https://example.test", models: {} },
+    },
     agents: [{
       type: "review",
       whenToUse: "Review code.",
       systemPrompt: "Review it.",
       readOnly: true,
-      model: " agent-model ",
-      auth_key: " agent-token ",
-      auth_url: " https://agent.example.test/anthropic ",
+      model: " zai/agent-model ",
     }],
   }), "utf8");
 
@@ -76,9 +88,7 @@ test("loads optional provider settings for each agent", async () => {
     whenToUse: "Review code.",
     systemPrompt: "Review it.",
     readOnly: true,
-    model: "agent-model",
-    auth_key: "agent-token",
-    auth_url: "https://agent.example.test/anthropic",
+    model: "zai/agent-model",
   });
 });
 
@@ -86,9 +96,13 @@ test("reports invalid settings fields", async () => {
   const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
   const settingsDirectory = join(homeDirectory, ".amber");
   await mkdir(settingsDirectory);
-  await writeFile(join(settingsDirectory, "settings.toml"), "default_model = 42\n", "utf8");
+  await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+    providers: {
+      zai: { auth_key: "key", auth_url: "https://example.test", compact_tokens: -1 },
+    },
+  }), "utf8");
 
-  await assert.rejects(loadSettings(homeDirectory), /default_model must be a string/);
+  await assert.rejects(loadSettings(homeDirectory), /compact_tokens must be a positive integer/);
 });
 
 test("validates configured agent definitions", async () => {
@@ -96,6 +110,9 @@ test("validates configured agent definitions", async () => {
   const settingsDirectory = join(homeDirectory, ".amber");
   await mkdir(settingsDirectory);
   await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+    providers: {
+      zai: { auth_key: "key", auth_url: "https://example.test" },
+    },
     agents: [
       { type: "duplicate", whenToUse: "First.", systemPrompt: "First prompt.", readOnly: false },
       { type: "duplicate", whenToUse: "Second.", systemPrompt: "Second prompt.", readOnly: true },
@@ -103,6 +120,47 @@ test("validates configured agent definitions", async () => {
   }), "utf8");
 
   await assert.rejects(loadSettings(homeDirectory), /agent types must be unique/);
+});
+
+test("rejects per-agent credentials", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const settingsDirectory = join(homeDirectory, ".amber");
+  await mkdir(settingsDirectory);
+  await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+    providers: { zai: { auth_key: "key", auth_url: "https://example.test" } },
+    agents: [{
+      type: "review",
+      whenToUse: "Review code.",
+      systemPrompt: "Review it.",
+      readOnly: true,
+      auth_key: "agent-key",
+    }],
+  }), "utf8");
+
+  await assert.rejects(loadSettings(homeDirectory), /must use model = "provider\/model"/);
+});
+
+test("accepts legacy top-level provider settings", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const settingsDirectory = join(homeDirectory, ".amber");
+  await mkdir(settingsDirectory);
+  await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+    auth_key: "legacy-key",
+    auth_url: "https://legacy.test",
+    default_model: "legacy-model",
+  }), "utf8");
+
+  assert.deepEqual(await loadSettings(homeDirectory), {
+    providers: {
+      default: {
+        auth_key: "legacy-key",
+        auth_url: "https://legacy.test",
+        default_model: "legacy-model",
+        models: { "legacy-model": {} },
+      },
+    },
+    agents: [],
+  });
 });
 
 test("does not migrate legacy JSON settings", async () => {

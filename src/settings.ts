@@ -5,10 +5,23 @@ import { parse, stringify } from "smol-toml";
 import type { AgentDefinition } from "./agent-tool.js";
 
 export interface AmberSettings {
-  auth_key?: string;
-  auth_url?: string;
-  default_model?: string;
+  default_provider?: string;
+  providers: Record<string, ProviderSettings>;
   agents: AgentDefinition[];
+}
+
+export type ThinkingLevel = "low" | "medium" | "high" | "max";
+
+export interface ModelSettings {
+  thinking_level?: ThinkingLevel;
+  compact_tokens?: number;
+}
+
+export interface ProviderSettings extends ModelSettings {
+  auth_key: string;
+  auth_url: string;
+  default_model?: string;
+  models: Record<string, ModelSettings>;
 }
 
 const SHARED_AGENT_PREFIX = "You are an agent for Claude Code, Anthropic's official CLI for Claude. Given the user's message, you should use the tools available to complete the task. Complete the task fully—don't gold-plate, but don't leave it half-done.";
@@ -27,9 +40,17 @@ Guidelines:
 - NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested.`;
 
 export const SETTINGS_TEMPLATE = {
-  auth_key: "<INSERT_AUTH_KEY_HERE>",
-  auth_url: "<INSERT_AUTH_URL_HERE>",
-  default_model: "<INSERT_DEFAULT_MODEL_HERE>",
+  default_provider: "default",
+  providers: {
+    default: {
+      auth_key: "<INSERT_AUTH_KEY_HERE>",
+      auth_url: "<INSERT_AUTH_URL_HERE>",
+      default_model: "<INSERT_DEFAULT_MODEL_HERE>",
+      thinking_level: "max",
+      compact_tokens: 100_000,
+      models: {},
+    },
+  },
   agents: [
     {
       type: "general-purpose",
@@ -62,8 +83,6 @@ Rules:
 
 export const SETTINGS_TEMPLATE_SOURCE = `${stringify(SETTINGS_TEMPLATE).trimEnd()}
 # model = "<INSERT_AGENT_MODEL_HERE>"
-# auth_key = "<INSERT_AGENT_AUTH_KEY_HERE>"
-# auth_url = "<INSERT_AGENT_AUTH_URL_HERE>"
 `;
 
 export async function loadSettings(homeDirectory = homedir()): Promise<AmberSettings> {
@@ -100,17 +119,113 @@ function parseSettings(parsed: unknown, settingsPath: string): AmberSettings {
   }
 
   const settings = parsed as Record<string, unknown>;
+  if (settings.default_provider !== undefined
+    && (typeof settings.default_provider !== "string" || !settings.default_provider.trim())) {
+    throw new Error(`${settingsPath}: default_provider must be a non-empty string`);
+  }
+  const providers = settings.providers === undefined
+    ? parseLegacyProvider(settings, settingsPath)
+    : parseProviders(settings.providers, settingsPath);
+  const defaultProvider = typeof settings.default_provider === "string" ? settings.default_provider.trim() : undefined;
+  if (defaultProvider && !providers[defaultProvider]) {
+    throw new Error(`${settingsPath}: default_provider '${defaultProvider}' is not configured`);
+  }
+  return {
+    ...(defaultProvider ? { default_provider: defaultProvider } : {}),
+    providers,
+    agents: parseAgentDefinitions(settings.agents, settingsPath),
+  };
+}
+
+function parseProviders(value: unknown, settingsPath: string): Record<string, ProviderSettings> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${settingsPath}: providers must be a table`);
+  }
+  const providers: Record<string, ProviderSettings> = {};
+  for (const [name, candidate] of Object.entries(value)) {
+    if (!name.trim() || name.includes("/")) {
+      throw new Error(`${settingsPath}: provider names must be non-empty and cannot contain '/'`);
+    }
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new Error(`${settingsPath}: providers.${name} must be a table`);
+    }
+    const provider = candidate as Record<string, unknown>;
+    const authKey = requiredString(provider.auth_key, `${settingsPath}: providers.${name}.auth_key`);
+    const authUrl = requiredString(provider.auth_url, `${settingsPath}: providers.${name}.auth_url`);
+    const defaultModel = optionalString(provider.default_model, `${settingsPath}: providers.${name}.default_model`);
+    providers[name] = {
+      auth_key: authKey,
+      auth_url: authUrl,
+      ...(defaultModel ? { default_model: defaultModel } : {}),
+      ...parseModelSettings(provider, `${settingsPath}: providers.${name}`),
+      models: parseModels(provider.models, `${settingsPath}: providers.${name}.models`),
+    };
+  }
+  if (Object.keys(providers).length === 0) throw new Error(`${settingsPath}: configure at least one provider`);
+  return providers;
+}
+
+function parseModels(value: unknown, field: string): Record<string, ModelSettings> {
+  if (value === undefined) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${field} must be a table`);
+  const models: Record<string, ModelSettings> = {};
+  for (const [name, candidate] of Object.entries(value)) {
+    if (!name.trim() || name.includes("/")) throw new Error(`${field} model names cannot be empty or contain '/'`);
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new Error(`${field}.${name} must be a table`);
+    }
+    models[name] = parseModelSettings(candidate as Record<string, unknown>, `${field}.${name}`);
+  }
+  return models;
+}
+
+function parseModelSettings(value: Record<string, unknown>, field: string): ModelSettings {
+  const thinkingLevel = value.thinking_level;
+  if (thinkingLevel !== undefined && !isThinkingLevel(thinkingLevel)) {
+    throw new Error(`${field}.thinking_level must be low, medium, high, or max`);
+  }
+  const compactTokens = value.compact_tokens;
+  if (compactTokens !== undefined
+    && (!Number.isSafeInteger(compactTokens) || (compactTokens as number) <= 0)) {
+    throw new Error(`${field}.compact_tokens must be a positive integer`);
+  }
+  return {
+    ...(isThinkingLevel(thinkingLevel) ? { thinking_level: thinkingLevel } : {}),
+    ...(typeof compactTokens === "number" ? { compact_tokens: compactTokens } : {}),
+  };
+}
+
+function parseLegacyProvider(settings: Record<string, unknown>, settingsPath: string): Record<string, ProviderSettings> {
   for (const key of ["auth_key", "auth_url", "default_model"] as const) {
     if (settings[key] !== undefined && typeof settings[key] !== "string") {
       throw new Error(`${settingsPath}: ${key} must be a string`);
     }
   }
+  const authKey = typeof settings.auth_key === "string" ? settings.auth_key : "";
+  const authUrl = typeof settings.auth_url === "string" ? settings.auth_url : "https://api.anthropic.com";
+  const defaultModel = typeof settings.default_model === "string" ? settings.default_model : undefined;
+  if (!authKey && !defaultModel) return {};
   return {
-    ...(typeof settings.auth_key === "string" ? { auth_key: settings.auth_key } : {}),
-    ...(typeof settings.auth_url === "string" ? { auth_url: settings.auth_url } : {}),
-    ...(typeof settings.default_model === "string" ? { default_model: settings.default_model } : {}),
-    agents: parseAgentDefinitions(settings.agents, settingsPath),
+    default: {
+      auth_key: authKey,
+      auth_url: authUrl,
+      ...(defaultModel ? { default_model: defaultModel, models: { [defaultModel]: {} } } : { models: {} }),
+    },
   };
+}
+
+function requiredString(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${field} must be a non-empty string`);
+  return value.trim();
+}
+
+function optionalString(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  return requiredString(value, field);
+}
+
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return value === "low" || value === "medium" || value === "high" || value === "max";
 }
 
 export function configuredSetting(value: string | undefined): string | undefined {
@@ -147,10 +262,12 @@ function parseAgentDefinitions(value: unknown, settingsPath: string): AgentDefin
     if (typeof agent.readOnly !== "boolean") {
       throw new Error(`${settingsPath}: agents[${index}].readOnly must be a boolean`);
     }
-    for (const key of ["model", "auth_key", "auth_url"] as const) {
-      if (agent[key] !== undefined && (typeof agent[key] !== "string" || !agent[key].trim())) {
-        throw new Error(`${settingsPath}: agents[${index}].${key} must be a non-empty string`);
-      }
+    if (agent.auth_key !== undefined || agent.auth_url !== undefined) {
+      throw new Error(`${settingsPath}: agents[${index}] must use model = "provider/model" instead of auth_key or auth_url`);
+    }
+    if (agent.model !== undefined
+      && (typeof agent.model !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(agent.model.trim()))) {
+      throw new Error(`${settingsPath}: agents[${index}].model must use provider/model`);
     }
     return {
       type: (agent.type as string).trim(),
@@ -158,8 +275,6 @@ function parseAgentDefinitions(value: unknown, settingsPath: string): AgentDefin
       systemPrompt: agent.systemPrompt as string,
       readOnly: agent.readOnly,
       ...(typeof agent.model === "string" ? { model: agent.model.trim() } : {}),
-      ...(typeof agent.auth_key === "string" ? { auth_key: agent.auth_key.trim() } : {}),
-      ...(typeof agent.auth_url === "string" ? { auth_url: agent.auth_url.trim() } : {}),
     };
   });
   const types = definitions.map((agent) => agent.type);

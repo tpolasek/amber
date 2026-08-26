@@ -5,6 +5,7 @@ import {
   formatCompactionBanner,
   formatCompactionSummary,
   generateCompactionSummary,
+  shouldAutoCompact,
 } from "../src/compaction.js";
 import { BASE_COMPACT_PROMPT } from "../src/prompts.js";
 import type { LlmProvider, ProviderMessage, StreamEvent } from "../src/types.js";
@@ -63,4 +64,12 @@ test("estimates context tokens and formats the reduction banner", () => {
     "Context compacted here · Estimated context: ≈2,000 → ≈500 tokens · Reduction: ≈1,500 tokens (75%) · 42 earlier messages remain visible",
   );
   assert.match(formatCompactionBanner(100, 125, 2), /Increase: ≈25 tokens \(25%\)/);
+});
+
+test("triggers automatic compaction at a model's configured threshold", () => {
+  const history = [{ role: "user" as const, content: "x".repeat(400) }];
+  assert.equal(shouldAutoCompact(undefined, 1_000_000, history), false);
+  assert.equal(shouldAutoCompact(200, 199, []), false);
+  assert.equal(shouldAutoCompact(200, 200, []), true);
+  assert.equal(shouldAutoCompact(100, 0, history), true);
 });

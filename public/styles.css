@@ -104,7 +104,9 @@ button { color: inherit; }
 .session-directory + .session-directory::before { content: "·"; margin-right: 14px; color: #4f3b1c; }
 .session-directory.cwd { color: #b99b62; }
 .session-directory b { color: #79c96b; font-weight: 600; }
-.provider-status { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+.provider-status { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border: 0; background: transparent; color: var(--muted); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; cursor: pointer; }
+.provider-status:hover:not(:disabled), .provider-status:focus-visible { outline: 0; background: var(--amber-faint); color: var(--amber-hot); }
+.provider-status:disabled { cursor: default; opacity: .65; }
 .status-dot.demo { background: #7b5b27; box-shadow: none; animation: none; }
 .mode-banner { grid-row: 2; padding: 5px 20px; border-bottom: 1px solid rgba(255,178,26,.16); background: rgba(255,178,26,.055); color: var(--muted); font-size: 12px; letter-spacing: .05em; }
 .mode-banner span { color: var(--amber); margin-right: 10px; }

@@ -6,11 +6,11 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { browserUrl, openBrowser } from "./browser-launch.js";
 import { SessionStore } from "./store.js";
-import { createProvider } from "./provider.js";
+import { ProviderCatalog } from "./provider-catalog.js";
 import { loadSettings } from "./settings.js";
 import { buildProviderHistory, isModelMessage } from "./history.js";
 import { generateSessionTitle, shouldAutoNameSession } from "./session-title.js";
-import { estimateHistoryTokens, formatCompactionBanner, generateCompactionSummary } from "./compaction.js";
+import { estimateHistoryTokens, formatCompactionBanner, generateCompactionSummary, shouldAutoCompact } from "./compaction.js";
 import { BASH_TOOL, BashExecutor, parseBashInput } from "./bash-tool.js";
 import { BackgroundTaskManager } from "./background-tasks.js";
 import {
@@ -86,11 +86,13 @@ const host = process.env.HOST ?? "127.0.0.1";
 const store = new SessionStore(dataDirectory, planDirectory);
 const settings = await loadSettings();
 const agentDefinitions = settings.agents;
-const provider = createProvider(process.env, settings);
-const agentProviders = new Map(agentDefinitions.map((definition) => [
-  definition.type,
-  createProvider(process.env, settings, definition),
-]));
+const providerCatalog = await ProviderCatalog.load(process.env, settings);
+const provider = providerCatalog.provider(undefined);
+for (const definition of agentDefinitions) {
+  if (definition.model && !providerCatalog.has(definition.model)) {
+    throw new Error(`Agent type '${definition.type}' references unknown model '${definition.model}'`);
+  }
+}
 const claudeCodeTools = createClaudeCodeTools(agentDefinitions);
 const activeSessions = new ActiveSessionRuns();
 const backgroundTasks = new BackgroundTaskManager();
@@ -155,6 +157,8 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return json(response, 200, {
       provider: provider.name,
       model: provider.model,
+      defaultModel: providerCatalog.defaultModel,
+      models: providerCatalog.models,
       mode: provider.mode,
       homeDirectory: homedir(),
       workspaceRoot,
@@ -179,6 +183,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     try {
       const directory = await resolveAddedDirectory(path);
       const session = await store.create();
+      session.model = providerCatalog.defaultModel;
       if (name) session.title = name;
       if (directory !== workspaceRoot) session.directories = [directory];
       session.cwd = directory;
@@ -203,6 +208,22 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return session
       ? json(response, 200, await sessionSnapshot(session))
       : json(response, 404, { error: "Session not found" });
+  }
+
+  const sessionModelMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/model$`));
+  if (method === "POST" && sessionModelMatch?.[1]) {
+    if (activeSessions.has(sessionModelMatch[1])) {
+      return json(response, 409, { error: "Wait for the current response to finish" });
+    }
+    const session = await store.get(sessionModelMatch[1]);
+    if (!session) return json(response, 404, { error: "Session not found" });
+    if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
+    const body = await readJson(request);
+    const model = typeof body.model === "string" ? body.model.trim() : "";
+    if (!providerCatalog.has(model)) return json(response, 400, { error: `Model '${model}' is not configured` });
+    session.model = model;
+    await store.save(session);
+    return json(response, 200, { session });
   }
 
   const sessionEventsMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/events$`));
@@ -427,6 +448,7 @@ async function runPrompt(request: IncomingMessage, response: ServerResponse): Pr
   }
 
   const session = await store.create();
+  session.model = providerCatalog.defaultModel;
   if (currentDirectory !== workspaceRoot) session.directories = [currentDirectory];
   session.cwd = currentDirectory;
   session.addDirInitialized = true;
@@ -464,6 +486,11 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   const shouldAutoName = shouldAutoNameSession(session);
 
   const controller = new AbortController();
+  request.once("aborted", () => controller.abort());
+  response.on("close", () => {
+    if (!response.writableEnded) controller.abort();
+  });
+  await autoCompactSession(session, controller.signal);
   const now = new Date().toISOString();
   const userMessage: Message = { id: randomUUID(), role: "user", content, createdAt: now, status: "complete" };
   let assistantMessage = createAssistantMessage(now);
@@ -479,7 +506,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   const bashExecutor = new BashExecutor();
   activeSessions.register(sessionId, session.parentSessionId, controller, session);
   const emit = (event: string, data: unknown) => emitSessionEvent(sessionId, response, event, data);
-  emit("start", { userMessage, assistantMessage });
+  emit("start", { session, userMessage, assistantMessage });
   const onAutomaticName = (title: string) => {
     if (!response.destroyed && !response.writableEnded) emit("session_named", { title });
   };
@@ -512,7 +539,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       for await (const event of activeProvider.stream(history, controller.signal, {
         tools: sessionTools(session, approvalCapable),
         system: sessionSystemPrompt(session, currentDirectory, activeProvider.model),
-        ...(session.agentType ? { temperature: 1, thinking: false } : {}),
+        ...(session.agentType ? { temperature: 1 } : {}),
       })) {
         if (event.type === "delta") {
           assistantMessage.content += event.text;
@@ -1024,7 +1051,7 @@ function startAutomaticSessionName(session: Session, listener: (title: string) =
 
   run.completion = (async () => {
     try {
-      const title = await generateSessionTitle(provider, messages, controller.signal, compaction);
+      const title = await generateSessionTitle(providerForSession(session), messages, controller.signal, compaction);
       if (automaticNameRuns.get(session.id) !== run) return;
       const persisted = await store.get(session.id);
       if (automaticNameRuns.get(session.id) !== run) return;
@@ -1131,10 +1158,7 @@ function sessionSystemPrompt(
 }
 
 function providerForSession(session: Session): LlmProvider {
-  if (!session.agentType) return provider;
-  const agentProvider = agentProviders.get(session.agentType);
-  if (!agentProvider) throw new Error(`Agent type '${session.agentType}' is no longer configured`);
-  return agentProvider;
+  return providerCatalog.provider(session.model);
 }
 
 function isPlanModeTool(name: string): boolean {
@@ -1166,7 +1190,10 @@ async function executeAgentCall(
   try {
     throwIfSessionAborted(signal);
     const input = parseAgentInput(call.input, agentDefinitions);
-    child = await store.createAgentSession(parent, input.subagentType, input.description);
+    const agentModel = getAgentDefinition(agentDefinitions, input.subagentType).model
+      ?? parent.model
+      ?? providerCatalog.defaultModel;
+    child = await store.createAgentSession(parent, input.subagentType, input.description, agentModel);
     throwIfSessionAborted(signal);
     call.agentSessionId = child.id;
     call.agentType = input.subagentType;
@@ -1193,9 +1220,12 @@ async function executeAgentCall(
     call.statusDisplay = { text: "AGENT FAILED" };
     resultText = call.output;
     if (error instanceof Error && error.name === "AbortError") abortAfterResult = error;
-    if (abortAfterResult && child) {
+    if (child) {
       child.agentStatus = "error";
-      try { await store.save(child); } catch { /* preserve the original abort */ }
+      try {
+        await store.save(child);
+        broadcastSessionEvent(child.id, "error", { error: call.output, session: child });
+      } catch { /* preserve the original agent failure */ }
     }
     try {
       await persistParent();
@@ -1290,6 +1320,61 @@ async function listDirectoryCompletions(response: ServerResponse, sessionId: str
   json(response, 200, { directories });
 }
 
+async function autoCompactSession(session: Session, signal: AbortSignal): Promise<void> {
+  if (!compactionTarget(session)) return;
+  const compactTokens = providerCatalog.model(session.model).compactTokens;
+  const history = buildProviderHistory(session.messages, undefined, session.compaction);
+  if (!shouldAutoCompact(compactTokens, sessionContextTokens(session), history)) return;
+  await compactSession(session, signal);
+}
+
+function compactionTarget(session: Session): Message | undefined {
+  const previousBoundary = session.compaction
+    ? session.messages.findIndex((message) => message.id === session.compaction?.throughMessageId)
+    : -1;
+  return session.messages
+    .slice(previousBoundary + 1)
+    .filter((message) => message.status === "complete" && isModelMessage(message))
+    .at(-1);
+}
+
+async function compactSession(
+  session: Session,
+  signal: AbortSignal,
+  onProgress?: (generatedCharacters: number) => void,
+): Promise<void> {
+  const throughMessage = compactionTarget(session);
+  if (!throughMessage) {
+    throw new Error(session.compaction ? "No new conversation to compact" : "No conversation to compact");
+  }
+
+  const history = buildProviderHistory(session.messages, undefined, session.compaction);
+  const beforeTokens = estimateHistoryTokens(history);
+  const summary = await generateCompactionSummary(providerForSession(session), history, signal, onProgress);
+  const now = new Date().toISOString();
+  const coveredMessageCount = session.messages
+    .slice(0, session.messages.findIndex((message) => message.id === throughMessage.id) + 1)
+    .filter((message) => message.status === "complete" && isModelMessage(message)).length;
+  const compaction = {
+    summary,
+    throughMessageId: throughMessage.id,
+    createdAt: now,
+    coveredMessageCount,
+  };
+  const afterTokens = estimateHistoryTokens(buildProviderHistory(session.messages, undefined, compaction));
+  session.compaction = compaction;
+  session.contextTokens = afterTokens;
+  session.messages.push({
+    id: randomUUID(),
+    role: "assistant",
+    content: formatCompactionBanner(beforeTokens, afterTokens, coveredMessageCount),
+    createdAt: now,
+    status: "complete",
+    kind: "compact-banner",
+  });
+  await store.save(session);
+}
+
 async function executeCommand(request: IncomingMessage, response: ServerResponse, sessionId: string): Promise<void> {
   if (activeSessions.has(sessionId)) return json(response, 409, { error: "Wait for the current response to finish" });
   const session = await store.get(sessionId);
@@ -1348,7 +1433,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     request.once("aborted", () => controller.abort());
     activeSessions.register(sessionId, undefined, controller);
     try {
-      const title = await generateSessionTitle(provider, session.messages, controller.signal, session.compaction);
+      const title = await generateSessionTitle(providerForSession(session), session.messages, controller.signal, session.compaction);
       return json(response, 200, { command: "name", session: await store.rename(session, title) });
     } catch (error) {
       return json(response, 502, { error: errorMessage(error) });
@@ -1367,17 +1452,9 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     return json(response, 200, { command: "clear", session: await store.clear(session) });
   }
   if (command === "/compact") {
-    const previousBoundary = session.compaction
-      ? session.messages.findIndex((message) => message.id === session.compaction?.throughMessageId)
-      : -1;
-    const newModelMessages = session.messages
-      .slice(previousBoundary + 1)
-      .filter((message) => message.status === "complete" && isModelMessage(message));
-    const throughMessage = newModelMessages.at(-1);
-    if (!throughMessage) {
+    if (!compactionTarget(session)) {
       return json(response, 400, { error: session.compaction ? "No new conversation to compact" : "No conversation to compact" });
     }
-
     const controller = new AbortController();
     request.once("aborted", () => controller.abort());
     response.on("close", () => {
@@ -1392,34 +1469,11 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     });
     sendEvent(response, "start", { message: "Compacting model context…" });
     try {
-      const history = buildProviderHistory(session.messages, undefined, session.compaction);
-      const beforeTokens = estimateHistoryTokens(history);
-      const summary = await generateCompactionSummary(provider, history, controller.signal, (generatedCharacters) => {
+      await compactSession(session, controller.signal, (generatedCharacters) => {
         if (!response.destroyed && !response.writableEnded) {
           sendEvent(response, "progress", { generatedCharacters });
         }
       });
-      const now = new Date().toISOString();
-      const coveredMessageCount = session.messages
-        .slice(0, session.messages.findIndex((message) => message.id === throughMessage.id) + 1)
-        .filter((message) => message.status === "complete" && isModelMessage(message)).length;
-      const compaction = {
-        summary,
-        throughMessageId: throughMessage.id,
-        createdAt: now,
-        coveredMessageCount,
-      };
-      const afterTokens = estimateHistoryTokens(buildProviderHistory(session.messages, undefined, compaction));
-      session.compaction = compaction;
-      session.messages.push({
-        id: randomUUID(),
-        role: "assistant",
-        content: formatCompactionBanner(beforeTokens, afterTokens, coveredMessageCount),
-        createdAt: now,
-        status: "complete",
-        kind: "compact-banner",
-      });
-      await store.save(session);
       if (!response.destroyed && !response.writableEnded) sendEvent(response, "done", { command: "compact", session });
     } catch (error) {
       if (!response.destroyed && !response.writableEnded) sendEvent(response, "error", { error: errorMessage(error) });
@@ -1527,6 +1581,10 @@ function sendEvent(response: ServerResponse, event: string, data: unknown): void
 
 function emitSessionEvent(sessionId: string, response: ServerResponse, event: string, data: unknown): void {
   sendEvent(response, event, data);
+  broadcastSessionEvent(sessionId, event, data);
+}
+
+function broadcastSessionEvent(sessionId: string, event: string, data: unknown): void {
   const subscribers = sessionEventSubscribers.get(sessionId);
   if (!subscribers) return;
   for (const subscriber of subscribers) sendEvent(subscriber, event, data);

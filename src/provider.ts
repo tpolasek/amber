@@ -1,17 +1,13 @@
 import type { LlmProvider, ProviderMessage, StreamEvent, StreamOptions, TokenUsage } from "./types.js";
-import { configuredSetting, type AmberSettings } from "./settings.js";
+import { configuredSetting, type ThinkingLevel } from "./settings.js";
 
-interface AnthropicProviderOptions {
+export interface AnthropicProviderOptions {
+  name?: string;
   apiKey?: string;
   authToken?: string;
   model: string;
   baseUrl: string;
-}
-
-export interface ProviderOverrides {
-  model?: string;
-  auth_key?: string;
-  auth_url?: string;
+  thinkingLevel?: ThinkingLevel;
 }
 
 const CLAUDE_CODE_BETAS = [
@@ -41,18 +37,21 @@ interface AnthropicUsage {
 }
 
 export class AnthropicProvider implements LlmProvider {
-  readonly name = "Anthropic";
+  readonly name: string;
   readonly mode = "live" as const;
   readonly model: string;
   readonly #apiKey: string | undefined;
   readonly #authToken: string | undefined;
   readonly #baseUrl: string;
+  readonly #thinkingLevel: ThinkingLevel;
 
   constructor(options: AnthropicProviderOptions) {
+    this.name = options.name ?? "Anthropic";
     this.#apiKey = options.apiKey;
     this.#authToken = options.authToken;
     this.model = options.model;
     this.#baseUrl = options.baseUrl.replace(/\/$/, "");
+    this.#thinkingLevel = options.thinkingLevel ?? "max";
   }
 
   async *stream(messages: ProviderMessage[], signal: AbortSignal, options?: StreamOptions): AsyncGenerator<StreamEvent> {
@@ -74,6 +73,7 @@ export class AnthropicProvider implements LlmProvider {
         ...(options?.tools?.length ? { tools: options.tools } : {}),
         ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
         ...(options?.thinking === false ? {} : { thinking: { type: "adaptive" } }),
+        ...(options?.thinking === false ? {} : { output_config: { effort: this.#thinkingLevel } }),
         system: options?.system
           ?? "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.",
         messages,
@@ -145,24 +145,19 @@ export class AnthropicProvider implements LlmProvider {
 
 export function createProvider(
   environment: NodeJS.ProcessEnv,
-  settings: Pick<AmberSettings, "auth_key" | "auth_url" | "default_model"> = {},
-  overrides: ProviderOverrides = {},
+  settings: { auth_key?: string; auth_url?: string; default_model?: string } = {},
 ): LlmProvider {
-  const overrideAuthToken = configuredSetting(overrides.auth_key);
   const hasEnvironmentCredentials = environment.ANTHROPIC_AUTH_TOKEN !== undefined
     || environment.ANTHROPIC_API_KEY !== undefined;
-  const apiKey = overrideAuthToken ? undefined : configuredSetting(environment.ANTHROPIC_API_KEY);
-  const authToken = overrideAuthToken
-    ?? configuredSetting(environment.ANTHROPIC_AUTH_TOKEN)
+  const apiKey = configuredSetting(environment.ANTHROPIC_API_KEY);
+  const authToken = configuredSetting(environment.ANTHROPIC_AUTH_TOKEN)
     ?? (!hasEnvironmentCredentials ? configuredSetting(settings.auth_key) : undefined);
   if (!authToken && !apiKey) {
     throw new Error("Set auth_key in ~/.amber/settings.toml, ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_API_KEY before starting AMBER");
   }
-  const model = configuredSetting(overrides.model)
-    ?? configuredSetting(environment.ANTHROPIC_MODEL ?? settings.default_model);
+  const model = configuredSetting(environment.ANTHROPIC_MODEL ?? settings.default_model);
   if (!model) throw new Error("Set default_model in ~/.amber/settings.toml or ANTHROPIC_MODEL before starting AMBER");
-  const baseUrl = configuredSetting(overrides.auth_url)
-    ?? configuredSetting(environment.ANTHROPIC_BASE_URL ?? settings.auth_url)
+  const baseUrl = configuredSetting(environment.ANTHROPIC_BASE_URL ?? settings.auth_url)
     ?? "https://api.anthropic.com";
   return new AnthropicProvider({
     ...(apiKey ? { apiKey } : {}),

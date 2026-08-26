@@ -35,12 +35,13 @@ export class SessionStore {
     return this.#createWithId(id);
   }
 
-  async createAgentSession(parent: Session, agentType: string, description: string): Promise<Session> {
+  async createAgentSession(parent: Session, agentType: string, description: string, model?: string): Promise<Session> {
     let id = "";
     do id = `${parent.id}.${randomShortId()}`;
     while (await this.get(id));
 
     const now = new Date().toISOString();
+    const sessionModel = model ?? parent.model;
     const session: Session = {
       id,
       title: description,
@@ -59,6 +60,7 @@ export class SessionStore {
       agentType,
       agentDescription: description,
       agentStatus: "running",
+      ...(sessionModel ? { model: sessionModel } : {}),
       ...(parent.directories ? { directories: structuredClone(parent.directories) } : {}),
       ...(parent.cwd ? { cwd: parent.cwd } : {}),
       ...(parent.addDirInitialized !== undefined ? { addDirInitialized: parent.addDirInitialized } : {}),
@@ -133,6 +135,7 @@ export class SessionStore {
         ? { planningTaskArchiveHighWaterMark: session.planningTaskArchiveHighWaterMark }
         : {}),
       ...(session.contextTokens !== undefined ? { contextTokens: session.contextTokens } : {}),
+      ...(session.model ? { model: session.model } : {}),
       ...(forkPlanMode ? { planMode: forkPlanMode } : {}),
     };
     await this.save(fork);
@@ -151,6 +154,7 @@ export class SessionStore {
       createdAt: now,
       updatedAt: now,
       messages: [banner],
+      ...(session.model ? { model: session.model } : {}),
       ...(session.directories ? { directories: structuredClone(session.directories) } : {}),
       ...(session.cwd ? { cwd: session.cwd } : {}),
       ...(session.addDirInitialized !== undefined ? { addDirInitialized: session.addDirInitialized } : {}),

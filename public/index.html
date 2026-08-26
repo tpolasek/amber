@@ -48,7 +48,7 @@
             <div class="session-identity"><strong id="session-title">initializing</strong></div>
             <div id="session-directories" class="session-directories" aria-label="Session directories"></div>
           </div>
-          <div class="provider-status"><span id="provider-dot" class="status-dot"></span><span id="model-label">CONNECTING</span></div>
+          <button id="model-selector" class="provider-status" type="button" aria-label="Select model"><span id="provider-dot" class="status-dot"></span><span id="model-label">CONNECTING</span></button>
         </header>
 
         <div id="mode-banner" class="mode-banner" hidden></div>
@@ -137,6 +137,22 @@
         </div>
         <footer class="tasks-dialog-footer">
           <span>Type to search · ↑/↓ select · Enter open · Esc close</span>
+        </footer>
+      </section>
+    </div>
+    <div id="model-dialog" class="tasks-overlay" hidden>
+      <section class="tasks-dialog session-dialog" role="dialog" aria-modal="true" aria-labelledby="model-dialog-title">
+        <header class="tasks-dialog-header">
+          <span class="session-dialog-icon" aria-hidden="true">◇</span>
+          <strong id="model-dialog-title">Select model</strong>
+          <button id="model-dialog-close" class="tasks-dialog-button" type="button" aria-label="Close model selection">×</button>
+        </header>
+        <div class="tasks-dialog-body session-dialog-body">
+          <label class="session-search" for="model-search"><span>SEARCH</span><input id="model-search" type="search" autocomplete="off" spellcheck="false" placeholder="Type to filter models…"></label>
+          <nav id="model-list" class="session-list session-archive-list" aria-label="Available models" tabindex="-1"></nav>
+        </div>
+        <footer class="tasks-dialog-footer">
+          <span>Type to search · ↑/↓ select · Enter use · Esc close</span>
         </footer>
       </section>
     </div>

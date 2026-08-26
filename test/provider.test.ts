@@ -12,6 +12,7 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
   let receivedSdkVersion = "";
   let receivedModel = "";
   let receivedThinking: unknown;
+  let receivedOutputConfig: unknown;
   let receivedTools: unknown;
   let receivedMaxTokens = 0;
   const gateway = createServer(async (request, response) => {
@@ -26,11 +27,13 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
       model: string;
       max_tokens: number;
       thinking?: unknown;
+      output_config?: unknown;
       tools?: unknown;
     };
     receivedModel = body.model;
     receivedMaxTokens = body.max_tokens;
     receivedThinking = body.thinking;
+    receivedOutputConfig = body.output_config;
     receivedTools = body.tools;
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.write('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":9,"cache_creation_input_tokens":40,"cache_read_input_tokens":100}}}\n\n');
@@ -74,6 +77,7 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
   assert.equal(receivedModel, "glm-test");
   assert.equal(receivedMaxTokens, 32_000);
   assert.deepEqual(receivedThinking, { type: "adaptive" });
+  assert.deepEqual(receivedOutputConfig, { effort: "max" });
   assert.deepEqual(receivedTools, tools);
   assert.deepEqual(events, [
     { type: "usage", usage: { input: 149 } },
@@ -103,51 +107,6 @@ test("requires credentials and an explicit model", () => {
   });
   assert.equal(provider.model, "mimo-v2.5");
   assert.equal(provider.mode, "live");
-});
-
-test("uses independent agent overrides with application fallbacks", async (context) => {
-  const requests: Array<{ authorization: string; apiKey: string; model: string }> = [];
-  const gateway = createServer(async (request, response) => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of request) chunks.push(Buffer.from(chunk));
-    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { model: string };
-    requests.push({
-      authorization: request.headers.authorization ?? "",
-      apiKey: String(request.headers["x-api-key"] ?? ""),
-      model: body.model,
-    });
-    response.writeHead(200, { "content-type": "text/event-stream" });
-    response.end('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n');
-  });
-  gateway.listen(0, "127.0.0.1");
-  await once(gateway, "listening");
-  context.after(() => gateway.close());
-  const address = gateway.address();
-  assert(address && typeof address === "object");
-  const baseUrl = `http://127.0.0.1:${address.port}`;
-
-  const overridden = createProvider({
-    ANTHROPIC_API_KEY: "application-api-key",
-    ANTHROPIC_MODEL: "application-model",
-    ANTHROPIC_BASE_URL: "https://unused.example.test",
-  }, {}, {
-    auth_key: "agent-token",
-    model: "agent-model",
-    auth_url: baseUrl,
-  });
-  for await (const _event of overridden.stream([], new AbortController().signal)) { /* drain */ }
-
-  const inherited = createProvider({
-    ANTHROPIC_AUTH_TOKEN: "application-token",
-    ANTHROPIC_MODEL: "application-model",
-    ANTHROPIC_BASE_URL: baseUrl,
-  }, {}, { model: "specialized-model" });
-  for await (const _event of inherited.stream([], new AbortController().signal)) { /* drain */ }
-
-  assert.deepEqual(requests, [
-    { authorization: "Bearer agent-token", apiKey: "", model: "agent-model" },
-    { authorization: "Bearer application-token", apiKey: "", model: "specialized-model" },
-  ]);
 });
 
 test("uses settings with environment variable overrides", () => {

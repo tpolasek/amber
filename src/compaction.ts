@@ -35,6 +35,15 @@ export function estimateHistoryTokens(history: ProviderMessage[]): number {
   }, 0);
 }
 
+export function shouldAutoCompact(
+  compactTokens: number | undefined,
+  measuredTokens: number,
+  history: ProviderMessage[],
+): boolean {
+  return compactTokens !== undefined
+    && Math.max(measuredTokens, estimateHistoryTokens(history)) >= compactTokens;
+}
+
 export function formatCompactionBanner(beforeTokens: number, afterTokens: number, coveredMessageCount: number): string {
   const delta = beforeTokens - afterTokens;
   const percentage = beforeTokens > 0 ? Math.round(Math.abs(delta) / beforeTokens * 100) : 0;
