@@ -161,19 +161,22 @@ function parseProviders(value: unknown, settingsPath: string): Record<string, Pr
       auth_url: authUrl,
       ...(defaultModel ? { default_model: defaultModel } : {}),
       ...parseModelSettings(provider, `${settingsPath}: providers.${name}`),
-      models: parseModels(provider.models, `${settingsPath}: providers.${name}.models`),
+      models: parseModels(provider.models, `${settingsPath}: providers.${name}.models`, api),
     };
   }
   if (Object.keys(providers).length === 0) throw new Error(`${settingsPath}: configure at least one provider`);
   return providers;
 }
 
-function parseModels(value: unknown, field: string): Record<string, ModelSettings> {
+function parseModels(value: unknown, field: string, api: ProviderProtocol): Record<string, ModelSettings> {
   if (value === undefined) return {};
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${field} must be a table`);
   const models: Record<string, ModelSettings> = {};
   for (const [name, candidate] of Object.entries(value)) {
-    if (!name.trim() || name.includes("/")) throw new Error(`${field} model names cannot be empty or contain '/'`);
+    if (!name.trim()) throw new Error(`${field} model names cannot be empty`);
+    if (api === "anthropic" && name.includes("/")) {
+      throw new Error(`${field} model names cannot contain '/'`);
+    }
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
       throw new Error(`${field}.${name} must be a table`);
     }

@@ -188,7 +188,7 @@ test("loads OpenAI providers and extended reasoning levels", async () => {
         auth_key: "openai-key",
         auth_url: "https://api.openai.com/v1",
         thinking_level: "xhigh",
-        models: { "gpt-test": { thinking_level: "none" } },
+        models: { "gpt-test": { thinking_level: "none" }, "xiaomi/mimo-v2-pro": {} },
       },
     },
   }), "utf8");
@@ -198,6 +198,24 @@ test("loads OpenAI providers and extended reasoning levels", async () => {
     auth_key: "openai-key",
     auth_url: "https://api.openai.com/v1",
     thinking_level: "xhigh",
-    models: { "gpt-test": { thinking_level: "none" } },
+    models: { "gpt-test": { thinking_level: "none" }, "xiaomi/mimo-v2-pro": {} },
   });
+});
+
+test("rejects slashed model names for anthropic providers", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const settingsDirectory = join(homeDirectory, ".amber");
+  await mkdir(settingsDirectory);
+  await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+    providers: {
+      zai: {
+        api: "anthropic",
+        auth_key: "key",
+        auth_url: "https://example.test",
+        models: { "glm/5.3": {} },
+      },
+    },
+  }), "utf8");
+
+  await assert.rejects(loadSettings(homeDirectory), /providers\.zai\.models model names cannot contain/);
 });

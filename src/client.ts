@@ -846,15 +846,7 @@ function renderModelList(): void {
     return;
   }
   const activeModel = state.session?.model ?? state.config?.defaultModel;
-  let previousProvider = "";
   models.forEach((model, index) => {
-    if (model.provider !== previousProvider) {
-      const heading = document.createElement("div");
-      heading.className = "tasks-section-title";
-      heading.textContent = model.provider;
-      elements.modelList.append(heading);
-      previousProvider = model.provider;
-    }
     const button = document.createElement("button");
     button.type = "button";
     button.className = "tasks-row";
@@ -865,7 +857,7 @@ function renderModelList(): void {
     const main = document.createElement("span");
     main.className = "tasks-row-main";
     const title = document.createElement("strong");
-    title.textContent = model.displayName;
+    title.textContent = `${model.provider}/${model.displayName}`;
     const details = document.createElement("small");
     details.textContent = `${model.model} · thinking ${model.thinkingLevel}`
       + (model.compactTokens ? ` · auto-compact ${model.compactTokens.toLocaleString()} tokens` : "");
