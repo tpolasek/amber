@@ -1,7 +1,20 @@
-# AMBER
+# Amber
+
+I built Amber because I wanted a coding agent that felt like a terminal — but with a browser UI to take advantage of linking. Also Claude Code has a serious amount of bloat that I wanted to cut out.
+
+So I reverse-engineered Claude Code and rebuilt it from scratch as a minimal local web CLI, with prompt-accurate reproduction of the workflow.
+
+Amber takes advantage of the fact that it's in a web browser to do many things that CLIs cannot do easily, such as linking forked sessions together with hyperlinks, and linking agent sessions to the main session and vice versa.
+
 <img width="1365" height="787" alt="image" src="https://github.com/user-attachments/assets/d4c61c39-40a1-4044-9afd-4d767ed55aa6" />
 
-AMBER is a simple, local web interface for persistent AI coding sessions. It supports both Anthropic- and OpenAI-compatible providers. The server uses Node's standard library, the browser client is vanilla TypeScript, and there is no frontend framework or database.
+What makes it different:
+
+* Amber takes advantage of hyperlinks: agent sessions are session forks that are links in the browser.
+* Provider-agnostic — works with both Anthropic- and OpenAI-compatible APIs.
+* Only 3 runtime npm dependencies — diff, markdown-it, and smol-toml for parsing settings. No framework, no database, no bloat.
+* Easily configurable sub-agents. You can even customize the model per each agent.
+* Claude Code, rebuilt. Reverse-engineered from Claude Code's behavior, reproducing the prompt flow accurately while stripping it down to a lightweight tool.
 
 ## Install and run
 
