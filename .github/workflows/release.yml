@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run package:macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amber-macos
+          path: release/amber-macos
+          if-no-files-found: error
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run package:linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amber-linux
+          path: release/amber-linux
+          if-no-files-found: error
+
+  release:
+    needs: [build-macos, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: amber-macos
+          path: release
+      - uses: actions/download-artifact@v4
+        with:
+          name: amber-linux
+          path: release
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/amber-macos
+            release/amber-linux
