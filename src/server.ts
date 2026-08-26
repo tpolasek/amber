@@ -86,7 +86,7 @@ const host = process.env.HOST ?? "127.0.0.1";
 const store = new SessionStore(dataDirectory, planDirectory);
 const settings = await loadSettings();
 const agentDefinitions = settings.agents;
-const providerCatalog = await ProviderCatalog.load(process.env, settings);
+const providerCatalog = await ProviderCatalog.load(settings);
 const provider = providerCatalog.provider(undefined);
 for (const definition of agentDefinitions) {
   if (definition.model && !providerCatalog.has(definition.model)) {

@@ -1,12 +1,8 @@
 import { anthropicDriver } from "./provider.js";
 import { openAIDriver } from "./openai-provider.js";
 import { configuredSetting, type AmberSettings, type ProviderSettings } from "./settings.js";
-import type { CredentialType, ProviderDriver } from "./provider-driver.js";
+import type { ProviderDriver } from "./provider-driver.js";
 import type { LlmProvider, ProviderProtocol, ThinkingLevel } from "./types.js";
-
-type ResolvedProvider = ProviderSettings & {
-  credentialType: CredentialType;
-};
 
 export interface AvailableModel {
   key: string;
@@ -30,11 +26,10 @@ export class ProviderCatalog {
   }
 
   static async load(
-    environment: NodeJS.ProcessEnv,
     settings: AmberSettings,
     fetchModelList: typeof fetch = fetch,
   ): Promise<ProviderCatalog> {
-    const configuredProviders = providerEntries(environment, settings);
+    const configuredProviders = providerEntries(settings);
     if (configuredProviders.length === 0) {
       throw new Error("Configure at least one provider in ~/.amber/settings.toml");
     }
@@ -55,7 +50,6 @@ export class ProviderCatalog {
           name: providerName,
           authKey: provider.auth_key,
           baseUrl: provider.auth_url,
-          credentialType: provider.credentialType,
         }, fetchModelList);
       } catch (error) {
         if (fallbackModels.length === 0) {
@@ -96,7 +90,6 @@ export class ProviderCatalog {
           name: providerName,
           authKey: provider.auth_key,
           baseUrl: provider.auth_url,
-          credentialType: provider.credentialType,
           model: discoveredModel.id,
           thinkingLevel,
         }));
@@ -128,68 +121,16 @@ export class ProviderCatalog {
   }
 }
 
-function providerEntries(
-  environment: NodeJS.ProcessEnv,
-  settings: AmberSettings,
-): Array<[string, ResolvedProvider]> {
-  const entries = Object.entries(settings.providers);
-  if (entries.length > 0) {
-    const defaultProvider = settings.default_provider ?? entries[0]![0];
-    return entries.map(([name, provider]) => {
-      const isDefault = name === defaultProvider;
-      const environmentAuthToken = isDefault && provider.api === "anthropic"
-        ? configuredSetting(environment.ANTHROPIC_AUTH_TOKEN)
-        : undefined;
-      const anthropicApiKey = isDefault && provider.api === "anthropic"
-        ? configuredSetting(environment.ANTHROPIC_API_KEY)
-        : undefined;
-      const openAIApiKey = isDefault && provider.api === "openai"
-        ? configuredSetting(environment.OPENAI_API_KEY)
-        : undefined;
-      const environmentAuth = environmentAuthToken ?? anthropicApiKey ?? openAIApiKey;
-      const authKey = environmentAuth ?? configuredSetting(provider.auth_key);
-      if (!authKey) throw new Error(`Set providers.${name}.auth_key in ~/.amber/settings.toml`);
-      const environmentBaseUrl = isDefault
-        ? configuredSetting(provider.api === "openai" ? environment.OPENAI_BASE_URL : environment.ANTHROPIC_BASE_URL)
-        : undefined;
-      const authUrl = environmentBaseUrl ?? configuredSetting(provider.auth_url);
-      if (!authUrl) throw new Error(`Set providers.${name}.auth_url in ~/.amber/settings.toml`);
-      const environmentModel = isDefault
-        ? configuredSetting(provider.api === "openai" ? environment.OPENAI_MODEL : environment.ANTHROPIC_MODEL)
-        : undefined;
-      return [name, {
-        ...provider,
-        auth_key: authKey,
-        auth_url: authUrl,
-        credentialType: anthropicApiKey ? "api-key" : "bearer",
-        ...(environmentModel ? { default_model: environmentModel } : {}),
-      }];
-    });
-  }
-  const authToken = configuredSetting(environment.ANTHROPIC_AUTH_TOKEN);
-  const anthropicApiKey = configuredSetting(environment.ANTHROPIC_API_KEY);
-  const anthropicModel = configuredSetting(environment.ANTHROPIC_MODEL);
-  if ((authToken || anthropicApiKey) && anthropicModel) {
-    return [["default", {
-      api: "anthropic",
-      auth_key: authToken ?? anthropicApiKey!,
-      auth_url: configuredSetting(environment.ANTHROPIC_BASE_URL) ?? "https://api.anthropic.com",
-      default_model: anthropicModel,
-      models: { [anthropicModel]: {} },
-      credentialType: authToken ? "bearer" : "api-key",
-    }]];
-  }
-  const openAIKey = configuredSetting(environment.OPENAI_API_KEY);
-  const openAIModel = configuredSetting(environment.OPENAI_MODEL);
-  if (!openAIKey || !openAIModel) return [];
-  return [["default", {
-    api: "openai",
-    auth_key: openAIKey,
-    auth_url: configuredSetting(environment.OPENAI_BASE_URL) ?? "https://api.openai.com",
-    default_model: openAIModel,
-    models: { [openAIModel]: {} },
-    credentialType: "bearer",
-  }]];
+function providerEntries(settings: AmberSettings): Array<[string, ProviderSettings]> {
+  return Object.entries(settings.providers).map(([name, provider]) => {
+    if (!configuredSetting(provider.auth_key)) {
+      throw new Error(`Set providers.${name}.auth_key in ~/.amber/settings.toml`);
+    }
+    if (!configuredSetting(provider.auth_url)) {
+      throw new Error(`Set providers.${name}.auth_url in ~/.amber/settings.toml`);
+    }
+    return [name, provider];
+  });
 }
 
 function driverFor(protocol: ProviderProtocol): ProviderDriver {

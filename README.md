@@ -70,18 +70,7 @@ readOnly = true
 model = "zai/glm-5.3" # Optional; otherwise inherits the session model.
 ```
 
-Provider credentials belong under `[providers.<name>]`, never under an agent. `api` selects the provider's protocol: `"anthropic"` (the default) or `"openai"`. OpenAI-protocol providers accept slashed model ids such as `xiaomi/mimo-v2-pro`, so OpenRouter-style backends work. Models are referenced as `provider/model`. Select a session's model from the model name in the browser's top-right corner.
-
-Environment variables can override the default provider:
-
-```bash
-export ANTHROPIC_AUTH_TOKEN="your-key"
-export ANTHROPIC_BASE_URL="https://api.z.ai/api/anthropic"
-export ANTHROPIC_MODEL="glm-5.3"
-amber
-```
-
-For an OpenAI default provider, use `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL` instead.
+Provider credentials belong under `[providers.<name>]`, never under an agent. All provider configuration comes from `settings.toml`; no environment variables are used. `api` selects the provider's protocol: `"anthropic"` (the default) or `"openai"`. OpenAI-protocol providers accept slashed model ids such as `xiaomi/mimo-v2-pro`, so OpenRouter-style backends work. Models are referenced as `provider/model`. Select a session's model from the model name in the browser's top-right corner.
 
 ## Dependencies
 

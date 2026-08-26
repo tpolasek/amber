@@ -1,12 +1,9 @@
 import type { LlmProvider, ProviderProtocol, ThinkingLevel } from "./types.js";
 
-export type CredentialType = "api-key" | "bearer";
-
 export interface ProviderConnection {
   name: string;
   authKey: string;
   baseUrl: string;
-  credentialType: CredentialType;
 }
 
 export interface DiscoveredModel {

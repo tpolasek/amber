@@ -7,14 +7,12 @@ import type {
   ThinkingLevel,
   TokenUsage,
 } from "./types.js";
-import { configuredSetting } from "./settings.js";
 import { providerApiUrl, type DiscoveredModel, type ProviderDriver } from "./provider-driver.js";
 import { readServerSentEvents } from "./sse.js";
 
 export interface AnthropicProviderOptions {
   name?: string;
-  apiKey?: string;
-  authToken?: string;
+  authToken: string;
   model: string;
   baseUrl: string;
   thinkingLevel?: ThinkingLevel;
@@ -51,14 +49,12 @@ export class AnthropicProvider implements LlmProvider {
   readonly protocol = "anthropic" as const;
   readonly mode = "live" as const;
   readonly model: string;
-  readonly #apiKey: string | undefined;
-  readonly #authToken: string | undefined;
+  readonly #authToken: string;
   readonly #baseUrl: string;
   readonly #thinkingLevel: ThinkingLevel;
 
   constructor(options: AnthropicProviderOptions) {
     this.name = options.name ?? "Anthropic";
-    this.#apiKey = options.apiKey;
     this.#authToken = options.authToken;
     this.model = options.model;
     this.#baseUrl = options.baseUrl.replace(/\/$/, "");
@@ -74,8 +70,7 @@ export class AnthropicProvider implements LlmProvider {
         "anthropic-beta": CLAUDE_CODE_BETAS,
         "user-agent": "claude-cli/2.1.88 (undefined, sdk-cli)",
         "x-stainless-package-version": "0.74.0",
-        ...(this.#apiKey ? { "x-api-key": this.#apiKey } : {}),
-        ...(this.#authToken ? { authorization: `Bearer ${this.#authToken}` } : {}),
+        authorization: `Bearer ${this.#authToken}`,
       },
       body: JSON.stringify({
         model: this.model,
@@ -149,9 +144,7 @@ export const anthropicDriver: ProviderDriver = {
       const response = await fetcher(url, {
         headers: {
           "anthropic-version": "2023-06-01",
-          ...(connection.credentialType === "api-key"
-            ? { "x-api-key": connection.authKey }
-            : { authorization: `Bearer ${connection.authKey}` }),
+          authorization: `Bearer ${connection.authKey}`,
         },
       });
       if (!response.ok) throw new Error(`model list failed (${response.status}): ${await response.text()}`);
@@ -177,39 +170,13 @@ export const anthropicDriver: ProviderDriver = {
   createProvider(connection) {
     return new AnthropicProvider({
       name: connection.name,
-      ...(connection.credentialType === "api-key"
-        ? { apiKey: connection.authKey }
-        : { authToken: connection.authKey }),
+      authToken: connection.authKey,
       baseUrl: connection.baseUrl,
       model: connection.model,
       thinkingLevel: connection.thinkingLevel,
     });
   },
 };
-
-export function createProvider(
-  environment: NodeJS.ProcessEnv,
-  settings: { auth_key?: string; auth_url?: string; default_model?: string } = {},
-): LlmProvider {
-  const hasEnvironmentCredentials = environment.ANTHROPIC_AUTH_TOKEN !== undefined
-    || environment.ANTHROPIC_API_KEY !== undefined;
-  const apiKey = configuredSetting(environment.ANTHROPIC_API_KEY);
-  const authToken = configuredSetting(environment.ANTHROPIC_AUTH_TOKEN)
-    ?? (!hasEnvironmentCredentials ? configuredSetting(settings.auth_key) : undefined);
-  if (!authToken && !apiKey) {
-    throw new Error("Set auth_key in ~/.amber/settings.toml, ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_API_KEY before starting AMBER");
-  }
-  const model = configuredSetting(environment.ANTHROPIC_MODEL ?? settings.default_model);
-  if (!model) throw new Error("Set default_model in ~/.amber/settings.toml or ANTHROPIC_MODEL before starting AMBER");
-  const baseUrl = configuredSetting(environment.ANTHROPIC_BASE_URL ?? settings.auth_url)
-    ?? "https://api.anthropic.com";
-  return new AnthropicProvider({
-    ...(apiKey ? { apiKey } : {}),
-    ...(authToken ? { authToken } : {}),
-    model,
-    baseUrl,
-  });
-}
 
 function mapUsage(usage: AnthropicUsage): Partial<TokenUsage> {
   const hasInput = usage.input_tokens !== undefined

@@ -45,7 +45,7 @@ test("discovers every provider model and merges configured overrides", async () 
     return Response.json({ data: [{ id: "glm-5.3-flash", display_name: "GLM 5.3 Flash" }], has_more: false });
   };
 
-  const catalog = await ProviderCatalog.load({}, settings, fetcher);
+  const catalog = await ProviderCatalog.load(settings, fetcher);
 
   assert.equal(catalog.defaultModel, "zai/glm-5.3");
   assert.deepEqual(catalog.models, [
@@ -107,7 +107,7 @@ test("uses explicit models when discovery is unavailable", async () => {
   };
   const unavailable: typeof fetch = async () => new Response("not supported", { status: 404 });
 
-  const catalog = await ProviderCatalog.load({}, settings, unavailable);
+  const catalog = await ProviderCatalog.load(settings, unavailable);
   assert.equal(catalog.defaultModel, "zai/glm-5.3");
   assert.deepEqual(catalog.models.map((model) => model.key), ["zai/glm-5.3"]);
 });
@@ -121,25 +121,39 @@ test("requires discovery when no models are configured", async () => {
   };
   const unavailable: typeof fetch = async () => new Response("not supported", { status: 404 });
 
-  await assert.rejects(ProviderCatalog.load({}, settings, unavailable), /Could not discover models/);
+  await assert.rejects(ProviderCatalog.load(settings, unavailable), /Could not discover models/);
 });
 
-test("preserves API-key authentication for environment overrides", async () => {
+test("requires provider configuration in settings", async () => {
+  const unavailable: typeof fetch = async () => new Response("not supported", { status: 404 });
+  await assert.rejects(
+    ProviderCatalog.load({ providers: {}, agents: [] }, unavailable),
+    /Configure at least one provider/,
+  );
+});
+
+test("authenticates model discovery with bearer credentials from settings", async () => {
   const requests: RequestInit[] = [];
   const fetcher: typeof fetch = async (_input, init) => {
     requests.push(init ?? {});
     return Response.json({ data: [{ id: "claude-test" }], has_more: false });
   };
   const catalog = await ProviderCatalog.load({
-    ANTHROPIC_API_KEY: "api-key",
-    ANTHROPIC_BASE_URL: "https://anthropic.example.test",
-    ANTHROPIC_MODEL: "claude-test",
-  }, { providers: {}, agents: [] }, fetcher);
+    providers: {
+      anthropic: {
+        api: "anthropic",
+        auth_key: "api-key",
+        auth_url: "https://anthropic.example.test",
+        models: {},
+      },
+    },
+    agents: [],
+  }, fetcher);
 
   const headers = new Headers(requests[0]?.headers);
-  assert.equal(headers.get("x-api-key"), "api-key");
-  assert.equal(headers.get("authorization"), null);
-  assert.equal(catalog.defaultModel, "default/claude-test");
+  assert.equal(headers.get("authorization"), "Bearer api-key");
+  assert.equal(headers.get("x-api-key"), null);
+  assert.equal(catalog.defaultModel, "anthropic/claude-test");
 });
 
 test("discovers OpenAI models with bearer auth and creates an OpenAI provider", async () => {
@@ -150,7 +164,7 @@ test("discovers OpenAI models with bearer auth and creates an OpenAI provider", 
     requestHeaders = new Headers(init?.headers);
     return Response.json({ object: "list", data: [{ id: "gpt-test" }, { id: "gpt-fast" }] });
   };
-  const catalog = await ProviderCatalog.load({}, {
+  const catalog = await ProviderCatalog.load({
     default_provider: "openai",
     providers: {
       openai: {
@@ -183,8 +197,8 @@ test("defaults each protocol to its own top thinking level", async () => {
     providers: { provider: { api, auth_key: "key", auth_url: "https://example.test", models: {} } },
     agents: [],
   });
-  const anthropic = await ProviderCatalog.load({}, settings("anthropic"), fetcher);
-  const openai = await ProviderCatalog.load({}, settings("openai"), fetcher);
+  const anthropic = await ProviderCatalog.load(settings("anthropic"), fetcher);
+  const openai = await ProviderCatalog.load(settings("openai"), fetcher);
 
   assert.equal(anthropic.models[0]?.thinkingLevel, "max");
   assert.equal(openai.models[0]?.thinkingLevel, "xhigh");
