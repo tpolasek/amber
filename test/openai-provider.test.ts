@@ -249,3 +249,29 @@ test("clamps anthropic-only thinking levels to the OpenAI effort ceiling", async
 
   assert.deepEqual(requestBody.reasoning, { effort: "xhigh", summary: "auto" });
 });
+
+test("does not fall back to chat completions for non-404 responses errors", async (context) => {
+  const paths: string[] = [];
+  const gateway = createServer((request, response) => {
+    paths.push(request.url ?? "");
+    response.writeHead(400, { "content-type": "application/json" });
+    response.end('{"error":{"message":"Unknown parameter: store"}}');
+  });
+  gateway.listen(0, "127.0.0.1");
+  await once(gateway, "listening");
+  context.after(() => gateway.close());
+  const address = gateway.address();
+  assert(address && typeof address === "object");
+
+  const provider = new OpenAIProvider({
+    apiKey: "key",
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    model: "gpt-test",
+    thinkingLevel: "high",
+  });
+  await assert.rejects(provider.stream(
+    [{ role: "user", content: "Hello" }],
+    new AbortController().signal,
+  ).next(), /OpenAI request failed \(400\): Unknown parameter: store/);
+  assert.deepEqual(paths, ["/v1/responses"]);
+});
