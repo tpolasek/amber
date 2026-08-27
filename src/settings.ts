@@ -18,7 +18,8 @@ export interface ModelSettings {
 
 export interface ProviderSettings extends ModelSettings {
   api: ProviderProtocol;
-  auth_key: string;
+  auth?: "openai-codex";
+  auth_key?: string;
   auth_url: string;
   default_model?: string;
   models: Record<string, ModelSettings>;
@@ -93,6 +94,14 @@ export const SETTINGS_TEMPLATE_SOURCE = `${stringify(SETTINGS_TEMPLATE).trimEnd(
 # auth_url = "https://api.openai.com"
 # default_model = "gpt-5.4"
 # thinking_level = "high"
+
+# To use a ChatGPT Plus/Pro subscription instead of an API key:
+# [providers.openai-codex]
+# api = "openai"
+# auth = "openai-codex"
+# default_model = "gpt-5.4"
+# thinking_level = "high"
+# Then start Amber and connect ChatGPT from the Auth settings dialog.
 `;
 
 export async function loadSettings(homeDirectory = homedir()): Promise<AmberSettings> {
@@ -161,16 +170,29 @@ function parseProviders(value: unknown, settingsPath: string): Record<string, Pr
     }
     const provider = candidate as Record<string, unknown>;
     const api = parseProviderProtocol(provider.api, `${settingsPath}: providers.${name}.api`);
-    const authKey = requiredString(provider.auth_key, `${settingsPath}: providers.${name}.auth_key`);
-    const authUrl = requiredString(provider.auth_url, `${settingsPath}: providers.${name}.auth_url`);
+    const auth = parseProviderAuth(provider.auth, `${settingsPath}: providers.${name}.auth`);
+    if (auth === "openai-codex" && api !== "openai") {
+      throw new Error(`${settingsPath}: providers.${name}: openai-codex auth requires api = "openai"`);
+    }
+    const authKey = auth === "openai-codex"
+      ? optionalString(provider.auth_key, `${settingsPath}: providers.${name}.auth_key`)
+      : requiredString(provider.auth_key, `${settingsPath}: providers.${name}.auth_key`);
+    const authUrl = optionalString(provider.auth_url, `${settingsPath}: providers.${name}.auth_url`)
+      ?? (auth === "openai-codex" ? "https://chatgpt.com/backend-api" : undefined);
+    if (!authUrl) throw new Error(`${settingsPath}: providers.${name}.auth_url must be a non-empty string`);
     const defaultModel = optionalString(provider.default_model, `${settingsPath}: providers.${name}.default_model`);
+    const models = parseModels(provider.models, `${settingsPath}: providers.${name}.models`, api);
+    if (auth === "openai-codex" && !defaultModel && Object.keys(models).length === 0) {
+      throw new Error(`${settingsPath}: providers.${name}: openai-codex auth requires default_model or at least one explicit model`);
+    }
     providers[name] = {
       api,
-      auth_key: authKey,
+      ...(auth ? { auth } : {}),
+      ...(authKey ? { auth_key: authKey } : {}),
       auth_url: authUrl,
       ...(defaultModel ? { default_model: defaultModel } : {}),
       ...parseModelSettings(provider, `${settingsPath}: providers.${name}`),
-      models: parseModels(provider.models, `${settingsPath}: providers.${name}.models`, api),
+      models,
     };
   }
   if (Object.keys(providers).length === 0) throw new Error(`${settingsPath}: configure at least one provider`);
@@ -249,6 +271,12 @@ function parseProviderProtocol(value: unknown, field: string): ProviderProtocol 
   if (value === undefined || value === "anthropic") return "anthropic";
   if (value === "openai") return "openai";
   throw new Error(`${field} must be anthropic or openai`);
+}
+
+function parseProviderAuth(value: unknown, field: string): "openai-codex" | undefined {
+  if (value === undefined) return undefined;
+  if (value === "openai-codex") return value;
+  throw new Error(`${field} must be openai-codex when set`);
 }
 
 export function configuredSetting(value: string | undefined): string | undefined {

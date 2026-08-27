@@ -81,6 +81,11 @@ button { color: inherit; }
 .planning-task-item.completed .planning-task-copy small { color: #9eb36a; }
 .planning-task-copy small { overflow: hidden; color: #5f5036; font-size: 10px; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
 .sidebar-footer { padding: 10px 12px; border-top: 1px solid var(--amber-line); background: var(--surface); }
+.sidebar-auth-button { width: 100%; display: grid; grid-template-columns: auto 1fr auto; align-items: baseline; gap: 8px; margin-bottom: 9px; padding: 8px 7px; border: 1px solid rgba(255,178,26,.16); background: rgba(255,178,26,.025); color: var(--amber-hot); cursor: pointer; font: inherit; text-align: left; }
+.sidebar-auth-button:hover, .sidebar-auth-button:focus-visible { border-color: var(--amber-dim); outline: 0; background: var(--amber-faint); }
+.sidebar-auth-button span { font-size: 11px; font-weight: 600; letter-spacing: .1em; }
+.sidebar-auth-button small { color: #67583c; font-size: 9px; letter-spacing: .08em; }
+.sidebar-auth-button i { color: var(--amber-dim); font-style: normal; }
 .system-meter { display: grid; grid-template-columns: 26px 1fr 28px; align-items: center; gap: 8px; margin: 5px 0; color: var(--muted); font-size: 12px; }
 .system-meter i { height: 3px; background: #2c210e; }
 .system-meter b { display: block; height: 100%; background: var(--amber-dim); box-shadow: 0 0 5px rgba(255,178,26,.5); }
@@ -315,6 +320,29 @@ button { color: inherit; }
 .session-archive-list { min-height: 0; padding: 6px 8px; outline: 0; }
 .session-archive-empty { min-height: 180px; display: grid; place-items: center; padding: 20px; color: #67583c; font-size: 13px; text-align: center; }
 .tasks-dialog-body { min-height: 160px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--amber-dim) transparent; }
+.auth-dialog { width: min(680px, 100%); }
+.auth-dialog-body { min-height: 300px; padding: 18px; }
+.auth-provider-card { display: grid; gap: 14px; padding: 16px; border: 1px solid rgba(255,178,26,.2); background: rgba(255,178,26,.025); }
+.auth-provider-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.auth-provider-heading h2 { margin: 0; color: var(--amber-hot); font-size: 15px; font-weight: 500; letter-spacing: .05em; }
+.auth-provider-heading p, .auth-provider-card > p { margin: 4px 0 0; color: #806b45; font-size: 11px; line-height: 1.55; }
+.auth-status { flex: none; color: #9eb36a; font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.auth-status.disconnected { color: #806b45; }
+.auth-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.auth-button { padding: 8px 11px; border: 1px solid var(--amber-dim); background: var(--amber-faint); color: var(--amber-hot); cursor: pointer; font: inherit; font-size: 11px; letter-spacing: .06em; }
+.auth-button:hover:not(:disabled) { border-color: var(--amber); background: rgba(255,178,26,.16); }
+.auth-button.secondary { border-color: rgba(255,178,26,.22); background: transparent; color: #a68c60; }
+.auth-button.danger { border-color: rgba(255,104,77,.4); background: rgba(255,104,77,.06); color: #ff937c; }
+.auth-button:disabled { cursor: wait; opacity: .45; }
+.auth-flow { display: grid; gap: 12px; padding-top: 4px; border-top: 1px solid rgba(255,178,26,.14); }
+.auth-flow strong { color: var(--amber-hot); font-size: 12px; }
+.auth-flow code { width: max-content; max-width: 100%; padding: 8px 10px; border: 1px solid rgba(255,178,26,.2); background: #050603; color: var(--amber-hot); font: 18px/1.2 var(--mono); letter-spacing: .12em; overflow-wrap: anywhere; }
+.auth-flow a { color: var(--amber); font-size: 11px; overflow-wrap: anywhere; }
+.auth-manual-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.auth-manual-form input { min-width: 0; padding: 8px 9px; border: 1px solid rgba(255,178,26,.22); outline: 0; background: #060703; color: var(--amber-hot); font: 11px/1.4 var(--mono); }
+.auth-manual-form input:focus { border-color: var(--amber); }
+.auth-error { color: #ff937c !important; }
+.auth-note { color: #806b45 !important; }
 .tasks-empty { min-height: 180px; display: grid; place-items: center; color: #67583c; font-size: 13px; }
 .tasks-list { padding: 6px; }
 .tasks-section-title { padding: 6px 9px 8px 37px; color: #67583c; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }

@@ -42,7 +42,13 @@ interface PlanningTask { id: string; subject: string; description: string; activ
 interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; model?: string; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error"; planningTasks?: PlanningTask[]; planningTaskArchiveHighWaterMark?: number; contextTokens?: number; planMode?: SessionPlanMode }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface AvailableModel { key: string; provider: string; api: "anthropic" | "openai"; model: string; displayName: string; thinkingLevel: "none" | "low" | "medium" | "high" | "xhigh" | "max"; compactTokens?: number }
-interface Config { provider: string; model: string; defaultModel: string; models: AvailableModel[]; mode: "live"; homeDirectory: string; workspaceRoot: string }
+interface Config { provider: string; model: string; defaultModel: string; models: AvailableModel[]; mode: "live"; homeDirectory: string; workspaceRoot: string; authActionToken: string }
+interface AuthProviderStatus { id: "openai-codex"; name: string; authName: string; configured: boolean; providerConfigured: boolean }
+type AuthLoginStatus = { status: "pending" } | { status: "complete" } | { status: "failed"; error: string } | { status: "cancelled" };
+type AuthLoginStart =
+  | { id: string; method: "browser"; authorizationUrl: string; redirectUri: string; callbackAvailable: boolean }
+  | { id: string; method: "device_code"; userCode: string; verificationUri: string; expiresInSeconds: number };
+interface ActiveAuthLogin { start: AuthLoginStart; status: AuthLoginStatus }
 interface BackgroundTask { id: string; type: "local_bash"; command: string; description: string; workingDirectory: string; status: "running" | "completed" | "failed" | "timed_out" | "killed"; stdout: string; stderr: string; exitCode: number | null; startedAt: string; completedAt?: string; durationMs?: number }
 interface AskUserQuestionOption { label: string; description: string; preview?: string }
 interface AskUserQuestion { question: string; header: string; options: AskUserQuestionOption[]; multiSelect: boolean }
@@ -128,6 +134,10 @@ let questionSelections = new Map<string, QuestionSelection>();
 let questionSubmitting = false;
 let planModeRequest: PlanModeRequest | null = null;
 let planModeSubmitting = false;
+let authProviders: AuthProviderStatus[] = [];
+let activeAuthLogin: ActiveAuthLogin | null = null;
+let authBusy = false;
+let authPollTimer: number | undefined;
 let sessionRunController: AbortController | null = null;
 let sessionRunId: string | null = null;
 let sessionRunReconnectTimer: number | undefined;
@@ -195,6 +205,10 @@ const elements = {
   modelDialogClose: required<HTMLButtonElement>("model-dialog-close"),
   modelSearch: required<HTMLInputElement>("model-search"),
   modelList: required<HTMLElement>("model-list"),
+  authSettings: required<HTMLButtonElement>("auth-settings"),
+  authDialog: required<HTMLElement>("auth-dialog"),
+  authClose: required<HTMLButtonElement>("auth-close"),
+  authDialogBody: required<HTMLElement>("auth-dialog-body"),
   tasksDialog: required<HTMLElement>("tasks-dialog"),
   tasksDialogTitle: required<HTMLElement>("tasks-dialog-title"),
   tasksDialogBody: required<HTMLElement>("tasks-dialog-body"),
@@ -247,6 +261,7 @@ async function initialize(): Promise<void> {
 
 function wireEvents(): void {
   document.addEventListener("keydown", (event) => {
+    if (handleAuthDialogKeydown(event)) return;
     if (handlePlanModeDialogKeydown(event)) return;
     if (handleNewSessionDialogKeydown(event)) return;
     if (handleQuestionDialogKeydown(event)) return;
@@ -333,6 +348,11 @@ function wireEvents(): void {
   });
   elements.modelSelector.addEventListener("click", openModelDialog);
   elements.modelDialogClose.addEventListener("click", closeModelDialog);
+  elements.authSettings.addEventListener("click", () => void openAuthDialog());
+  elements.authClose.addEventListener("click", () => void closeAuthDialog());
+  elements.authDialog.addEventListener("click", (event) => {
+    if (event.target === elements.authDialog) void closeAuthDialog();
+  });
   elements.modelSearch.addEventListener("input", () => {
     modelDialogQuery = elements.modelSearch.value;
     modelDialogSelection = 0;
@@ -840,6 +860,293 @@ function handleSessionDialogKeydown(event: KeyboardEvent): boolean {
     renderSessionList();
   }
   return true;
+}
+
+async function openAuthDialog(): Promise<void> {
+  elements.authDialog.hidden = false;
+  document.body.classList.remove("sidebar-open");
+  renderAuthDialog();
+  try {
+    await loadAuthProviders();
+  } catch (error) {
+    notify(messageFrom(error));
+  }
+}
+
+async function closeAuthDialog(): Promise<void> {
+  elements.authDialog.hidden = true;
+  stopAuthPolling();
+  if (activeAuthLogin?.status.status === "pending") {
+    const loginId = activeAuthLogin.start.id;
+    activeAuthLogin = null;
+    renderAuthDialog();
+    await authMutation(`/api/auth/openai-codex/logins/${loginId}`, { method: "DELETE" }).catch(() => undefined);
+  }
+  elements.prompt.focus();
+}
+
+function handleAuthDialogKeydown(event: KeyboardEvent): boolean {
+  if (elements.authDialog.hidden) return false;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    void closeAuthDialog();
+  }
+  return true;
+}
+
+async function loadAuthProviders(): Promise<void> {
+  const response = await api<{ providers: AuthProviderStatus[] }>("/api/auth");
+  authProviders = response.providers;
+  renderAuthDialog();
+}
+
+function renderAuthDialog(): void {
+  elements.authDialogBody.replaceChildren();
+  const provider = authProviders.find((candidate) => candidate.id === "openai-codex");
+  if (!provider) {
+    const loading = document.createElement("div");
+    loading.className = "tasks-empty";
+    loading.textContent = "Loading authentication status…";
+    elements.authDialogBody.append(loading);
+    return;
+  }
+
+  const card = document.createElement("section");
+  card.className = "auth-provider-card";
+  const heading = document.createElement("div");
+  heading.className = "auth-provider-heading";
+  const identity = document.createElement("div");
+  const title = document.createElement("h2");
+  title.textContent = provider.name;
+  const subtitle = document.createElement("p");
+  subtitle.textContent = provider.authName;
+  identity.append(title, subtitle);
+  const status = document.createElement("span");
+  status.className = `auth-status${provider.configured ? "" : " disconnected"}`;
+  status.textContent = provider.configured ? "Connected" : "Not connected";
+  heading.append(identity, status);
+  card.append(heading);
+
+  if (!provider.providerConfigured) {
+    const note = document.createElement("p");
+    note.className = "auth-note";
+    note.textContent = "Add an api=\"openai\", auth=\"openai-codex\" provider in ~/.amber/settings.toml to expose Codex models.";
+    card.append(note);
+  }
+
+  if (activeAuthLogin) {
+    renderActiveAuthFlow(card, activeAuthLogin);
+  } else {
+    const actions = document.createElement("div");
+    actions.className = "auth-actions";
+    if (provider.configured) {
+      actions.append(authButton("DISCONNECT", "danger", () => void logoutOpenAICodex()));
+    } else {
+      actions.append(
+        authButton("BROWSER LOGIN", "", () => void startAuthLogin("browser")),
+        authButton("DEVICE CODE", "secondary", () => void startAuthLogin("device_code")),
+      );
+    }
+    card.append(actions);
+  }
+  elements.authDialogBody.append(card);
+}
+
+function renderActiveAuthFlow(card: HTMLElement, login: ActiveAuthLogin): void {
+  const flow = document.createElement("div");
+  flow.className = "auth-flow";
+  if (login.status.status === "failed" || login.status.status === "cancelled") {
+    const error = document.createElement("p");
+    error.className = "auth-error";
+    error.textContent = login.status.status === "failed" ? login.status.error : "Login cancelled";
+    const back = authButton("TRY AGAIN", "secondary", () => {
+      activeAuthLogin = null;
+      renderAuthDialog();
+    });
+    flow.append(error, back);
+    card.append(flow);
+    return;
+  }
+
+  const label = document.createElement("strong");
+  label.textContent = login.start.method === "browser"
+    ? "Waiting for browser authorization…"
+    : "Waiting for device authorization…";
+  flow.append(label);
+  if (login.start.method === "browser") {
+    const link = externalLink(login.start.authorizationUrl, "Open the OpenAI authorization page");
+    const note = document.createElement("p");
+    note.textContent = login.start.callbackAvailable
+      ? "The local callback will finish automatically. For remote access, paste the final redirect URL or authorization code below."
+      : "The local callback port is unavailable. Paste the final redirect URL or authorization code below.";
+    const form = document.createElement("form");
+    form.className = "auth-manual-form";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = login.start.redirectUri;
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    const submit = authButton("SUBMIT CODE", "", () => undefined);
+    submit.type = "submit";
+    form.append(input, submit);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void submitManualAuth(input.value);
+    });
+    flow.append(link, note, form);
+  } else {
+    const code = document.createElement("code");
+    code.textContent = login.start.userCode;
+    const link = externalLink(login.start.verificationUri, "Open the OpenAI device authorization page");
+    flow.append(code, link);
+  }
+  const actions = document.createElement("div");
+  actions.className = "auth-actions";
+  actions.append(authButton("CANCEL", "secondary", () => void cancelActiveAuthLogin()));
+  flow.append(actions);
+  card.append(flow);
+}
+
+function authButton(label: string, variant: string, action: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `auth-button${variant ? ` ${variant}` : ""}`;
+  button.textContent = label;
+  button.disabled = authBusy;
+  button.addEventListener("click", action);
+  return button;
+}
+
+function externalLink(url: string, label: string): HTMLAnchorElement {
+  const link = document.createElement("a");
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = label;
+  return link;
+}
+
+async function startAuthLogin(method: "browser" | "device_code"): Promise<void> {
+  if (authBusy) return;
+  const popup = method === "browser" ? window.open("about:blank", "_blank") : null;
+  authBusy = true;
+  renderAuthDialog();
+  try {
+    const start = await authMutation<AuthLoginStart>("/api/auth/openai-codex/login", {
+      method: "POST",
+      body: JSON.stringify({ method }),
+    });
+    activeAuthLogin = { start, status: { status: "pending" } };
+    if (start.method === "browser" && popup) popup.location.href = start.authorizationUrl;
+    renderAuthDialog();
+    scheduleAuthPoll();
+  } catch (error) {
+    popup?.close();
+    notify(messageFrom(error));
+  } finally {
+    authBusy = false;
+    renderAuthDialog();
+  }
+}
+
+function scheduleAuthPoll(): void {
+  stopAuthPolling();
+  authPollTimer = window.setTimeout(() => void pollAuthLogin(), 2_000);
+}
+
+function stopAuthPolling(): void {
+  if (authPollTimer !== undefined) window.clearTimeout(authPollTimer);
+  authPollTimer = undefined;
+}
+
+async function pollAuthLogin(): Promise<void> {
+  const login = activeAuthLogin;
+  if (!login || login.status.status !== "pending") return;
+  try {
+    const status = await api<AuthLoginStatus>(`/api/auth/openai-codex/logins/${login.start.id}`);
+    if (activeAuthLogin?.start.id !== login.start.id) return;
+    activeAuthLogin.status = status;
+    if (status.status === "pending") {
+      scheduleAuthPoll();
+    } else if (status.status === "complete") {
+      await completeAuthLogin();
+    } else {
+      renderAuthDialog();
+    }
+  } catch (error) {
+    if (activeAuthLogin?.start.id === login.start.id) {
+      activeAuthLogin.status = { status: "failed", error: messageFrom(error) };
+      renderAuthDialog();
+    }
+  }
+}
+
+async function submitManualAuth(input: string): Promise<void> {
+  const login = activeAuthLogin;
+  if (!login || login.start.method !== "browser" || authBusy) return;
+  authBusy = true;
+  renderAuthDialog();
+  try {
+    const status = await authMutation<AuthLoginStatus>(
+      `/api/auth/openai-codex/logins/${login.start.id}/manual`,
+      { method: "POST", body: JSON.stringify({ input }) },
+    );
+    if (status.status === "complete") await completeAuthLogin();
+  } catch (error) {
+    notify(messageFrom(error));
+  } finally {
+    authBusy = false;
+    renderAuthDialog();
+  }
+}
+
+async function completeAuthLogin(): Promise<void> {
+  activeAuthLogin = null;
+  stopAuthPolling();
+  await loadAuthProviders();
+  await refreshConfig();
+  notify("OpenAI Codex connected");
+}
+
+async function refreshConfig(): Promise<void> {
+  try {
+    state.config = await api<Config>("/api/config");
+    renderConfig();
+  } catch {
+    // Keep the previous config; reopening the page refetches it.
+  }
+}
+
+async function cancelActiveAuthLogin(): Promise<void> {
+  const login = activeAuthLogin;
+  if (!login || authBusy) return;
+  authBusy = true;
+  stopAuthPolling();
+  try {
+    await authMutation(`/api/auth/openai-codex/logins/${login.start.id}`, { method: "DELETE" });
+    activeAuthLogin = null;
+  } catch (error) {
+    notify(messageFrom(error));
+  } finally {
+    authBusy = false;
+    renderAuthDialog();
+  }
+}
+
+async function logoutOpenAICodex(): Promise<void> {
+  if (authBusy) return;
+  authBusy = true;
+  renderAuthDialog();
+  try {
+    await authMutation("/api/auth/openai-codex", { method: "DELETE" });
+    await loadAuthProviders();
+    notify("OpenAI Codex disconnected");
+  } catch (error) {
+    notify(messageFrom(error));
+  } finally {
+    authBusy = false;
+    renderAuthDialog();
+  }
 }
 
 function openModelDialog(): void {
@@ -2794,6 +3101,15 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { ...init, headers: { "content-type": "application/json", ...init?.headers } });
   if (!response.ok) throw new Error(await responseError(response));
   return response.json() as Promise<T>;
+}
+
+async function authMutation<T = unknown>(path: string, init: RequestInit): Promise<T> {
+  const token = state.config?.authActionToken;
+  if (!token) throw new Error("Authentication settings are not initialized");
+  return api<T>(path, {
+    ...init,
+    headers: { ...init.headers, "x-amber-auth-action-token": token },
+  });
 }
 
 async function responseError(response: Response): Promise<string> {

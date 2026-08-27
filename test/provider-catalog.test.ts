@@ -190,6 +190,60 @@ test("discovers OpenAI models with bearer auth and creates an OpenAI provider", 
   assert.equal(catalog.provider(undefined).protocol, "openai");
 });
 
+test("uses OAuth-backed Codex discovery and provider requests", async () => {
+  let authResolutions = 0;
+  const settings: AmberSettings = {
+    default_provider: "openai-codex",
+    providers: {
+      "openai-codex": {
+        api: "openai",
+        auth: "openai-codex",
+        auth_url: "https://chatgpt.com/backend-api",
+        default_model: "gpt-codex",
+        models: {},
+      },
+    },
+    agents: [],
+  };
+  const fetcher: typeof fetch = async () => Response.json({
+    models: [{ slug: "gpt-codex", display_name: "GPT Codex", supported_in_api: true, visibility: "list" }],
+  });
+
+  const catalog = await ProviderCatalog.load(settings, fetcher, {
+    openAICodexAuth: async () => {
+      authResolutions++;
+      return { accessToken: "oauth-access", accountId: "account-1" };
+    },
+  });
+
+  assert.equal(authResolutions, 1);
+  assert.equal(catalog.defaultModel, "openai-codex/gpt-codex");
+  assert.deepEqual(catalog.models.map(({ key, displayName }) => ({ key, displayName })), [
+    { key: "openai-codex/gpt-codex", displayName: "GPT Codex" },
+  ]);
+  assert.equal(catalog.provider(undefined).protocol, "openai");
+});
+
+test("keeps configured Codex models available before login", async () => {
+  const catalog = await ProviderCatalog.load({
+    default_provider: "openai-codex",
+    providers: {
+      "openai-codex": {
+        api: "openai",
+        auth: "openai-codex",
+        auth_url: "https://chatgpt.com/backend-api",
+        default_model: "gpt-codex",
+        models: {},
+      },
+    },
+    agents: [],
+  }, async () => { throw new Error("not signed in"); }, {
+    openAICodexAuth: async () => { throw new Error("not signed in"); },
+  });
+
+  assert.deepEqual(catalog.models.map((model) => model.key), ["openai-codex/gpt-codex"]);
+});
+
 test("defaults each protocol to its own top thinking level", async () => {
   const fetcher: typeof fetch = async () => Response.json({ data: [{ id: "model-test" }] });
   const settings = (api: "anthropic" | "openai") => ({

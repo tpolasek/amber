@@ -202,6 +202,57 @@ test("loads OpenAI providers and extended reasoning levels", async () => {
   });
 });
 
+test("loads an OpenAI Codex OAuth provider without an API key", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const settingsDirectory = join(homeDirectory, ".amber");
+  await mkdir(settingsDirectory);
+  await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+    default_provider: "openai-codex",
+    providers: {
+      "openai-codex": {
+        api: "openai",
+        auth: "openai-codex",
+        default_model: "gpt-codex",
+        thinking_level: "high",
+      },
+    },
+  }), "utf8");
+
+  assert.deepEqual((await loadSettings(homeDirectory)).providers["openai-codex"], {
+    api: "openai",
+    auth: "openai-codex",
+    auth_url: "https://chatgpt.com/backend-api",
+    default_model: "gpt-codex",
+    thinking_level: "high",
+    models: {},
+  });
+});
+
+test("rejects OpenAI Codex OAuth providers without a usable fallback model", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const settingsDirectory = join(homeDirectory, ".amber");
+  await mkdir(settingsDirectory);
+  await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+    providers: { "openai-codex": { api: "openai", auth: "openai-codex" } },
+  }), "utf8");
+
+  await assert.rejects(
+    loadSettings(homeDirectory),
+    /openai-codex auth requires default_model or at least one explicit model/,
+  );
+});
+
+test("rejects OpenAI Codex OAuth on non-OpenAI providers", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const settingsDirectory = join(homeDirectory, ".amber");
+  await mkdir(settingsDirectory);
+  await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+    providers: { codex: { api: "anthropic", auth: "openai-codex", default_model: "gpt-test" } },
+  }), "utf8");
+
+  await assert.rejects(loadSettings(homeDirectory), /openai-codex auth requires api = "openai"/);
+});
+
 test("rejects slashed model names for anthropic providers", async () => {
   const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
   const settingsDirectory = join(homeDirectory, ".amber");

@@ -1,5 +1,5 @@
 import { anthropicDriver } from "./provider.js";
-import { openAIDriver } from "./openai-provider.js";
+import { createOpenAICodexDriver, openAIDriver, type OpenAIAuthResolver } from "./openai-provider.js";
 import { configuredSetting, type AmberSettings, type ProviderSettings } from "./settings.js";
 import type { ProviderDriver } from "./provider-driver.js";
 import type { LlmProvider, ProviderProtocol, ThinkingLevel } from "./types.js";
@@ -12,6 +12,10 @@ export interface AvailableModel {
   displayName: string;
   thinkingLevel: ThinkingLevel;
   compactTokens?: number;
+}
+
+export interface ProviderCatalogOptions {
+  openAICodexAuth?: OpenAIAuthResolver;
 }
 
 export class ProviderCatalog {
@@ -28,6 +32,7 @@ export class ProviderCatalog {
   static async load(
     settings: AmberSettings,
     fetchModelList: typeof fetch = fetch,
+    options: ProviderCatalogOptions = {},
   ): Promise<ProviderCatalog> {
     const configuredProviders = providerEntries(settings);
     if (configuredProviders.length === 0) {
@@ -38,7 +43,7 @@ export class ProviderCatalog {
     const providers = new Map<string, LlmProvider>();
     const providerDefaults = new Map<string, string>();
     for (const [providerName, provider] of configuredProviders) {
-      const driver = driverFor(provider.api);
+      const driver = driverFor(provider, options.openAICodexAuth);
       const explicitModelNames = Object.keys(provider.models);
       const fallbackModels = [...new Set([
         ...explicitModelNames,
@@ -48,7 +53,7 @@ export class ProviderCatalog {
       try {
         discovered = await driver.discoverModels({
           name: providerName,
-          authKey: provider.auth_key,
+          authKey: configuredSetting(provider.auth_key) ?? "",
           baseUrl: provider.auth_url,
         }, fetchModelList);
       } catch (error) {
@@ -88,7 +93,7 @@ export class ProviderCatalog {
         });
         providers.set(key, driver.createProvider({
           name: providerName,
-          authKey: provider.auth_key,
+          authKey: configuredSetting(provider.auth_key) ?? "",
           baseUrl: provider.auth_url,
           model: discoveredModel.id,
           thinkingLevel,
@@ -123,7 +128,7 @@ export class ProviderCatalog {
 
 function providerEntries(settings: AmberSettings): Array<[string, ProviderSettings]> {
   return Object.entries(settings.providers).map(([name, provider]) => {
-    if (!configuredSetting(provider.auth_key)) {
+    if (provider.auth !== "openai-codex" && !configuredSetting(provider.auth_key)) {
       throw new Error(`Set providers.${name}.auth_key in ~/.amber/settings.toml`);
     }
     if (!configuredSetting(provider.auth_url)) {
@@ -133,8 +138,13 @@ function providerEntries(settings: AmberSettings): Array<[string, ProviderSettin
   });
 }
 
-function driverFor(protocol: ProviderProtocol): ProviderDriver {
-  return protocol === "openai" ? openAIDriver : anthropicDriver;
+function driverFor(provider: ProviderSettings, openAICodexAuth?: OpenAIAuthResolver): ProviderDriver {
+  if (provider.auth === "openai-codex") {
+    return createOpenAICodexDriver(openAICodexAuth ?? (async () => {
+      throw new Error("OpenAI Codex is not signed in. Open Auth settings to connect ChatGPT.");
+    }));
+  }
+  return provider.api === "openai" ? openAIDriver : anthropicDriver;
 }
 
 function errorMessage(error: unknown): string {
