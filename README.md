@@ -8,13 +8,11 @@ So I reverse-engineered Claude Code and rebuilt it from scratch as a minimal web
 Amber takes advantage of the fact that it's in a web browser to do many things that CLIs cannot do easily, such as linking forked sessions together with hyperlinks, and linking agent sessions to the main session and vice versa.
 
 What makes it different:
-
-* Amber takes advantage of hyperlinks: agent sessions are session forks that are links in the browser.
-* Provider-agnostic — works with both Anthropic- and OpenAI-compatible APIs.
-* Only 3 runtime npm dependencies — diff, markdown-it, and smol-toml for parsing settings. No framework, no database, no bloat.
-* Easily configurable sub-agents. You can even customize the model per each agent.
-* Claude Code, rebuilt. Reverse-engineered from Claude Code's behavior, reproducing the prompt flow accurately while stripping it down to a lightweight tool.
-* Supports Codex login and pretty much any other provider with OpenAI API and Anthropic API support.
+* Amber takes advantage of **hyperlinks everywhere**.
+* **Supports OpenAI Codex plans** and pretty much any other provider with OpenAI API and Anthropic API support.
+* Only 3 runtime npm dependencies — **diff**, **markdown-it**, and **smol-toml** for parsing settings. No framework, no database, no bloat.
+* Easily configurable sub-agents. You can even **customize the model per each agent.**
+* Claude Code, rebuilt. **Reverse-engineered from Claude Code's behavior**, reproducing the prompt flow accurately while stripping it down to a lightweight tool.
 ## Install and run
 
 ### Prebuilt binary
