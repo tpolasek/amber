@@ -1,12 +1,11 @@
 # Amber
+<img width="945" height="633" alt="amber_gold" src="https://github.com/user-attachments/assets/657cf2c9-17a8-4e07-9fc1-2e77daf409f2" />
 
-I built Amber because I wanted a coding agent that felt like a terminal — but with a browser UI to take advantage of linking. Also Claude Code has a serious amount of bloat that I wanted to cut out.
+I built Amber because I wanted a coding agent that felt like a terminal, but with a browser UI to take advantage of linking. Also Claude Code has a serious amount of bloat that I wanted to cut out.
 
-So I reverse-engineered Claude Code and rebuilt it from scratch as a minimal local web CLI, with prompt-accurate reproduction of the workflow.
+So I reverse-engineered Claude Code and rebuilt it from scratch as a minimal web CLI, with prompt-accurate reproduction of the workflow.
 
 Amber takes advantage of the fact that it's in a web browser to do many things that CLIs cannot do easily, such as linking forked sessions together with hyperlinks, and linking agent sessions to the main session and vice versa.
-
-<img width="1365" height="787" alt="image" src="https://github.com/user-attachments/assets/d4c61c39-40a1-4044-9afd-4d767ed55aa6" />
 
 What makes it different:
 
@@ -15,7 +14,7 @@ What makes it different:
 * Only 3 runtime npm dependencies — diff, markdown-it, and smol-toml for parsing settings. No framework, no database, no bloat.
 * Easily configurable sub-agents. You can even customize the model per each agent.
 * Claude Code, rebuilt. Reverse-engineered from Claude Code's behavior, reproducing the prompt flow accurately while stripping it down to a lightweight tool.
-
+* Supports Codex login and pretty much any other provider with OpenAI API and Anthropic API support.
 ## Install and run
 
 ### Prebuilt binary
@@ -28,7 +27,7 @@ export PATH="$HOME/.local/bin:$PATH"
 amber
 ```
 
-The first run creates **~/.amber/settings.toml**. Add your provider credentials, then run **amber** again. AMBER opens its local browser interface automatically.
+The first run creates **~/.amber/settings.toml**. Add your provider credentials, then run **amber** again.
 
 ### Run from source
 
