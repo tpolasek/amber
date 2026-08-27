@@ -47,7 +47,7 @@ npm run dev
 
 ## Configure **settings.toml**
 
-AMBER reads **~/.amber/settings.toml**. Each provider is configured with **api = "anthropic"** (Anthropic Messages API) or **api = "openai"** (OpenAI Responses API); **api** defaults to **"anthropic"** when omitted. Either way, providers discover their available models from **/v1/models**.
+AMBER reads **~/.amber/settings.toml**. Each provider is configured with **api = "anthropic"** (Anthropic Messages API) or **api = "openai"** (OpenAI Responses API); **api** defaults to **"anthropic"** when omitted. Either way, providers discover their available models from **/v1/models**. OpenAI-protocol providers prefer the Responses API and automatically fall back to **Chat Completions** when the server does not implement it (LM Studio, Ollama, vLLM, llama.cpp), so local servers work without extra configuration.
 
 ```toml
 default_provider = "zai"
@@ -72,6 +72,16 @@ auth_key = "your-openai-key"
 auth_url = "https://api.openai.com"
 default_model = "gpt-5.4"
 thinking_level = "high"
+
+# Local servers speaking the OpenAI Chat Completions API (LM Studio, Ollama,
+# vLLM, llama.cpp) use the same "openai" protocol: AMBER tries the Responses
+# API first and falls back to Chat Completions when it is unavailable.
+[providers.lm-studio]
+api = "openai"
+auth_key = "your-local-key"   # Any non-empty string when the server does not check keys.
+auth_url = "http://127.0.0.1:1234/v1"
+default_model = "qwen3-32b"
+thinking_level = "high"       # Reasoning is controlled server-side; deltas display when streamed.
 
 [[agents]]
 type = "explore"

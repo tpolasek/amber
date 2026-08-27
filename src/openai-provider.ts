@@ -10,9 +10,14 @@ import type {
   ToolDefinition,
 } from "./types.js";
 import { providerApiUrl, type DiscoveredModel, type ProviderDriver } from "./provider-driver.js";
+import { streamChatCompletions } from "./openai-chat-provider.js";
 import { readServerSentEvents } from "./sse.js";
 
 const REASONING_STATE_PREFIX = "openai-reasoning:";
+
+// BaseUrls whose servers lack /v1/responses (e.g. older LM Studio); they get the
+// Chat Completions fallback for the lifetime of the process.
+const chatOnlyBaseUrls = new Set<string>();
 
 export interface ResolvedOpenAIAuth {
   accessToken: string;
@@ -83,6 +88,20 @@ export class OpenAIProvider implements LlmProvider {
   }
 
   async *stream(messages: ProviderMessage[], signal: AbortSignal, options?: StreamOptions): AsyncGenerator<StreamEvent> {
+    const chatFallback = (): AsyncGenerator<StreamEvent> => streamChatCompletions({
+      apiKey: this.#apiKey ?? "",
+      baseUrl: this.#baseUrl,
+      model: this.model,
+      messages,
+      ...(options?.system !== undefined ? { system: options.system } : {}),
+      ...(options?.tools !== undefined ? { tools: options.tools } : {}),
+      ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+      signal,
+    });
+    if (!this.#codex && chatOnlyBaseUrls.has(this.#baseUrl)) {
+      yield* chatFallback();
+      return;
+    }
     const reasoningEnabled = options?.thinking !== false && this.#thinkingLevel !== "none";
     const auth = this.#authResolver
       ? await this.#authResolver(signal)
@@ -123,6 +142,13 @@ export class OpenAIProvider implements LlmProvider {
     );
 
     if (!response.ok) {
+      // A missing Responses endpoint (404) means the server only implements
+      // Chat Completions; any other failure is a real request error.
+      if (!this.#codex && response.status === 404) {
+        chatOnlyBaseUrls.add(this.#baseUrl);
+        yield* chatFallback();
+        return;
+      }
       const body = await response.text();
       throw new Error(`OpenAI request failed (${response.status}): ${extractApiError(body)}`);
     }
