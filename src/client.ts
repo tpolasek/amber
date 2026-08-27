@@ -101,6 +101,9 @@ interface SessionStreamContext {
 }
 const streamingThinkingStates = new WeakMap<HTMLElement, StreamingThinkingState>();
 const transcriptScrollPin = new BottomScrollPin();
+// Shared by the transcript and the streaming thinking containers: scrolling up
+// inside any of them must unpin bottom-following for the whole transcript.
+let userScrollUpIntent = false;
 let renderedTranscriptSessionId: string | null = null;
 let tasksDialogTasks: BackgroundTask[] = [];
 let tasksDialogSelection = 0;
@@ -347,7 +350,6 @@ function wireEvents(): void {
   elements.toggleSidebar.addEventListener("click", () => document.body.classList.add("sidebar-open"));
   elements.closeSidebar.addEventListener("click", () => document.body.classList.remove("sidebar-open"));
   let lastTranscriptScrollTop = elements.transcript.scrollTop;
-  let userScrollUpIntent = false;
   let lastTouchY = 0;
   elements.transcript.addEventListener("scroll", () => {
     const { scrollTop, clientHeight, scrollHeight } = elements.transcript;
@@ -370,9 +372,12 @@ function wireEvents(): void {
     lastTouchY = touchY ?? lastTouchY;
   }, { passive: true });
   elements.transcript.addEventListener("mousedown", (event) => {
-    // Scrollbar drags: the press landed inside the element's scrollbar gutter.
-    const bounds = elements.transcript.getBoundingClientRect();
-    if (event.clientX > bounds.left + elements.transcript.clientWidth) userScrollUpIntent = true;
+    // Scrollbar drags: the press landed inside a scrollable element's gutter.
+    const scroller = event.target instanceof Element
+      ? event.target.closest(".thinking-content") ?? elements.transcript
+      : elements.transcript;
+    const bounds = scroller.getBoundingClientRect();
+    if (event.clientX > bounds.left + scroller.clientWidth) userScrollUpIntent = true;
   });
   document.addEventListener("keydown", (event) => {
     if (event.defaultPrevented) return;
@@ -2574,11 +2579,16 @@ function updateStreamingThinkingReveal(
   let state = streamingThinkingStates.get(element);
   if (!state) {
     container.replaceChildren();
-    const onScroll = () => transcriptScrollPin.update(
-      container.scrollTop,
-      container.clientHeight,
-      container.scrollHeight,
-    );
+    let lastThinkingScrollTop = container.scrollTop;
+    const onScroll = () => {
+      const { scrollTop, clientHeight, scrollHeight } = container;
+      const scrolledUp = scrollTop < lastThinkingScrollTop - 1;
+      lastThinkingScrollTop = scrollTop;
+      // Same rule as the transcript: only an explicit user scroll upwards may
+      // unpin; reveal-driven snaps and content growth must stay pinned.
+      if (scrollHeight - scrollTop - clientHeight <= STREAMING_THINKING_BOTTOM_THRESHOLD_PX) userScrollUpIntent = false;
+      transcriptScrollPin.update(scrollTop, clientHeight, scrollHeight, scrolledUp && userScrollUpIntent);
+    };
     container.addEventListener("scroll", onScroll, { passive: true });
     const reveal = new StreamingThinkingReveal((displayed) => {
       if (!element.isConnected) {
