@@ -8,6 +8,8 @@ import { browserUrl, openBrowser } from "./browser-launch.js";
 import { SessionStore } from "./store.js";
 import { ProviderCatalog } from "./provider-catalog.js";
 import { loadSettings } from "./settings.js";
+import { AuthStorage } from "./auth-storage.js";
+import { OpenAICodexAuth } from "./openai-codex-oauth.js";
 import { buildProviderHistory, isModelMessage } from "./history.js";
 import { generateSessionTitle, shouldAutoNameSession } from "./session-title.js";
 import { estimateHistoryTokens, formatCompactionBanner, generateCompactionSummary, shouldAutoCompact } from "./compaction.js";
@@ -76,21 +78,22 @@ const clientFormattersScript = join(sourceDirectory, "client-formatters.js");
 const streamingThinkingScript = join(sourceDirectory, "streaming-thinking.js");
 const toolDisplayScript = join(sourceDirectory, "tool-display.js");
 const markdownScript = join(projectRoot, "node_modules", "markdown-it", "dist", "browser", "markdown-it.umd.min.js");
-const defaultDataDirectory = join(homedir(), ".amber", "data", "sessions");
+const amberDirectory = join(homedir(), ".amber");
+const defaultDataDirectory = join(amberDirectory, "data", "sessions");
 const dataDirectory = resolve(process.env.DATA_DIR ?? defaultDataDirectory);
-const planDirectory = join(homedir(), ".amber", "plans");
+const planDirectory = join(amberDirectory, "plans");
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "127.0.0.1";
 const store = new SessionStore(dataDirectory, planDirectory);
+const authStorage = new AuthStorage(join(amberDirectory, "auth.json"));
+const openAICodexAuth = new OpenAICodexAuth({ storage: authStorage });
+const authActionToken = randomUUID();
 const settings = await loadSettings();
 const agentDefinitions = settings.agents;
-const providerCatalog = await ProviderCatalog.load(settings);
-const provider = providerCatalog.provider(undefined);
-for (const definition of agentDefinitions) {
-  if (definition.model && !providerCatalog.has(definition.model)) {
-    throw new Error(`Agent type '${definition.type}' references unknown model '${definition.model}'`);
-  }
-}
+let providerCatalog = await loadProviderCatalog();
+let provider = providerCatalog.provider(undefined);
+validateAgentModels(providerCatalog);
+const loginCatalogActivations = new Map<string, Promise<void>>();
 const claudeCodeTools = createClaudeCodeTools(agentDefinitions);
 const activeSessions = new ActiveSessionRuns();
 const backgroundTasks = new BackgroundTaskManager();
@@ -136,6 +139,7 @@ const shutdown = () => {
   backgroundTasks.stopAll();
   askUserQuestions.stopAll();
   planModeApprovals.stopAll();
+  openAICodexAuth.dispose();
   for (const run of automaticNameRuns.values()) run.controller.abort();
   automaticNameRuns.clear();
   for (const subscribers of sessionEventSubscribers.values()) {
@@ -160,7 +164,66 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       mode: provider.mode,
       homeDirectory: homedir(),
       workspaceRoot,
+      authActionToken,
     });
+  }
+  if (method === "GET" && url.pathname === "/api/auth") {
+    return json(response, 200, {
+      providers: [{
+        id: "openai-codex",
+        name: "OpenAI Codex",
+        authName: "ChatGPT Plus/Pro",
+        configured: await openAICodexAuth.configured(),
+        providerConfigured: Object.values(settings.providers).some((candidate) => candidate.auth === "openai-codex"),
+      }],
+    });
+  }
+  if (method === "POST" && url.pathname === "/api/auth/openai-codex/login") {
+    if (!authorizeAuthMutation(request, response)) return;
+    const body = await readJson(request);
+    try {
+      if (body.method === "browser") return json(response, 201, await openAICodexAuth.beginBrowserLogin());
+      if (body.method === "device_code") return json(response, 201, await openAICodexAuth.beginDeviceLogin());
+      return json(response, 400, { error: "Login method must be browser or device_code" });
+    } catch (error) {
+      return json(response, 409, { error: errorMessage(error) });
+    }
+  }
+  const authLoginMatch = url.pathname.match(/^\/api\/auth\/openai-codex\/logins\/([a-z0-9-]+)$/);
+  if (method === "GET" && authLoginMatch?.[1]) {
+    try {
+      const status = openAICodexAuth.loginStatus(authLoginMatch[1]);
+      await activateCompletedLogin(authLoginMatch[1], status);
+      return json(response, 200, status);
+    } catch (error) {
+      return json(response, 404, { error: errorMessage(error) });
+    }
+  }
+  const authManualMatch = url.pathname.match(/^\/api\/auth\/openai-codex\/logins\/([a-z0-9-]+)\/manual$/);
+  if (method === "POST" && authManualMatch?.[1]) {
+    if (!authorizeAuthMutation(request, response)) return;
+    const body = await readJson(request);
+    if (typeof body.input !== "string" || !body.input.trim()) {
+      return json(response, 400, { error: "Authorization code or redirect URL is required" });
+    }
+    try {
+      await openAICodexAuth.completeBrowserLogin(authManualMatch[1], body.input);
+      const status = openAICodexAuth.loginStatus(authManualMatch[1]);
+      await activateCompletedLogin(authManualMatch[1], status);
+      return json(response, 200, status);
+    } catch (error) {
+      return json(response, 400, { error: errorMessage(error) });
+    }
+  }
+  if (method === "DELETE" && authLoginMatch?.[1]) {
+    if (!authorizeAuthMutation(request, response)) return;
+    openAICodexAuth.cancelLogin(authLoginMatch[1]);
+    return json(response, 200, { cancelled: true });
+  }
+  if (method === "DELETE" && url.pathname === "/api/auth/openai-codex") {
+    if (!authorizeAuthMutation(request, response)) return;
+    await openAICodexAuth.logout();
+    return json(response, 200, { configured: false });
   }
   if (method === "POST" && url.pathname === "/api/run") {
     return runPrompt(request, response);
@@ -1577,6 +1640,68 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
 function json(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   response.end(JSON.stringify(body));
+}
+
+async function loadProviderCatalog(): Promise<ProviderCatalog> {
+  return ProviderCatalog.load(settings, fetch, {
+    openAICodexAuth: (signal) => openAICodexAuth.resolveAuth(signal),
+  });
+}
+
+function validateAgentModels(catalog: ProviderCatalog): void {
+  for (const definition of agentDefinitions) {
+    if (definition.model && !catalog.has(definition.model)) {
+      throw new Error(`Agent type '${definition.type}' references unknown model '${definition.model}'`);
+    }
+  }
+}
+
+async function activateCompletedLogin(loginId: string, status: { status: string }): Promise<void> {
+  if (status.status !== "complete") return;
+  let activation = loginCatalogActivations.get(loginId);
+  if (!activation) {
+    activation = (async () => {
+      try {
+        const nextCatalog = await loadProviderCatalog();
+        validateAgentModels(nextCatalog);
+        providerCatalog = nextCatalog;
+        provider = nextCatalog.provider(undefined);
+      } catch (error) {
+        // The login itself succeeded; a failed model re-discovery must not
+        // report it as failed. Keep the previous catalog and its fallback models.
+        console.error(`Model catalog refresh after login failed: ${errorMessage(error)}`);
+      }
+    })();
+    loginCatalogActivations.set(loginId, activation);
+  }
+  await activation;
+}
+
+function authorizeAuthMutation(request: IncomingMessage, response: ServerResponse): boolean {
+  if (!isLoopbackWebRequest(request)) {
+    json(response, 403, { error: "Provider authentication can only be changed from Amber's local interface" });
+    return false;
+  }
+  if (request.headers["x-amber-auth-action-token"] === authActionToken) return true;
+  json(response, 403, { error: "Invalid auth action token" });
+  return false;
+}
+
+function isLoopbackWebRequest(request: IncomingMessage): boolean {
+  try {
+    const hostHeader = request.headers.host;
+    if (!hostHeader || !isLoopbackHostname(new URL(`http://${hostHeader}`).hostname)) return false;
+    const origin = request.headers.origin;
+    if (!origin) return true;
+    const parsed = new URL(origin);
+    return parsed.protocol === "http:" && isLoopbackHostname(parsed.hostname) && parsed.port === String(port);
+  } catch {
+    return false;
+  }
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
 }
 
 function sendEvent(response: ServerResponse, event: string, data: unknown): void {

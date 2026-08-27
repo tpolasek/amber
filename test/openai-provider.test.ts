@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { OpenAIProvider } from "../src/openai-provider.js";
+import { OpenAIProvider, createOpenAICodexDriver } from "../src/openai-provider.js";
 import type { ProviderMessage, StreamEvent } from "../src/types.js";
 
 test("streams OpenAI Responses text, reasoning, tools, and usage", async (context) => {
@@ -109,6 +109,84 @@ test("streams OpenAI Responses text, reasoning, tools, and usage", async (contex
     { type: "tool_input_delta", index: 2, partialJson: '{"file_path":"README.md"}' },
     { type: "usage", usage: { input: 120, output: 30 } },
     { type: "done", stopReason: "completed" },
+  ]);
+});
+
+test("uses refreshed OAuth auth and Codex-specific headers, endpoint, and payload", async (context) => {
+  let receivedHeaders = new Headers();
+  let receivedPath = "";
+  let requestBody: Record<string, unknown> = {};
+  const gateway = createServer(async (request, response) => {
+    receivedHeaders = new Headers(request.headers as Record<string, string>);
+    receivedPath = request.url ?? "";
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    requestBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end('data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n\n');
+  });
+  gateway.listen(0, "127.0.0.1");
+  await once(gateway, "listening");
+  context.after(() => gateway.close());
+  const address = gateway.address();
+  assert(address && typeof address === "object");
+  let authResolutions = 0;
+  const driver = createOpenAICodexDriver(async () => {
+    authResolutions++;
+    return { accessToken: "oauth-access", accountId: "account-123" };
+  });
+  const provider = driver.createProvider({
+    name: "OpenAI Codex",
+    authKey: "",
+    baseUrl: `http://127.0.0.1:${address.port}/backend-api`,
+    model: "gpt-test",
+    thinkingLevel: "high",
+  });
+
+  for await (const _event of provider.stream([{ role: "user", content: "Hello" }], new AbortController().signal)) {
+    /* consume */
+  }
+
+  assert.equal(authResolutions, 1);
+  assert.equal(receivedPath, "/backend-api/codex/responses");
+  assert.equal(receivedHeaders.get("authorization"), "Bearer oauth-access");
+  assert.equal(receivedHeaders.get("chatgpt-account-id"), "account-123");
+  assert.equal(receivedHeaders.get("originator"), "amber");
+  assert.equal(receivedHeaders.get("openai-beta"), "responses=experimental");
+  assert.equal(requestBody.max_output_tokens, undefined);
+  assert.deepEqual(requestBody.text, { verbosity: "low" });
+  assert.equal(requestBody.tool_choice, "auto");
+});
+
+test("discovers supported Codex models with OAuth request headers", async () => {
+  let requestUrl = "";
+  let requestHeaders = new Headers();
+  const driver = createOpenAICodexDriver(async () => ({ accessToken: "access", accountId: "account" }));
+  const models = await driver.discoverModels({
+    name: "OpenAI Codex",
+    authKey: "",
+    baseUrl: "https://chatgpt.com/backend-api",
+  }, async (input, init) => {
+    requestUrl = String(input);
+    requestHeaders = new Headers(init?.headers);
+    return Response.json({
+      models: [
+        { slug: "gpt-codex", display_name: "GPT Codex", visibility: "list" },
+        { slug: "chatgpt-only", display_name: "ChatGPT Only", supported_in_api: false, visibility: "list" },
+        { slug: "hidden", display_name: "Hidden", visibility: "hide" },
+        { slug: "api-only", display_name: "API Only", visibility: "none" },
+      ],
+    });
+  });
+
+  assert.match(requestUrl, /\/backend-api\/codex\/models\?client_version=/);
+  assert.notEqual(new URL(requestUrl).searchParams.get("client_version"), "0.1.0");
+  assert.equal(requestHeaders.get("authorization"), "Bearer access");
+  assert.equal(requestHeaders.get("chatgpt-account-id"), "account");
+  assert.equal(requestHeaders.get("originator"), "amber");
+  assert.deepEqual(models, [
+    { id: "gpt-codex", displayName: "GPT Codex" },
+    { id: "chatgpt-only", displayName: "ChatGPT Only" },
   ]);
 });
 

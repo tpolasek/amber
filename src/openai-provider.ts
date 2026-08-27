@@ -14,9 +14,18 @@ import { readServerSentEvents } from "./sse.js";
 
 const REASONING_STATE_PREFIX = "openai-reasoning:";
 
+export interface ResolvedOpenAIAuth {
+  accessToken: string;
+  accountId?: string;
+}
+
+export type OpenAIAuthResolver = (signal?: AbortSignal) => Promise<ResolvedOpenAIAuth>;
+
 interface OpenAIProviderOptions {
   name?: string;
-  apiKey: string;
+  apiKey?: string;
+  authResolver?: OpenAIAuthResolver;
+  codex?: boolean;
   model: string;
   baseUrl: string;
   thinkingLevel?: ThinkingLevel;
@@ -56,43 +65,62 @@ export class OpenAIProvider implements LlmProvider {
   readonly protocol = "openai" as const;
   readonly mode = "live" as const;
   readonly model: string;
-  readonly #apiKey: string;
+  readonly #apiKey: string | undefined;
+  readonly #authResolver: OpenAIAuthResolver | undefined;
   readonly #baseUrl: string;
+  readonly #codex: boolean;
   readonly #thinkingLevel: ThinkingLevel;
 
   constructor(options: OpenAIProviderOptions) {
+    if (!options.apiKey && !options.authResolver) throw new Error("OpenAI authentication is required");
     this.name = options.name ?? "OpenAI";
     this.#apiKey = options.apiKey;
+    this.#authResolver = options.authResolver;
     this.model = options.model;
     this.#baseUrl = options.baseUrl;
+    this.#codex = options.codex ?? false;
     this.#thinkingLevel = options.thinkingLevel ?? "xhigh";
   }
 
   async *stream(messages: ProviderMessage[], signal: AbortSignal, options?: StreamOptions): AsyncGenerator<StreamEvent> {
     const reasoningEnabled = options?.thinking !== false && this.#thinkingLevel !== "none";
-    const response = await fetch(providerApiUrl(this.#baseUrl, "responses"), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${this.#apiKey}`,
+    const auth = this.#authResolver
+      ? await this.#authResolver(signal)
+      : { accessToken: this.#apiKey! };
+    const headers: Record<string, string> = this.#codex
+      ? {
+          ...codexHeaders(auth),
+          "content-type": "application/json",
+          "openai-beta": "responses=experimental",
+          accept: "text/event-stream",
+        }
+      : {
+          "content-type": "application/json",
+          authorization: `Bearer ${auth.accessToken}`,
+        };
+    const response = await fetch(
+      this.#codex ? codexApiUrl(this.#baseUrl, "responses") : providerApiUrl(this.#baseUrl, "responses"),
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: this.model,
+          input: toOpenAIInput(messages),
+          instructions: systemText(options?.system),
+          ...(!this.#codex ? { max_output_tokens: 32_000 } : { text: { verbosity: "low" }, tool_choice: "auto" }),
+          stream: true,
+          store: false,
+          parallel_tool_calls: true,
+          ...(options?.tools?.length ? { tools: options.tools.map(toOpenAITool) } : {}),
+          ...(reasoningEnabled ? {
+            reasoning: { effort: openAIEffort(this.#thinkingLevel), summary: "auto" },
+            include: ["reasoning.encrypted_content"],
+          } : {}),
+          ...(!reasoningEnabled && options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+        }),
+        signal,
       },
-      body: JSON.stringify({
-        model: this.model,
-        input: toOpenAIInput(messages),
-        instructions: systemText(options?.system),
-        max_output_tokens: 32_000,
-        stream: true,
-        store: false,
-        parallel_tool_calls: true,
-        ...(options?.tools?.length ? { tools: options.tools.map(toOpenAITool) } : {}),
-        ...(reasoningEnabled ? {
-          reasoning: { effort: openAIEffort(this.#thinkingLevel), summary: "auto" },
-          include: ["reasoning.encrypted_content"],
-        } : {}),
-        ...(!reasoningEnabled && options?.temperature !== undefined ? { temperature: options.temperature } : {}),
-      }),
-      signal,
-    });
+    );
 
     if (!response.ok) {
       const body = await response.text();
@@ -182,6 +210,77 @@ export const openAIDriver: ProviderDriver = {
     });
   },
 };
+
+export function createOpenAICodexDriver(authResolver: OpenAIAuthResolver): ProviderDriver {
+  return {
+    protocol: "openai",
+    defaultThinkingLevel: "xhigh",
+    async discoverModels(connection, fetcher): Promise<DiscoveredModel[]> {
+      const auth = await authResolver();
+      if (!auth.accountId) throw new Error("OpenAI Codex authentication is missing the ChatGPT account id");
+      const url = new URL(codexApiUrl(connection.baseUrl, "models"));
+      // The backend gates models by minimal_client_version against this value,
+      // so it must track a current Codex CLI release rather than Amber's own version.
+      url.searchParams.set("client_version", codexClientVersion());
+      const response = await fetcher(url, {
+        headers: codexHeaders(auth),
+      });
+      if (!response.ok) throw new Error(`Codex model list failed (${response.status}): ${await response.text()}`);
+      const body = await response.json() as {
+        models?: Array<{
+          slug?: unknown;
+          display_name?: unknown;
+          visibility?: unknown;
+        }>;
+      };
+      return (body.models ?? [])
+        // ChatGPT-subscription mode sees every model (supported_in_api is not a
+        // filter); the picker gates on visibility "list" — "hide" and "none" stay out.
+        .filter((candidate): candidate is { slug: string; display_name?: string } =>
+          typeof candidate.slug === "string" && Boolean(candidate.slug)
+          && candidate.visibility !== "hide" && candidate.visibility !== "none")
+        .map((candidate) => ({
+          id: candidate.slug,
+          displayName: typeof candidate.display_name === "string" && candidate.display_name
+            ? candidate.display_name
+            : candidate.slug,
+        }));
+    },
+    createProvider(connection) {
+      return new OpenAIProvider({
+        name: connection.name,
+        authResolver,
+        codex: true,
+        baseUrl: connection.baseUrl,
+        model: connection.model,
+        thinkingLevel: connection.thinkingLevel,
+      });
+    },
+  };
+}
+
+function codexApiUrl(baseUrl: string, path: string): string {
+  const base = baseUrl.replace(/\/+$/, "");
+  const codexBase = base.endsWith("/codex") ? base : `${base}/codex`;
+  return `${codexBase}/${path.replace(/^\/+/, "")}`;
+}
+
+// Codex CLI release the models request identifies as. Overridable for testing
+// or when the backend requires a newer minimal_client_version.
+const CODEX_CLIENT_VERSION = "0.150.1";
+
+function codexClientVersion(): string {
+  return process.env.AMBER_CODEX_CLIENT_VERSION ?? CODEX_CLIENT_VERSION;
+}
+
+function codexHeaders(auth: ResolvedOpenAIAuth): Record<string, string> {
+  if (!auth.accountId) throw new Error("OpenAI Codex authentication is missing the ChatGPT account id");
+  return {
+    authorization: `Bearer ${auth.accessToken}`,
+    "chatgpt-account-id": auth.accountId,
+    originator: "amber",
+  };
+}
 
 function toOpenAIInput(messages: ProviderMessage[]): unknown[] {
   const input: unknown[] = [];

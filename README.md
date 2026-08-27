@@ -84,7 +84,29 @@ readOnly = true
 model = "zai/glm-5.3" # Optional; otherwise inherits the session model.
 ```
 
-Provider credentials belong under **[providers.\<name>]**, never under an agent. All provider configuration comes from **settings.toml**; no environment variables are used. **api** selects the provider's protocol: **"anthropic"** (the default) or **"openai"**. OpenAI-protocol providers accept slashed model ids such as **xiaomi/mimo-v2-pro**, so OpenRouter-style backends work. Models are referenced as **provider/model**. Select a session's model from the model name in the browser's top-right corner.
+Provider credentials belong under **[providers.\<name>]**, never under an agent. API-key provider configuration comes from **settings.toml**; no environment variables are used. **api** selects the provider's protocol: **"anthropic"** (the default) or **"openai"**. OpenAI-protocol providers accept slashed model ids such as **xiaomi/mimo-v2-pro**, so OpenRouter-style backends work. Models are referenced as **provider/model**. Select a session's model from the model name in the browser's top-right corner.
+
+### ChatGPT Plus/Pro OAuth for OpenAI Codex
+
+Amber can use a ChatGPT Plus/Pro subscription through OpenAI's Codex OAuth flow. Configure the provider without an API key:
+
+```toml
+default_provider = "openai-codex"
+
+[providers.openai-codex]
+api = "openai"
+auth = "openai-codex"
+# auth_url defaults to https://chatgpt.com/backend-api
+default_model = "gpt-5.4" # Required (or list models) so the provider works before login; replaced by discovery after connecting.
+thinking_level = "high"
+```
+
+Start Amber, open **AUTH → PROVIDERS** in the sidebar, and choose either:
+
+- **Browser login** — Authorization Code + PKCE through `auth.openai.com`, with a state-validated callback on `localhost:1455`. Remote sessions can paste the final redirect URL or authorization code.
+- **Device code** — displays a code for `https://auth.openai.com/codex/device` and waits for authorization.
+
+Amber uses OpenAI Codex's public native-client ID and sends `originator=amber`. OAuth credentials are stored in **~/.amber/auth.json** with user-only permissions. Access tokens are refreshed automatically when fewer than five minutes remain; refreshes are serialized so concurrent requests cannot overwrite a rotated refresh token. The file contains plaintext access and refresh tokens, so protect access to your user account and home directory.
 
 ## Dependencies
 
