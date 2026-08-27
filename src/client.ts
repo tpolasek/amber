@@ -42,7 +42,7 @@ interface PlanningTask { id: string; subject: string; description: string; activ
 interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; model?: string; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error"; planningTasks?: PlanningTask[]; planningTaskArchiveHighWaterMark?: number; contextTokens?: number; planMode?: SessionPlanMode }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface AvailableModel { key: string; provider: string; api: "anthropic" | "openai"; model: string; displayName: string; thinkingLevel: "none" | "low" | "medium" | "high" | "xhigh" | "max"; compactTokens?: number }
-interface Config { provider: string; model: string; defaultModel: string; models: AvailableModel[]; mode: "live"; homeDirectory: string; workspaceRoot: string; authActionToken: string }
+interface Config { provider: string; model: string; defaultModel: string; models: AvailableModel[]; mode: "live"; homeDirectory: string; workspaceRoot: string; authActionToken: string; theme: "dark" | "light" | "hacker" }
 interface AuthProviderStatus { id: "openai-codex"; name: string; authName: string; configured: boolean; providerConfigured: boolean }
 type AuthLoginStatus = { status: "pending" } | { status: "complete" } | { status: "failed"; error: string } | { status: "cancelled" };
 type AuthLoginStart =
@@ -247,6 +247,7 @@ async function initialize(): Promise<void> {
   wireEvents();
   try {
     state.config = await api<Config>("/api/config");
+    document.documentElement.dataset.theme = state.config.theme;
     renderConfig();
     await loadSessionList();
     const id = location.pathname.match(SESSION_ROUTE)?.[1];

@@ -50,6 +50,7 @@ npm run dev
 AMBER reads **~/.amber/settings.toml**. Each provider is configured with **api = "anthropic"** (Anthropic Messages API) or **api = "openai"** (OpenAI Responses API); **api** defaults to **"anthropic"** when omitted. Either way, providers discover their available models from **/v1/models**. OpenAI-protocol providers prefer the Responses API and automatically fall back to **Chat Completions** when the server does not implement it (LM Studio, Ollama, vLLM, llama.cpp), so local servers work without extra configuration.
 
 ```toml
+theme = "dark" # dark (current Amber), light (Solarized Light), or hacker (terminal green)
 default_provider = "zai"
 
 [providers.zai]
@@ -90,6 +91,8 @@ systemPrompt = "Inspect the requested code and return concise findings."
 readOnly = true
 model = "zai/glm-5.3" # Optional; otherwise inherits the session model.
 ```
+
+The theme is applied when Amber starts. Change **theme** and restart Amber to switch palettes.
 
 Provider credentials belong under **[providers.\<name>]**, never under an agent. API-key provider configuration comes from **settings.toml**; no environment variables are used. **api** selects the provider's protocol: **"anthropic"** (the default) or **"openai"**. OpenAI-protocol providers accept slashed model ids such as **xiaomi/mimo-v2-pro**, so OpenRouter-style backends work. Models are referenced as **provider/model**. Select a session's model from the model name in the browser's top-right corner.
 

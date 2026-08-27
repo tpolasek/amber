@@ -6,10 +6,13 @@ import type { AgentDefinition } from "./agent-tool.js";
 import type { ProviderProtocol, ThinkingLevel } from "./types.js";
 
 export interface AmberSettings {
+  theme?: AmberTheme;
   default_provider?: string;
   providers: Record<string, ProviderSettings>;
   agents: AgentDefinition[];
 }
+
+export type AmberTheme = "dark" | "light" | "hacker";
 
 export interface ModelSettings {
   thinking_level?: ThinkingLevel;
@@ -41,6 +44,7 @@ Guidelines:
 - NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested.`;
 
 export const SETTINGS_TEMPLATE = {
+  theme: "dark",
   default_provider: "default",
   providers: {
     default: {
@@ -83,7 +87,8 @@ Rules:
   ],
 } as const;
 
-export const SETTINGS_TEMPLATE_SOURCE = `${stringify(SETTINGS_TEMPLATE).trimEnd()}
+export const SETTINGS_TEMPLATE_SOURCE = `${stringify(SETTINGS_TEMPLATE).trimEnd()
+  .replace('theme = "dark"', 'theme = "dark" # dark (current Amber), light (Solarized Light), or hacker (terminal green)')}
 # model = "<INSERT_AGENT_MODEL_HERE>"
 
 # The provider above uses the Anthropic Messages API (api = "anthropic", the default).
@@ -138,6 +143,7 @@ function parseSettings(parsed: unknown, settingsPath: string): AmberSettings {
   }
 
   const settings = parsed as Record<string, unknown>;
+  const theme = parseTheme(settings.theme, `${settingsPath}: theme`);
   if (settings.default_provider !== undefined
     && (typeof settings.default_provider !== "string" || !settings.default_provider.trim())) {
     throw new Error(`${settingsPath}: default_provider must be a non-empty string`);
@@ -150,10 +156,17 @@ function parseSettings(parsed: unknown, settingsPath: string): AmberSettings {
     throw new Error(`${settingsPath}: default_provider '${defaultProvider}' is not configured`);
   }
   return {
+    theme,
     ...(defaultProvider ? { default_provider: defaultProvider } : {}),
     providers,
     agents: parseAgentDefinitions(settings.agents, settingsPath),
   };
+}
+
+function parseTheme(value: unknown, field: string): AmberTheme {
+  if (value === undefined || value === "dark") return "dark";
+  if (value === "light" || value === "hacker") return value;
+  throw new Error(`${field} must be dark, light, or hacker`);
 }
 
 function parseProviders(value: unknown, settingsPath: string): Record<string, ProviderSettings> {

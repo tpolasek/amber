@@ -165,6 +165,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       homeDirectory: homedir(),
       workspaceRoot,
       authActionToken,
+      theme: settings.theme ?? "dark",
     });
   }
   if (method === "GET" && url.pathname === "/api/auth") {
@@ -479,6 +480,9 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   }
   if (method === "GET" && url.pathname === "/styles.css") {
     return serveFile(response, join(publicDirectory, "styles.css"), "text/css; charset=utf-8", "no-cache");
+  }
+  if (method === "GET" && url.pathname === "/themes.css") {
+    return serveFile(response, join(publicDirectory, "themes.css"), "text/css; charset=utf-8", "no-cache");
   }
   if (method === "GET" && (url.pathname === "/" || /^\/s\/[a-z0-9.-]+$/.test(url.pathname))) {
     return serveFile(response, join(publicDirectory, "index.html"), "text/html; charset=utf-8", "no-cache");

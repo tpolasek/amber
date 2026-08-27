@@ -15,6 +15,7 @@ test("creates a settings template on first load", async () => {
 
   assert.deepEqual(settings, SETTINGS_TEMPLATE);
   assert.deepEqual(parse(source), SETTINGS_TEMPLATE);
+  assert.match(source, /^theme = "dark" # dark \(current Amber\), light \(Solarized Light\), or hacker \(terminal green\)$/m);
   assert.match(source, /# model = "<INSERT_AGENT_MODEL_HERE>"/);
   assert.doesNotMatch(source, /INSERT_AGENT_AUTH/);
   assert.equal((await stat(settingsPath)).mode & 0o777, 0o600);
@@ -25,6 +26,7 @@ test("loads an existing settings file without replacing it", async () => {
   const settingsDirectory = join(homeDirectory, ".amber");
   const settingsPath = join(settingsDirectory, "settings.toml");
   const expected = {
+    theme: "dark",
     default_provider: "zai",
     providers: {
       zai: {
@@ -60,6 +62,7 @@ test("loads settings with no configured agents", async () => {
   }), "utf8");
 
   assert.deepEqual(await loadSettings(homeDirectory), {
+    theme: "dark",
     providers: {
       zai: { api: "anthropic", auth_key: "saved-key", auth_url: "https://example.test", models: {} },
     },
@@ -152,6 +155,7 @@ test("accepts legacy top-level provider settings", async () => {
   }), "utf8");
 
   assert.deepEqual(await loadSettings(homeDirectory), {
+    theme: "dark",
     providers: {
       default: {
         api: "anthropic",
@@ -163,6 +167,36 @@ test("accepts legacy top-level provider settings", async () => {
     },
     agents: [],
   });
+});
+
+test("loads each supported color theme", async () => {
+  for (const theme of ["dark", "light", "hacker"] as const) {
+    const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+    const settingsDirectory = join(homeDirectory, ".amber");
+    await mkdir(settingsDirectory);
+    await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+      theme,
+      providers: {
+        test: { auth_key: "key", auth_url: "https://example.test" },
+      },
+    }), "utf8");
+
+    assert.equal((await loadSettings(homeDirectory)).theme, theme);
+  }
+});
+
+test("rejects an unsupported color theme", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const settingsDirectory = join(homeDirectory, ".amber");
+  await mkdir(settingsDirectory);
+  await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+    theme: "sepia",
+    providers: {
+      test: { auth_key: "key", auth_url: "https://example.test" },
+    },
+  }), "utf8");
+
+  await assert.rejects(loadSettings(homeDirectory), /theme must be dark, light, or hacker/);
 });
 
 test("does not migrate legacy JSON settings", async () => {
