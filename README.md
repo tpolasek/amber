@@ -1,4 +1,4 @@
-# Amber Agent - Claude code compatible open source web CLI
+# Amber Agent - Claude code compatible web CLI
 <img width="945" height="633" alt="amber_gold" src="https://github.com/user-attachments/assets/657cf2c9-17a8-4e07-9fc1-2e77daf409f2" />
 
 I built Amber because I wanted a coding agent that felt like a terminal, but with a browser UI to take advantage of linking. Also Claude Code has a serious amount of bloat that I wanted to cut out.
