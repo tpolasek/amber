@@ -1,6 +1,5 @@
 # Amber Agent - Claude code compatible web CLI
-<img width="945" height="633" alt="amber_gold" src="https://github.com/user-attachments/assets/657cf2c9-17a8-4e07-9fc1-2e77daf409f2" />
-
+<img width="auto" height="633" alt="amber_gold" src="https://github.com/user-attachments/assets/657cf2c9-17a8-4e07-9fc1-2e77daf409f2" />
 I built Amber because I wanted a coding agent that felt like a terminal, but with a browser UI to take advantage of linking. Also Claude Code has a serious amount of bloat that I wanted to cut out.
 
 So I reverse-engineered Claude Code and rebuilt it from scratch as a minimal web CLI, with prompt-accurate reproduction of the workflow.
@@ -13,6 +12,17 @@ What makes it different:
 * Only 3 runtime npm dependencies — **diff**, **markdown-it**, and **smol-toml** for parsing settings. No framework, no database, no bloat.
 * Easily configurable sub-agents. You can even **customize the model per each agent.**
 * Claude Code, rebuilt. **Reverse-engineered from Claude Code's behavior**, reproducing the prompt flow accurately while stripping it down to a lightweight tool.
+
+## Themes 
+It supports 3 themes out of the box, here are the other two:
+### Theme = hacker
+
+<img width="auto" height="633" alt="amber_hacker" src="https://github.com/user-attachments/assets/802655e8-bdb4-4445-8a1b-f5b75f6d3489" />
+
+### Theme = light
+<img width="auto" height="633" alt="amber_light" src="https://github.com/user-attachments/assets/056ec095-a2a5-4e1e-81b6-36519d1c1ac6" />
+
+
 ## Install and run
 
 ### Prebuilt binary
