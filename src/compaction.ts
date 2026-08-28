@@ -9,7 +9,7 @@ export async function generateCompactionSummary(
 ): Promise<string> {
   const request = [...history, { role: "user" as const, content: BASE_COMPACT_PROMPT }];
   let output = "";
-  for await (const event of provider.stream(request, signal)) {
+  for await (const event of provider.stream(request, signal, { system: null })) {
     if (event.type === "delta") {
       output += event.text;
       onProgress?.(output.length);

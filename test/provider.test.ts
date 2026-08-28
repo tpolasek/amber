@@ -109,3 +109,32 @@ test("clamps openai-only thinking levels to the anthropic effort ceiling", async
 
   assert.deepEqual(receivedOutputConfig, { effort: "max" });
 });
+
+test("explicitly omits the Anthropic system prompt", async (context) => {
+  let requestBody: Record<string, unknown> = {};
+  const gateway = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    requestBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n');
+  });
+  gateway.listen(0, "127.0.0.1");
+  await once(gateway, "listening");
+  context.after(() => gateway.close());
+  const address = gateway.address();
+  assert(address && typeof address === "object");
+
+  const provider = new AnthropicProvider({
+    authToken: "test-token",
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    model: "glm-test",
+  });
+  for await (const _event of provider.stream(
+    [{ role: "user", content: "Summarize this" }],
+    new AbortController().signal,
+    { system: null },
+  )) { /* consume */ }
+
+  assert.equal(Object.hasOwn(requestBody, "system"), false);
+});

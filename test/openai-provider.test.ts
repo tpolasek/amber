@@ -112,6 +112,35 @@ test("streams OpenAI Responses text, reasoning, tools, and usage", async (contex
   ]);
 });
 
+test("explicitly omits OpenAI instructions", async (context) => {
+  let requestBody: Record<string, unknown> = {};
+  const gateway = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    requestBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end('data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n\n');
+  });
+  gateway.listen(0, "127.0.0.1");
+  await once(gateway, "listening");
+  context.after(() => gateway.close());
+  const address = gateway.address();
+  assert(address && typeof address === "object");
+
+  const provider = new OpenAIProvider({
+    apiKey: "key",
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    model: "gpt-test",
+  });
+  for await (const _event of provider.stream(
+    [{ role: "user", content: "Summarize this" }],
+    new AbortController().signal,
+    { system: null },
+  )) { /* consume */ }
+
+  assert.equal(Object.hasOwn(requestBody, "instructions"), false);
+});
+
 test("uses refreshed OAuth auth and Codex-specific headers, endpoint, and payload", async (context) => {
   let receivedHeaders = new Headers();
   let receivedPath = "";

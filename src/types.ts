@@ -160,7 +160,8 @@ export interface ToolDefinition {
 
 export interface StreamOptions {
   tools?: ToolDefinition[];
-  system?: string | ProviderSystemBlock[];
+  /** Null explicitly omits a system prompt; undefined uses the provider default. */
+  system?: string | ProviderSystemBlock[] | null;
   temperature?: number;
   thinking?: boolean;
   /** Turn-level reasoning-effort override; falls back to the provider default. */

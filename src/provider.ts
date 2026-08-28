@@ -54,6 +54,10 @@ export class AnthropicProvider implements LlmProvider {
 
   async *stream(messages: ProviderMessage[], signal: AbortSignal, options?: StreamOptions): AsyncGenerator<StreamEvent> {
     const thinkingLevel = options?.thinkingLevel ?? this.#thinkingLevel;
+    const system = options?.system === null
+      ? undefined
+      : options?.system
+        ?? "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.";
     const response = await fetch(`${providerApiUrl(this.#baseUrl, "messages")}?beta=true`, {
       method: "POST",
       headers: {
@@ -71,8 +75,7 @@ export class AnthropicProvider implements LlmProvider {
         ...(options?.thinking === false || thinkingLevel === "none"
           ? {}
           : { output_config: { effort: anthropicEffort(thinkingLevel) } }),
-        system: options?.system
-          ?? "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.",
+        ...(system !== undefined ? { system } : {}),
         messages: anthropicMessages(messages),
       }),
       signal,

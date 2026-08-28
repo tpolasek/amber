@@ -126,7 +126,7 @@ export class OpenAIProvider implements LlmProvider {
         body: JSON.stringify({
           model: this.model,
           input: toOpenAIInput(messages),
-          instructions: systemText(options?.system),
+          ...(options?.system === null ? {} : { instructions: systemText(options?.system) }),
           ...(!this.#codex ? { max_output_tokens: 32_000 } : { text: { verbosity: "low" }, tool_choice: "auto" }),
           stream: true,
           store: false,

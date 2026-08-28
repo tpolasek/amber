@@ -370,6 +370,9 @@ async function runAutomaticCompactionScenario(mock, amber) {
     completedTool >= 0 && compactionStarted > completedTool, `${completedTool} -> ${compactionStarted}`);
   check("automatic compaction completed in the same run",
     events.some((event) => event.event === "auto_compaction_complete"));
+  const compactionRequest = mock.requests().find((request) => !request.tools);
+  check("the compaction request omitted the system prompt",
+    compactionRequest && !Object.hasOwn(compactionRequest, "system"), JSON.stringify(compactionRequest?.system));
   const compactionCompleted = events.findIndex((event) => event.event === "auto_compaction_complete");
   const userInjected = events.findIndex((event) => event.event === "user_message");
   check("priority-one compaction ran before priority-two user input",
@@ -382,6 +385,13 @@ async function runAutomaticCompactionScenario(mock, amber) {
   check("the model continued against compacted history",
     snapshot.session.messages.filter((message) => message.role === "assistant").at(-1)?.content
       === "continued after automatic compaction");
+  const continuedRequest = mock.requests().find((request) =>
+    request.tools && JSON.stringify(request.messages).includes("compacted context"));
+  check("post-compaction context has the system prompt followed by the compact message",
+    Array.isArray(continuedRequest?.system)
+      && continuedRequest.system.length > 0
+      && continuedRequest.messages[0]?.role === "user"
+      && JSON.stringify(continuedRequest.messages[0]).includes("generated summary"));
 }
 
 async function runTerminalToolCompactionScenario(mock, amber) {

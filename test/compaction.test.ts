@@ -8,19 +8,21 @@ import {
   shouldAutoCompact,
 } from "../src/compaction.js";
 import { BASE_COMPACT_PROMPT } from "../src/prompts.js";
-import type { LlmProvider, ProviderMessage, StreamEvent } from "../src/types.js";
+import type { LlmProvider, ProviderMessage, StreamEvent, StreamOptions } from "../src/types.js";
 
 test("generates a trimmed summary without mutating the supplied history", async () => {
   const history: ProviderMessage[] = [{ role: "user", content: "Please add compact support" }];
   let received: ProviderMessage[] = [];
+  let receivedOptions: StreamOptions | undefined;
   const progress: number[] = [];
   const provider: LlmProvider = {
     name: "Test",
     protocol: "anthropic",
     model: "test-model",
     mode: "live",
-    async *stream(messages: ProviderMessage[]): AsyncGenerator<StreamEvent> {
+    async *stream(messages: ProviderMessage[], _signal: AbortSignal, options?: StreamOptions): AsyncGenerator<StreamEvent> {
       received = messages;
+      receivedOptions = options;
       yield { type: "delta", text: "  Goal: add `/compact`." };
       yield { type: "delta", text: "\nStatus: pending.  " };
     },
@@ -32,6 +34,7 @@ test("generates a trimmed summary without mutating the supplied history", async 
   assert.equal(summary, "Goal: add `/compact`.\nStatus: pending.");
   assert.deepEqual(history, [{ role: "user", content: "Please add compact support" }]);
   assert.deepEqual(received, [...history, { role: "user", content: BASE_COMPACT_PROMPT }]);
+  assert.deepEqual(receivedOptions, { system: null });
   assert.deepEqual(progress, [23, 42]);
 });
 

@@ -14,7 +14,7 @@ export interface ChatCompletionsOptions {
   baseUrl: string;
   model: string;
   messages: ProviderMessage[];
-  system?: string | ProviderSystemBlock[];
+  system?: string | ProviderSystemBlock[] | null;
   tools?: ToolDefinition[];
   temperature?: number;
   signal: AbortSignal;
@@ -55,7 +55,7 @@ export async function* streamChatCompletions(options: ChatCompletionsOptions): A
     body: JSON.stringify({
       model: options.model,
       messages: [
-        { role: "system", content: systemText(options.system) },
+        ...(options.system === null ? [] : [{ role: "system" as const, content: systemText(options.system) }]),
         ...toChatMessages(options.messages),
       ],
       stream: true,

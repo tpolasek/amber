@@ -172,6 +172,26 @@ test("converts provider messages and tools to the chat completions shape", async
   ]);
 });
 
+test("explicitly omits the chat-completions system message", async (context) => {
+  const gateway = await startGateway((_request, response) => {
+    writeChunks(response, ['{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}']);
+  });
+  context.after(() => gateway.close());
+
+  for await (const _event of streamChatCompletions({
+    apiKey: "local-key",
+    baseUrl: gateway.url,
+    model: "local-model",
+    messages: [{ role: "user", content: "Summarize this" }],
+    system: null,
+    signal: new AbortController().signal,
+  })) { /* consume */ }
+
+  assert.deepEqual(gateway.requests[0]?.body.messages, [
+    { role: "user", content: "Summarize this" },
+  ]);
+});
+
 test("maps reasoning, tool call deltas, usage, and finish reason from chat chunks", async (context) => {
   const gateway = await startGateway((_request, response) => {
     writeChunks(response, [
