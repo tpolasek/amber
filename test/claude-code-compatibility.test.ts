@@ -14,16 +14,15 @@ import { SETTINGS_TEMPLATE } from "../src/settings.js";
 
 const CLAUDE_CODE_TOOLS = createClaudeCodeTools(SETTINGS_TEMPLATE.agents);
 
-test("builds the verified four-block Claude Code system prompt", () => {
+test("builds the verified three-block Claude Code system prompt", () => {
   const system = buildClaudeCodeSystemPrompt("/tmp/amber-not-a-repository", "mimo-v2.5");
-  assert.equal(system.length, 4);
-  assert.equal(system[0]?.text, "x-anthropic-billing-header: cc_version=2.1.88.e09; cc_entrypoint=cli;");
-  assert.equal(system[1]?.text, "You are a Claude agent, built on Anthropic's Claude Agent SDK.");
-  assert.match(system[2]?.text ?? "", /^\nYou are an interactive agent that helps users with software engineering tasks\./);
-  assert.deepEqual(system[2]?.cache_control, { scope: "global", type: "ephemeral" });
-  assert.match(system[3]?.text ?? "", /Primary working directory: \/tmp\/amber-not-a-repository/);
-  assert.match(system[3]?.text ?? "", /Is a git repository: false/);
-  assert.match(system[3]?.text ?? "", /You are powered by the model mimo-v2\.5\./);
+  assert.equal(system.length, 3);
+  assert.equal(system[0]?.text, "You are a Amber agent.");
+  assert.match(system[1]?.text ?? "", /^\nYou are an interactive agent that helps users with software engineering tasks\./);
+  assert.deepEqual(system[1]?.cache_control, { scope: "global", type: "ephemeral" });
+  assert.match(system[2]?.text ?? "", /Primary working directory: \/tmp\/amber-not-a-repository/);
+  assert.match(system[2]?.text ?? "", /Is a git repository: false/);
+  assert.match(system[2]?.text ?? "", /You are powered by the model mimo-v2\.5\./);
 });
 
 test("injects the verified reminders before only the first user prompt", () => {
@@ -37,7 +36,6 @@ test("injects the verified reminders before only the first user prompt", () => {
   assert.ok(Array.isArray(firstContent));
   assert.equal(firstContent.length, 3);
   assert.match(firstContent[0]?.type === "text" ? firstContent[0].text : "", /The following skills are available/);
-  assert.match(firstContent[0]?.type === "text" ? firstContent[0].text : "", /- keybindings-help:/);
   assert.match(firstContent[1]?.type === "text" ? firstContent[1].text : "", /# currentDate/);
   assert.deepEqual(firstContent[2], { type: "text", text: "4 + 4" });
   assert.equal(messages[2]?.content, "again");
@@ -81,7 +79,7 @@ test("builds the verified three-block general agent prompt", () => {
   );
   assert.equal(system.length, 3);
   assert.equal(system[0]?.text, "x-anthropic-billing-header: cc_version=2.1.88.516; cc_entrypoint=cli;");
-  assert.equal(system[1]?.text, "You are a Claude agent, built on Anthropic's Claude Agent SDK.");
+  assert.match(system[1]?.text ?? "", /^\nYou are an interactive agent that helps users with software engineering tasks\./);
   assert.deepEqual(system[1]?.cache_control, { type: "ephemeral" });
   assert.deepEqual(system[2]?.cache_control, { type: "ephemeral" });
   assert.ok(system.reduce((total, block) => total + block.text.length, 0) > 2_000);
