@@ -10,7 +10,7 @@ import {
   toolsForPlanMode,
 } from "../src/claude-code-compatibility.js";
 import { getAgentDefinition } from "../src/agent-tool.js";
-import { SETTINGS_TEMPLATE } from "../src/settings.js";
+import { SETTINGS_TEMPLATE } from "../src/settings-template.js";
 
 const CLAUDE_CODE_TOOLS = createClaudeCodeTools(SETTINGS_TEMPLATE.agents);
 

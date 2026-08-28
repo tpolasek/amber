@@ -4,7 +4,8 @@ import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse, stringify } from "smol-toml";
-import { loadSettings, SETTINGS_TEMPLATE } from "../src/settings.js";
+import { loadSettings } from "../src/settings.js";
+import { COMMIT_SKILL_TEMPLATE_SOURCE, SETTINGS_TEMPLATE } from "../src/settings-template.js";
 
 test("creates a settings template on first load", async () => {
   const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
@@ -21,6 +22,46 @@ test("creates a settings template on first load", async () => {
   assert.match(source, /# model = "<INSERT_AGENT_PROVIDER_SLASH_MODEL_HERE>"/);
   assert.doesNotMatch(source, /INSERT_AGENT_AUTH/);
   assert.equal((await stat(settingsPath)).mode & 0o777, 0o600);
+});
+
+test("seeds the commit skill when settings are first created", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+
+  await loadSettings(homeDirectory);
+  const skillPath = join(homeDirectory, ".amber", "skills", "commit", "SKILL.md");
+
+  assert.equal(await readFile(skillPath, "utf8"), COMMIT_SKILL_TEMPLATE_SOURCE);
+  assert.equal((await stat(skillPath)).mode & 0o777, 0o600);
+});
+
+test("seeds the commit skill only when settings.toml does not exist", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const settingsDirectory = join(homeDirectory, ".amber");
+  const skillDirectory = join(settingsDirectory, "skills", "commit");
+  await mkdir(skillDirectory, { recursive: true });
+  await writeFile(join(skillDirectory, "SKILL.md"), "custom skill", "utf8");
+  await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+    providers: { zai: { auth_key: "key", auth_url: "https://example.test" } },
+  }), "utf8");
+
+  await loadSettings(homeDirectory);
+
+  assert.equal(await readFile(join(skillDirectory, "SKILL.md"), "utf8"), "custom skill");
+});
+
+test("does not overwrite an existing commit skill when seeding settings", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const skillDirectory = join(homeDirectory, ".amber", "skills", "commit");
+  await mkdir(skillDirectory, { recursive: true });
+  await writeFile(join(skillDirectory, "SKILL.md"), "custom skill", "utf8");
+
+  await loadSettings(homeDirectory);
+
+  assert.equal(await readFile(join(skillDirectory, "SKILL.md"), "utf8"), "custom skill");
+  assert.deepEqual(
+    parse(await readFile(join(homeDirectory, ".amber", "settings.toml"), "utf8")),
+    SETTINGS_TEMPLATE,
+  );
 });
 
 test("loads an existing settings file without replacing it", async () => {
