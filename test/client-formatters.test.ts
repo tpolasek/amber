@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  commitCommandPrompt,
   compactHeaderPath,
   formatDuration,
   formatTokenCountInThousands,
@@ -18,7 +17,7 @@ import { BUILT_IN_COMMANDS, builtInCommand } from "../src/built-in-commands.js";
 test("classifies built-in commands that can run during a response", () => {
   assert.deepEqual(
     BUILT_IN_COMMANDS.filter((command) => command.runsDuringResponse).map((command) => command.name),
-    ["/add-dir", "/context"],
+    ["/add-dir", "/context", "/tasks"],
   );
   assert.equal(builtInCommand(" /CONTEXT ")?.runsDuringResponse, true);
   assert.equal(builtInCommand("/compact")?.runsDuringResponse, false);
@@ -48,22 +47,6 @@ test("formats client counts, durations, runtimes, and errors", () => {
   assert.equal(taskRuntime({ startedAt: "2026-01-01T00:00:00.000Z", durationMs: 500 }, 0), 500);
   assert.equal(messageFrom(new Error("Broken")), "Broken");
   assert.equal(messageFrom("Broken"), "Something went wrong");
-});
-
-test("expands /commit into a commit prompt and only /commit push mentions pushing", () => {
-  const commit = commitCommandPrompt("/commit");
-  const push = commitCommandPrompt("/commit push");
-  const upper = commitCommandPrompt("  /Commit   PUSH  ");
-  assert.ok(commit?.includes("concise, to-the-point commit title"));
-  assert.ok(commit?.includes("bullet points"));
-  assert.ok(commit?.includes("high-level details"));
-  assert.ok(commit?.includes("Do not push"));
-  assert.ok(!commit?.includes("push it to the remote"));
-  assert.ok(push?.includes("push it to the remote"));
-  assert.ok(!push?.includes("Do not push"));
-  assert.equal(upper, push);
-  assert.equal(commitCommandPrompt("/commit bad arg"), null);
-  assert.equal(commitCommandPrompt("/commit push extra"), null);
 });
 
 test("suggests supported /git parameters as the command is typed", () => {

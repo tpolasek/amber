@@ -77,17 +77,6 @@ export function replacePromptFileReference(
   };
 }
 
-export function commitCommandPrompt(command: string): string | null {
-  const argument = command.trim().split(/\s+/).slice(1).join(" ").trim().toLowerCase();
-  if (argument && argument !== "push") return null;
-  return [
-    "Commit the current changes in this git repository.",
-    "Review the working tree (git status, git diff, git diff --cached) and the recent commit style (git log), then stage and commit the changes.",
-    "Create a concise, to-the-point commit title, favor bullet points in the body section, and make sure the body covers the high-level details of the change.",
-    argument === "push" ? "After creating the commit, push it to the remote." : "Do not push the commit.",
-  ].join(" ");
-}
-
 export type GitCommandRequest =
   | { kind: "git-view"; view: "diff" | "show" | "status" }
   | { kind: "commit"; push: boolean };

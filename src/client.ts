@@ -4,7 +4,6 @@ import {
   StreamingThinkingReveal,
 } from "./streaming-thinking.js";
 import {
-  commitCommandPrompt,
   compactHeaderPath,
   formatDuration,
   formatTime,
@@ -2153,20 +2152,13 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
       elements.prompt.focus();
       return;
     }
-    if (request.kind === "commit") return runCommand(request.push ? "/commit push" : "/commit", clearComposer);
+    if (request.kind === "commit") {
+      if (clearComposer) clearPrompt();
+      return sendMessage(request.push ? "/commit push" : "/commit");
+    }
     if (clearComposer) clearPrompt();
     void openGitDialog(request.view);
     return;
-  }
-  if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/commit") {
-    const prompt = commitCommandPrompt(command);
-    if (!prompt) {
-      notify("Usage: /commit [push]");
-      elements.prompt.focus();
-      return;
-    }
-    if (clearComposer) clearPrompt();
-    return sendMessage(prompt);
   }
   if (clearComposer) clearPrompt();
   if (!duringResponse) setBusy(true);
@@ -2442,10 +2434,8 @@ function runGitDialogCommit(push: boolean): void {
     notify("Wait for the current response to finish");
     return;
   }
-  const prompt = commitCommandPrompt(push ? "/commit push" : "/commit");
-  if (!prompt) return;
   closeGitDialog();
-  void sendMessage(prompt);
+  void sendMessage(push ? "/commit push" : "/commit");
 }
 
 function handleGitDialogKeydown(event: KeyboardEvent): boolean {
