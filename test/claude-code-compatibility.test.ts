@@ -46,7 +46,7 @@ test("injects the verified reminders before only the first user prompt", () => {
   assert.deepEqual(singleContent.at(-1), { type: "text", text: "solo", cache_control: { type: "ephemeral" } });
 });
 
-test("advertises the fourteen Amber tools in Claude Code order", () => {
+test("advertises the fifteen Amber tools in Claude Code order", () => {
   assert.deepEqual(CLAUDE_CODE_TOOLS.map((tool) => tool.name), [
     "Agent",
     "AskUserQuestion",
@@ -55,6 +55,7 @@ test("advertises the fourteen Amber tools in Claude Code order", () => {
     "Glob",
     "Grep",
     "Read",
+    "Skill",
     "TaskCreate",
     "TaskGet",
     "TaskList",
@@ -109,6 +110,7 @@ test("structures an agent prompt with the date reminder and uses the shared chil
     "Glob",
     "Grep",
     "Read",
+    "Skill",
     "TaskCreate",
     "TaskGet",
     "TaskList",

@@ -28,6 +28,29 @@ test("classifies and summarizes tool output for display", () => {
   assert.equal(shouldRenderToolOutput(call({ name: "ExitPlanMode", output: "reviewed plan" })), false);
 });
 
+test("formats skill tool cards with an output preview", () => {
+  const skill = call({
+    name: "Skill",
+    input: { skill: "/commit", args: "push" },
+    output: "",
+    statusDisplay: { text: "SKILL LOADED" },
+    skillModel: "anthropic/claude-opus-4",
+    skillEffort: "high",
+  });
+  assert.equal(toolSubject(skill), "/commit \"push\"");
+  assert.equal(toolSubject(call({ name: "Skill", input: { skill: "/pos-check", args: "test 3434" } })), "/pos-check \"test\" \"3434\"");
+  assert.equal(toolSubject(call({ name: "Skill", input: { skill: "pos-check", args: "   " } })), "/pos-check");
+  assert.equal(toolSubject(call({ name: "Skill", input: { skill: "pos-check" } })), "/pos-check");
+  assert.equal(toolStatusLabel(skill), "SKILL LOADED");
+  assert.equal(toolMetadata(skill), "anthropic/claude-opus-4 · effort high");
+  assert.equal(shouldRenderToolOutput(skill), false);
+  assert.equal(shouldRenderToolOutput(call({ name: "Skill", output: "Computed: 42\nsrc/*.ts files: 37" })), true);
+  assert.equal(toolSubject(call({ name: "Skill", input: {} })), "Preparing skill…");
+
+  const failed = call({ name: "Skill", input: { skill: "commit" }, status: "error", statusDisplay: { text: "SKILL FAILED" } });
+  assert.equal(toolStatusLabel(failed), "SKILL FAILED");
+});
+
 test("formats tool subjects and statuses independently of the DOM", () => {
   assert.equal(toolSubject(call({ input: { command: "npm test" } })), "npm test");
   assert.match(toolSubject(call({ name: "EnterPlanMode" })), /begin planning/);

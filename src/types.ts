@@ -39,6 +39,8 @@ export interface ToolCall {
   agentSessionId?: string;
   agentType?: string;
   agentModel?: string;
+  skillModel?: string;
+  skillEffort?: string;
 }
 
 export interface Message {
@@ -50,7 +52,7 @@ export interface Message {
   thinkingProvider?: ProviderProtocol;
   createdAt: string;
   status: MessageStatus;
-  kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result";
+  kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result" | "skill";
   sourceSessionId?: string;
   forkedSessionId?: string;
   usage?: TokenUsage;
@@ -58,6 +60,8 @@ export interface Message {
   toolUseId?: string;
   toolError?: boolean;
   contentBlocks?: Array<{ type: "text"; text: string }>;
+  /** Skill name for hidden `kind: "skill"` messages. */
+  skillName?: string;
 }
 
 export interface SessionCompaction {
@@ -88,6 +92,19 @@ export interface Session {
   planningTaskArchiveHighWaterMark?: number;
   contextTokens?: number;
   planMode?: SessionPlanMode;
+  /** Nested project directories with their own skills, discovered from touched files. */
+  skillRoots?: string[];
+  /** Project paths touched this session, activating `paths:`-gated skills. */
+  skillTouchedPaths?: string[];
+  /** Exact transformed content of each invoked skill, preserved across compaction. */
+  invokedSkills?: SessionInvokedSkill[];
+}
+
+export interface SessionInvokedSkill {
+  name: string;
+  path: string;
+  content: string;
+  invokedAt: string;
 }
 
 export interface SessionPlanMode {
@@ -146,6 +163,8 @@ export interface StreamOptions {
   system?: string | ProviderSystemBlock[];
   temperature?: number;
   thinking?: boolean;
+  /** Turn-level reasoning-effort override; falls back to the provider default. */
+  thinkingLevel?: ThinkingLevel;
 }
 
 export interface ProviderSystemBlock {

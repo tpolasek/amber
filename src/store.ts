@@ -76,6 +76,9 @@ export class SessionStore {
     delete session.fileReadState;
     delete session.contextTokens;
     delete session.planMode;
+    delete session.skillRoots;
+    delete session.skillTouchedPaths;
+    delete session.invokedSkills;
     await this.save(session);
     return session;
   }
@@ -137,6 +140,9 @@ export class SessionStore {
       ...(session.contextTokens !== undefined ? { contextTokens: session.contextTokens } : {}),
       ...(session.model ? { model: session.model } : {}),
       ...(forkPlanMode ? { planMode: forkPlanMode } : {}),
+      ...(session.skillRoots ? { skillRoots: structuredClone(session.skillRoots) } : {}),
+      ...(session.skillTouchedPaths ? { skillTouchedPaths: structuredClone(session.skillTouchedPaths) } : {}),
+      ...(session.invokedSkills ? { invokedSkills: structuredClone(session.invokedSkills) } : {}),
     };
     await this.save(fork);
     return fork;
@@ -210,7 +216,7 @@ export class SessionStore {
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .slice(0, limit)
       .map((session) => {
-        const visibleMessages = session.messages.filter((message) => message.kind !== "tool-result");
+        const visibleMessages = session.messages.filter((message) => message.kind !== "tool-result" && message.kind !== "skill");
         return {
           id: session.id,
           title: session.title,

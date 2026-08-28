@@ -53,6 +53,7 @@ export class AnthropicProvider implements LlmProvider {
   }
 
   async *stream(messages: ProviderMessage[], signal: AbortSignal, options?: StreamOptions): AsyncGenerator<StreamEvent> {
+    const thinkingLevel = options?.thinkingLevel ?? this.#thinkingLevel;
     const response = await fetch(`${providerApiUrl(this.#baseUrl, "messages")}?beta=true`, {
       method: "POST",
       headers: {
@@ -66,10 +67,10 @@ export class AnthropicProvider implements LlmProvider {
         stream: true,
         ...(options?.tools?.length ? { tools: options.tools } : {}),
         ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
-        ...(options?.thinking === false || this.#thinkingLevel === "none" ? {} : { thinking: { type: "adaptive" } }),
-        ...(options?.thinking === false || this.#thinkingLevel === "none"
+        ...(options?.thinking === false || thinkingLevel === "none" ? {} : { thinking: { type: "adaptive" } }),
+        ...(options?.thinking === false || thinkingLevel === "none"
           ? {}
-          : { output_config: { effort: anthropicEffort(this.#thinkingLevel) } }),
+          : { output_config: { effort: anthropicEffort(thinkingLevel) } }),
         system: options?.system
           ?? "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.",
         messages: anthropicMessages(messages),

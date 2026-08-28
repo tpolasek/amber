@@ -102,7 +102,8 @@ export class OpenAIProvider implements LlmProvider {
       yield* chatFallback();
       return;
     }
-    const reasoningEnabled = options?.thinking !== false && this.#thinkingLevel !== "none";
+    const thinkingLevel = options?.thinkingLevel ?? this.#thinkingLevel;
+    const reasoningEnabled = options?.thinking !== false && thinkingLevel !== "none";
     const auth = this.#authResolver
       ? await this.#authResolver(signal)
       : { accessToken: this.#apiKey! };
@@ -132,7 +133,7 @@ export class OpenAIProvider implements LlmProvider {
           parallel_tool_calls: true,
           ...(options?.tools?.length ? { tools: options.tools.map(toOpenAITool) } : {}),
           ...(reasoningEnabled ? {
-            reasoning: { effort: openAIEffort(this.#thinkingLevel), summary: "auto" },
+            reasoning: { effort: openAIEffort(thinkingLevel), summary: "auto" },
             include: ["reasoning.encrypted_content"],
           } : {}),
           ...(!reasoningEnabled && options?.temperature !== undefined ? { temperature: options.temperature } : {}),

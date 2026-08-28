@@ -24,6 +24,20 @@ import {
   parseTaskStopInput,
 } from "./task-tools.js";
 import { executePlanningTaskTool, PLANNING_TASK_TOOLS } from "./planning-task-tools.js";
+import {
+  discoverNestedProjectRoots,
+  discoverSkills,
+  expandSkill,
+  invocableSkills,
+  parseSkillInput,
+  renderSkillReminder,
+  resolveSkill,
+  resolveSkillModel,
+  skillInvocationPreview,
+  SKILL_TOOL_NAME,
+  type SkillDefinition,
+  type SkillDiscoveryContext,
+} from "./skill-tool.js";
 import { executeFileTool, FILE_TOOLS } from "./file-tools.js";
 import { executeGrep, GREP_TOOL, parseGrepInput } from "./grep-tool.js";
 import { executeGlob, GLOB_TOOL, parseGlobInput } from "./glob-tool.js";
@@ -65,8 +79,8 @@ import {
   planModeSystemBlock,
   readPlanSnapshot,
 } from "./plan-mode.js";
-import type { LlmProvider, ToolDefinition } from "./types.js";
-import type { Message, Session, TokenUsage, ToolCall } from "./types.js";
+import type { LlmProvider, ThinkingLevel, ToolDefinition } from "./types.js";
+import type { Message, Session, SessionInvokedSkill, TokenUsage, ToolCall } from "./types.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(sourceDirectory, "../..");
@@ -592,19 +606,25 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   try {
     let allowedDirectories = sessionDirectories(session);
     const currentDirectory = sessionWorkingDirectory(session);
-    const activeProvider = providerForSession(session);
     const toolLoopTracker = new ToolLoopTracker();
+    // Skill model/effort overrides apply only to the model calls of this user turn.
+    let turnModel: string | undefined;
+    let turnEffort: ThinkingLevel | undefined;
     for (;;) {
-      const baseHistory = buildProviderHistory(session.messages, assistantMessage.id, session.compaction);
+      const skills = await sessionSkills(session);
+      const activeProvider = turnModel ? providerCatalog.provider(turnModel) : providerForSession(session);
+      const baseHistory = buildProviderHistory(session.messages, assistantMessage.id, session.compaction, session.invokedSkills);
+      const reminder = renderSkillReminder(invocableSkills(skills, session.skillTouchedPaths ?? [], currentDirectory), session.contextTokens);
       const history = session.agentType
-        ? structureClaudeCodeUserMessages(baseHistory)
-        : injectClaudeCodeUserContext(baseHistory);
+        ? structureClaudeCodeUserMessages(baseHistory, reminder)
+        : injectClaudeCodeUserContext(baseHistory, reminder);
       const toolDrafts = new Map<number, { call: ToolCall; inputJson: string }>();
       let usage: Partial<TokenUsage> = {};
       for await (const event of activeProvider.stream(history, controller.signal, {
         tools: sessionTools(session, approvalCapable),
         system: sessionSystemPrompt(session, currentDirectory, activeProvider.model),
         ...(session.agentType ? { temperature: 1 } : {}),
+        ...(turnEffort ? { thinkingLevel: turnEffort } : {}),
       })) {
         if (event.type === "delta") {
           assistantMessage.content += event.text;
@@ -678,6 +698,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           call.statusDisplay = { text: "NOT RUN" };
         }
       }
+      const pendingSkillMessages: Message[] = [];
       let agentLinkSaveChain = Promise.resolve();
       const persistAgentLinks = (): Promise<void> => {
         const pending = agentLinkSaveChain.then(() => store.save(session));
@@ -994,6 +1015,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               call.output = result.output;
               if (result.readRange) call.readRange = result.readRange;
               resultText = result.resultText;
+              await recordTouchedPath(session, result.filePath);
             } catch (error) {
               call.status = "error";
               call.output = errorMessage(error);
@@ -1047,6 +1069,57 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             }
             call.durationMs = Date.now() - started;
             call.completedAt = new Date().toISOString();
+          } else if (call.name === SKILL_TOOL_NAME) {
+            const started = Date.now();
+            call.status = "running";
+            call.startedAt = new Date(started).toISOString();
+            emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
+            try {
+              const input = parseSkillInput(call.input);
+              const resolved = resolveSkill(
+                await sessionSkills(session),
+                input.skill,
+                session.skillTouchedPaths ?? [],
+                currentDirectory,
+              );
+              if ("error" in resolved) throw new Error(resolved.error);
+              const expanded = await expandSkill(resolved.skill, input.args, {
+                sessionId: session.id,
+                cwd: currentDirectory,
+                signal: controller.signal,
+              });
+              const resolvedModel = resolveSkillModel(expanded.model, providerCatalog.models);
+              if (resolvedModel) {
+                turnModel = resolvedModel;
+                call.skillModel = resolvedModel;
+              }
+              if (expanded.effort) {
+                turnEffort = expanded.effort;
+                call.skillEffort = expanded.effort;
+              }
+              recordInvokedSkill(session, resolved.skill, expanded.content);
+              call.status = "complete";
+              call.output = skillInvocationPreview(expanded.content);
+              call.statusDisplay = { text: "SKILL LOADED" };
+              resultText = `Launching skill: ${expanded.name}`;
+              pendingSkillMessages.push({
+                id: randomUUID(),
+                role: "user",
+                content: `<command-name>/${expanded.name}</command-name>\n\n${expanded.content}`,
+                createdAt: new Date().toISOString(),
+                status: "complete",
+                kind: "skill",
+                skillName: expanded.name,
+              });
+            } catch (error) {
+              call.status = "error";
+              call.output = errorMessage(error);
+              call.statusDisplay = { text: "SKILL FAILED" };
+              resultText = call.output;
+              if (error instanceof Error && error.name === "AbortError") abortAfterResult = error;
+            }
+            call.durationMs = Date.now() - started;
+            call.completedAt = new Date().toISOString();
           } else {
             call.status = "error";
             call.output = `Unknown tool: ${call.name}`;
@@ -1064,6 +1137,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           toolError: call.status !== "complete",
           ...(resultBlocks ? { contentBlocks: resultBlocks } : {}),
         });
+        session.messages.push(...pendingSkillMessages.splice(0));
         await store.save(session);
         if (abortAfterResult) throw abortAfterResult;
         throwIfSessionAborted(controller.signal);
@@ -1162,6 +1236,46 @@ function sessionDirectories(session: Session): string[] {
     ...sessionDirectoryRoots(session),
     ...(session.planMode?.active ? [dirname(session.planMode.planFilePath)] : []),
   ])];
+}
+
+/** Skills visible to a session, rediscovered so additions take effect immediately. */
+async function sessionSkills(session: Session): Promise<SkillDefinition[]> {
+  const context: SkillDiscoveryContext = {
+    cwd: sessionWorkingDirectory(session),
+    homeDirectory: homedir(),
+    addDirRoots: session.directories ?? [],
+    extraProjectRoots: session.skillRoots ?? [],
+    touchedPaths: session.skillTouchedPaths ?? [],
+  };
+  return discoverSkills(context);
+}
+
+/** Records a file touched by Read/Write/Edit to activate path-gated and nested skills. */
+async function recordTouchedPath(session: Session, filePath: string | undefined): Promise<void> {
+  if (!filePath) return;
+  const touched = session.skillTouchedPaths ?? [];
+  if (!touched.includes(filePath)) {
+    touched.push(filePath);
+    if (touched.length > 200) touched.splice(0, touched.length - 200);
+    session.skillTouchedPaths = touched;
+  }
+  for (const root of await discoverNestedProjectRoots(filePath)) {
+    if (!(session.skillRoots ?? []).includes(root)) (session.skillRoots ??= []).push(root);
+  }
+}
+
+function recordInvokedSkill(session: Session, skill: SkillDefinition, content: string): void {
+  const invoked = session.invokedSkills ?? [];
+  const entry: SessionInvokedSkill = {
+    name: skill.name,
+    path: skill.filePath,
+    content,
+    invokedAt: new Date().toISOString(),
+  };
+  const existing = invoked.findIndex((candidate) => candidate.name === skill.name);
+  if (existing >= 0) invoked[existing] = entry;
+  else invoked.push(entry);
+  session.invokedSkills = invoked;
 }
 
 function sessionDirectoryRoots(session: Session): string[] {
@@ -1433,7 +1547,9 @@ async function compactSession(
     createdAt: now,
     coveredMessageCount,
   };
-  const afterTokens = estimateHistoryTokens(buildProviderHistory(session.messages, undefined, compaction));
+  const afterTokens = estimateHistoryTokens(
+    buildProviderHistory(session.messages, undefined, compaction, session.invokedSkills),
+  );
   session.compaction = compaction;
   session.contextTokens = afterTokens;
   session.messages.push({

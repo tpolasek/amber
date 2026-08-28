@@ -12,6 +12,7 @@ import {
   TASK_LIST_TOOL,
   TASK_UPDATE_TOOL,
 } from "./planning-task-tools.js";
+import { SKILL_TOOL } from "./skill-tool.js";
 import type { ProviderContentBlock, ProviderMessage, ProviderSystemBlock, ToolDefinition } from "./types.js";
 
 const catalogTools = toolCatalog.tools as unknown as ToolDefinition[];
@@ -22,6 +23,7 @@ export function createClaudeCodeTools(agentDefinitions: readonly AgentDefinition
     ...(agentDefinitions.length ? [createAgentTool(agentDefinitions)] : []),
     ASK_USER_QUESTION_TOOL,
     ...catalogTools.slice(1, taskOutputIndex),
+    SKILL_TOOL,
     TASK_CREATE_TOOL,
     TASK_GET_TOOL,
     TASK_LIST_TOOL,
@@ -42,6 +44,7 @@ export function toolsForPlanMode(
 
 export const CLAUDE_CODE_AGENT_TOOLS: ToolDefinition[] = [
   ...catalogTools.slice(1, taskOutputIndex),
+  SKILL_TOOL,
   TASK_CREATE_TOOL,
   TASK_GET_TOOL,
   TASK_LIST_TOOL,
@@ -75,8 +78,11 @@ export function buildClaudeCodeSystemPrompt(currentDirectory: string, model: str
   ];
 }
 
-export function injectClaudeCodeUserContext(messages: ProviderMessage[]): ProviderMessage[] {
+export function injectClaudeCodeUserContext(messages: ProviderMessage[], skillReminder?: string): ProviderMessage[] {
   let injected = false;
+  const prefix: Array<{ type: "text"; text: string }> = skillReminder !== undefined
+    ? [{ type: "text", text: skillReminder }]
+    : structuredClone(compatibility.userPrefix) as Array<{ type: "text"; text: string }>;
   return messages.map((message, index) => {
     if (injected || message.role !== "user" || typeof message.content !== "string") return message;
     injected = true;
@@ -85,7 +91,7 @@ export function injectClaudeCodeUserContext(messages: ProviderMessage[]): Provid
     return {
       ...message,
       content: [
-        ...(structuredClone(compatibility.userPrefix) as Array<{ type: "text"; text: string }>),
+        ...prefix,
         currentDateReminder(),
         promptBlock,
       ],
@@ -101,13 +107,16 @@ function currentDateReminder(): ProviderContentBlock {
   };
 }
 
-export function structureClaudeCodeUserMessages(messages: ProviderMessage[]): ProviderMessage[] {
+export function structureClaudeCodeUserMessages(messages: ProviderMessage[], skillReminder?: string): ProviderMessage[] {
   let injected = false;
   return messages.map((message, index) => {
     if (message.role !== "user" || typeof message.content !== "string") return message;
     const promptBlock: ProviderContentBlock = { type: "text", text: message.content };
     if (index === messages.length - 1) promptBlock.cache_control = { type: "ephemeral" };
-    const reminder = injected ? [] : [currentDateReminder()];
+    const reminder: ProviderContentBlock[] = injected ? [] : [
+      ...(skillReminder !== undefined ? [{ type: "text", text: skillReminder } as const] : []),
+      currentDateReminder(),
+    ];
     injected = true;
     return { ...message, content: [...reminder, promptBlock] };
   });

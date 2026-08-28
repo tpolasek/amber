@@ -58,6 +58,13 @@ test("clears a session in place", async () => {
   session.fileReadState = {
     "/tmp/file.txt": { mtimeMs: 1, size: 4, hash: "hash", full: true },
   };
+  session.invokedSkills = [{
+    name: "commit",
+    path: "/tmp/commit/SKILL.md",
+    content: "commit instructions",
+    invokedAt: new Date().toISOString(),
+  }];
+  session.skillTouchedPaths = ["/tmp/file.txt"];
   await store.save(session);
 
   const cleared = await store.clear(session);
@@ -65,6 +72,9 @@ test("clears a session in place", async () => {
   assert.deepEqual(cleared.messages, []);
   assert.equal(cleared.compaction, undefined);
   assert.equal(cleared.fileReadState, undefined);
+  assert.equal(cleared.invokedSkills, undefined);
+  assert.equal(cleared.skillTouchedPaths, undefined);
+  assert.equal(cleared.skillRoots, undefined);
   assert.deepEqual((await store.get(session.id))?.messages, []);
 });
 
@@ -104,6 +114,14 @@ test("forks a session with independent history and a provenance banner", async (
   original.fileReadState = {
     "/tmp/example-workspace/file.txt": { mtimeMs: 1, size: 4, hash: "hash", full: true },
   };
+  original.skillRoots = ["/tmp/example-workspace/packages/nested"];
+  original.skillTouchedPaths = ["/tmp/example-workspace/file.txt"];
+  original.invokedSkills = [{
+    name: "commit",
+    path: "/tmp/example-workspace/.amber/skills/commit/SKILL.md",
+    content: "commit instructions",
+    invokedAt: new Date().toISOString(),
+  }];
   await store.save(original);
   const banner = {
     id: "banner-1",
@@ -127,10 +145,16 @@ test("forks a session with independent history and a provenance banner", async (
   assert.equal(fork.model, "zai/glm-5.3");
   assert.deepEqual(fork.fileReadState, original.fileReadState);
   assert.notEqual(fork.fileReadState, original.fileReadState);
+  assert.deepEqual(fork.skillRoots, original.skillRoots);
+  assert.deepEqual(fork.skillTouchedPaths, original.skillTouchedPaths);
+  assert.deepEqual(fork.invokedSkills, original.invokedSkills);
+  assert.notEqual(fork.invokedSkills, original.invokedSkills);
+  fork.invokedSkills![0]!.content = "Changed only in the fork";
   fork.messages[0]!.content = "Changed only in the fork";
   fork.compaction!.summary = "Changed only in the fork";
   assert.equal(original.messages[0]?.content, "Keep me");
   assert.equal(original.compaction.summary, "The user asked to be kept.");
+  assert.equal(original.invokedSkills?.[0]?.content, "commit instructions");
   assert.deepEqual((await store.get(fork.id))?.messages, [original.messages[0], banner]);
   assert.equal((await store.get(fork.id))?.compaction?.summary, "The user asked to be kept.");
 });

@@ -166,3 +166,90 @@ test("provider history emits agent results as text blocks without is_error", () 
     cache_control: { type: "ephemeral" },
   });
 });
+
+test("provider history merges an injected skill message into the tool-result user turn", () => {
+  const now = new Date().toISOString();
+  const messages: Message[] = [
+    {
+      id: "assistant",
+      role: "assistant",
+      content: "Loading the skill.",
+      createdAt: now,
+      status: "complete",
+      toolCalls: [{ id: "skill-1", name: "Skill", input: { skill: "commit" }, status: "complete", output: "" }],
+    },
+    {
+      id: "result",
+      role: "user",
+      content: "Launching skill: commit",
+      createdAt: now,
+      status: "complete",
+      kind: "tool-result",
+      toolUseId: "skill-1",
+    },
+    {
+      id: "expanded",
+      role: "user",
+      content: "<command-name>/commit</command-name>\n\nCreate a commit.",
+      createdAt: now,
+      status: "complete",
+      kind: "skill",
+      skillName: "commit",
+    },
+  ];
+
+  assert.deepEqual(buildProviderHistory(messages), [
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Loading the skill." },
+        { type: "tool_use", id: "skill-1", name: "Skill", input: { skill: "commit" } },
+      ],
+    },
+    {
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "skill-1", content: "Launching skill: commit", is_error: false },
+        {
+          type: "text",
+          text: "<command-name>/commit</command-name>\n\nCreate a commit.",
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+    },
+  ]);
+});
+
+test("provider history reinjects compacted skill instructions without duplicating active ones", () => {
+  const now = new Date().toISOString();
+  const base = { createdAt: now, status: "complete" as const };
+  const compaction = { summary: "Earlier work.", throughMessageId: "boundary", createdAt: now, coveredMessageCount: 2 };
+  const messages: Message[] = [
+    { ...base, id: "old-user", role: "user", content: "Use both skills" },
+    { ...base, id: "boundary", role: "assistant", content: "Done with both" },
+    { ...base, id: "new-user", role: "user", content: "Continue" },
+  ];
+  const invoked = [
+    { name: "gone", path: "/tmp/gone/SKILL.md", content: "Gone skill body", invokedAt: now },
+    { name: "active", path: "/tmp/active/SKILL.md", content: "Active skill body", invokedAt: now },
+  ];
+
+  const withoutActive = buildProviderHistory(messages, undefined, compaction, invoked);
+  const first = withoutActive[0]?.content;
+  assert.ok(Array.isArray(first));
+  assert.match(first[0]?.type === "text" ? first[0].text : "", /generated summary/);
+  assert.match(first[1]?.type === "text" ? first[1].text : "", /remain in effect[\s\S]*Gone skill body/);
+
+  const withActive: Message[] = [
+    ...messages,
+    { ...base, id: "skill-message", role: "user", content: "Active skill body", kind: "skill", skillName: "active" },
+  ];
+  const deduped = buildProviderHistory(withActive, undefined, compaction, invoked);
+  const reinjection = deduped[0]?.content;
+  assert.ok(Array.isArray(reinjection));
+  assert.match(reinjection[1]?.type === "text" ? reinjection[1].text : "", /Gone skill body/);
+  assert.equal(reinjection[1]?.type === "text" ? reinjection[1].text.includes("Active skill body") : true, false);
+  const activeTurn = deduped.find((message) => message.role === "user" && Array.isArray(message.content)
+    && message.content.some((block) => block.type === "text" && block.text === "Active skill body"));
+  assert.ok(activeTurn);
+});

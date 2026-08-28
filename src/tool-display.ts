@@ -71,6 +71,12 @@ export function toolSubject(call: ToolCall): string {
     const taskId = call.input.task_id ?? call.input.shell_id;
     return typeof taskId === "string" ? taskId : "Preparing task ID…";
   }
+  if (call.name === "Skill") {
+    if (typeof call.input.skill !== "string") return "Preparing skill…";
+    const name = `/${call.input.skill.replace(/^\/+/, "")}`;
+    if (typeof call.input.args !== "string" || !call.input.args.trim()) return name;
+    return `${name} ${call.input.args.trim().split(/\s+/).map((token) => `"${token}"`).join(" ")}`;
+  }
   if (call.name === "Grep" || call.name === "Glob") {
     const pattern = typeof call.input.pattern === "string" ? call.input.pattern : "";
     if (!pattern) return call.name === "Glob" ? "Preparing glob pattern…" : "Preparing search pattern…";
@@ -92,6 +98,10 @@ export function toolMetadata(call: ToolCall): string {
     values.push(model ? `${type} · ${model}` : type);
   }
   if (call.name !== "Bash" && call.workingDirectory) values.push(call.workingDirectory);
+  if (call.name === "Skill") {
+    if (call.skillModel) values.push(call.skillModel);
+    if (call.skillEffort) values.push(`effort ${call.skillEffort}`);
+  }
   if (call.name === "Bash" && call.exitCode !== undefined && call.exitCode !== null && call.exitCode !== 0) {
     if (call.timeoutMs !== undefined) values.push(`timeout ${formatDuration(call.timeoutMs)}`);
     values.push(`exit ${call.exitCode}`);

@@ -1,4 +1,5 @@
-import type { Message, ProviderMessage, SessionCompaction } from "./types.js";
+import type { Message, ProviderMessage, SessionCompaction, SessionInvokedSkill } from "./types.js";
+import { compactedSkillInstructions } from "./skill-tool.js";
 
 const SUMMARY_PREFIX = "The following is a generated summary of the earlier conversation. Use it as user-provided context when continuing the session.\n\n";
 
@@ -7,13 +8,14 @@ export function isModelMessage(message: Message): boolean {
 }
 
 function isProviderMessage(message: Message): boolean {
-  return isModelMessage(message) || message.kind === "tool-result";
+  return isModelMessage(message) || message.kind === "tool-result" || message.kind === "skill";
 }
 
 export function buildProviderHistory(
   messages: Message[],
   excludedMessageId?: string,
   compaction?: SessionCompaction,
+  invokedSkills?: SessionInvokedSkill[],
 ): ProviderMessage[] {
   const boundaryIndex = compaction
     ? messages.findIndex((message) => message.id === compaction.throughMessageId)
@@ -52,16 +54,43 @@ export function buildProviderHistory(
           : message.content,
     };
     const previous = history.at(-1);
-    if (message.kind === "tool-result" && previous?.role === "user"
-      && Array.isArray(previous.content) && Array.isArray(providerMessage.content)) {
+    if (
+      (message.kind === "tool-result" || message.kind === "skill")
+      && previous?.role === "user" && Array.isArray(previous.content) && Array.isArray(providerMessage.content)
+    ) {
       previous.content.push(...providerMessage.content);
+    } else if (message.kind === "skill" && previous?.role === "user") {
+      history.pop();
+      history.push({
+        role: "user",
+        content: Array.isArray(previous.content)
+          ? [...previous.content, { type: "text" as const, text: message.content }]
+          : [{ type: "text" as const, text: previous.content }, { type: "text" as const, text: message.content }],
+      });
     } else {
       history.push(providerMessage);
     }
   }
 
   if (compaction && boundaryIndex >= 0) {
-    history.unshift({ role: "user", content: `${SUMMARY_PREFIX}${compaction.summary}` });
+    const activeSkillNames = new Set(
+      activeMessages.flatMap((message) => (message.kind === "skill" && message.skillName ? [message.skillName] : [])),
+    );
+    const reinjected = compactedSkillInstructions(invokedSkills ?? [], activeSkillNames);
+    const summary = `${SUMMARY_PREFIX}${compaction.summary}`;
+    history.unshift(reinjected.length
+      ? {
+          role: "user",
+          content: [
+            { type: "text", text: summary },
+            {
+              type: "text",
+              text: `<system-reminder>\nThe following skill instructions were loaded earlier in this session and remain in effect:\n\n${
+                reinjected.map((content) => content.trim()).join("\n\n")}\n</system-reminder>`,
+            },
+          ],
+        }
+      : { role: "user", content: summary });
   }
   markTrailingCacheControl(history);
   return history;
