@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { browserUrl, openBrowser } from "./browser-launch.js";
+import { builtInCommand } from "./built-in-commands.js";
 import { SessionStore } from "./store.js";
 import { ProviderCatalog } from "./provider-catalog.js";
 import { loadSettings } from "./settings.js";
@@ -45,6 +46,7 @@ import { completeDirectories, completeDirectoryRoots, completeFiles } from "./di
 import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
 import { AGENT_TOOL_NAME, getAgentDefinition, parseAgentInput, startAgentRuns } from "./agent-tool.js";
 import { ActiveSessionRuns, abortSessionOperations } from "./session-aborts.js";
+import { SessionInputPriorityQueue } from "./session-queue.js";
 import {
   ASK_USER_QUESTION_TOOL_NAME,
   AskUserQuestionManager,
@@ -89,6 +91,7 @@ const workspaceRoot = await realpath(isPackaged ? process.cwd() : projectRoot);
 const publicDirectory = join(projectRoot, "public");
 const clientScript = join(sourceDirectory, "client.js");
 const clientFormattersScript = join(sourceDirectory, "client-formatters.js");
+const builtInCommandsScript = join(sourceDirectory, "built-in-commands.js");
 const streamingThinkingScript = join(sourceDirectory, "streaming-thinking.js");
 const toolDisplayScript = join(sourceDirectory, "tool-display.js");
 const markdownScript = join(projectRoot, "node_modules", "markdown-it", "dist", "browser", "markdown-it.umd.min.js");
@@ -110,6 +113,8 @@ validateAgentModels(providerCatalog);
 const loginCatalogActivations = new Map<string, Promise<void>>();
 const claudeCodeTools = createClaudeCodeTools(agentDefinitions);
 const activeSessions = new ActiveSessionRuns();
+const queuedSessionMessages = new SessionInputPriorityQueue();
+const interruptibleSessions = new Set<string>();
 const backgroundTasks = new BackgroundTaskManager();
 const askUserQuestions = new AskUserQuestionManager();
 const planModeApprovals = new PlanModeApprovalManager();
@@ -363,6 +368,28 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return streamMessage(request, response, messageMatch[1]);
   }
 
+  const queuedMessageMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/queued-message$`));
+  if (method === "POST" && queuedMessageMatch?.[1]) {
+    const session = await store.get(queuedMessageMatch[1]);
+    if (!session) return json(response, 404, { error: "Session not found" });
+    if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
+    const body = await readJson(request);
+    const content = typeof body.content === "string" ? body.content.trim() : "";
+    const kind = body.kind === "command" ? "command" : body.kind === "message" ? "message" : undefined;
+    if (!content || content.length > 32_000) {
+      return json(response, 400, { error: "Message must contain 1–32,000 characters" });
+    }
+    if (!kind) return json(response, 400, { error: "Queued input kind must be message or command" });
+    if (kind === "command" && !builtInCommand(content)) {
+      return json(response, 400, { error: "Queued command is not a built-in command" });
+    }
+    if (!interruptibleSessions.has(queuedMessageMatch[1])) {
+      return json(response, 409, { error: "The session is not streaming" });
+    }
+    queuedSessionMessages.enqueueUser(queuedMessageMatch[1], { content, kind });
+    return json(response, 202, { queued: true });
+  }
+
   const commandMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/commands$`));
   if (method === "POST" && commandMatch?.[1]) {
     return executeCommand(request, response, commandMatch[1]);
@@ -483,6 +510,9 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   if (method === "GET" && url.pathname === "/client-formatters.js") {
     return serveFile(response, clientFormattersScript, "text/javascript; charset=utf-8", "no-cache");
   }
+  if (method === "GET" && url.pathname === "/built-in-commands.js") {
+    return serveFile(response, builtInCommandsScript, "text/javascript; charset=utf-8", "no-cache");
+  }
   if (method === "GET" && url.pathname === "/streaming-thinking.js") {
     return serveFile(response, streamingThinkingScript, "text/javascript; charset=utf-8", "no-cache");
   }
@@ -569,7 +599,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   response.on("close", () => {
     if (!response.writableEnded) controller.abort();
   });
-  await autoCompactSession(session, controller.signal);
   const now = new Date().toISOString();
   const userMessage: Message = { id: randomUUID(), role: "user", content, createdAt: now, status: "complete" };
   let assistantMessage = createAssistantMessage(now);
@@ -584,6 +613,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   });
   const bashExecutor = new BashExecutor();
   activeSessions.register(sessionId, session.parentSessionId, controller, session);
+  interruptibleSessions.add(sessionId);
   const emit = (event: string, data: unknown) => emitSessionEvent(sessionId, response, event, data);
   emit("start", { session, userMessage, assistantMessage });
   const onAutomaticName = (title: string) => {
@@ -603,6 +633,19 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     snapshotSave = snapshotSave.then(() => store.save(snapshot));
     return snapshotSave;
   };
+  const runAutomaticCompaction = async (): Promise<boolean> => {
+    emit("auto_compaction_start", {});
+    try {
+      await compactSession(session, controller.signal, (generatedCharacters) => {
+        emit("auto_compaction_progress", { generatedCharacters });
+      });
+      emit("auto_compaction_complete", { session });
+      return true;
+    } catch (error) {
+      emit("auto_compaction_error", { error: errorMessage(error) });
+      return false;
+    }
+  };
   try {
     let allowedDirectories = sessionDirectories(session);
     const currentDirectory = sessionWorkingDirectory(session);
@@ -610,6 +653,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     // Skill model/effort overrides apply only to the model calls of this user turn.
     let turnModel: string | undefined;
     let turnEffort: ThinkingLevel | undefined;
+    let automaticCompactionQueued = false;
     for (;;) {
       const skills = await sessionSkills(session);
       const activeProvider = turnModel ? providerCatalog.provider(turnModel) : providerForSession(session);
@@ -676,14 +720,9 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       await store.save(session);
       emit("assistant_complete", { message: assistantMessage });
       throwIfSessionAborted(controller.signal);
-
-      if (toolDrafts.size === 0) {
-        if (session.parentSessionId) {
-          session.agentStatus = "complete";
-          await store.save(session);
-        }
-        emit("done", { message: assistantMessage, session });
-        return;
+      if (!automaticCompactionQueued && shouldAutoCompactSession(session)) {
+        queuedSessionMessages.enqueueAutomaticCompaction(sessionId);
+        automaticCompactionQueued = true;
       }
 
       const orderedCalls = [...toolDrafts.values()].map(({ call }) => call);
@@ -699,6 +738,17 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         }
       }
       const pendingSkillMessages: Message[] = [];
+      // Read the interruption before starting same-turn Agent calls: agents are
+      // eager promises and may have side effects as soon as they are created.
+      const interruptions = queuedSessionMessages.takeReady(sessionId);
+      const takeReadyInputs = (): void => {
+        interruptions.push(...queuedSessionMessages.takeReady(sessionId));
+        interruptions.sort((left, right) => left.priority - right.priority);
+      };
+      if (orderedCalls.length === 0) {
+        queuedSessionMessages.operationCompleted(sessionId);
+        takeReadyInputs();
+      }
       let agentLinkSaveChain = Promise.resolve();
       const persistAgentLinks = (): Promise<void> => {
         const pending = agentLinkSaveChain.then(() => store.save(session));
@@ -706,7 +756,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         return pending;
       };
       const agentRuns = startAgentRuns(
-        orderedCalls.filter((call) => call.name === AGENT_TOOL_NAME && call.status !== "error"),
+        orderedCalls.filter((call) => interruptions.length === 0 && call.name === AGENT_TOOL_NAME && call.status !== "error"),
         (call) => executeAgentCall(
           session,
           call,
@@ -719,14 +769,26 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         ),
       );
 
+      // Queued input interrupts the run at a tool boundary: the call in flight
+      // finishes and everything not started yet is skipped. A message then
+      // continues the model turn; a command returns control to the client.
+      let endTurnAfterToolResult = false;
       for (const call of orderedCalls) {
         throwIfSessionAborted(controller.signal);
+        // Non-blocking /add-dir commands mutate the live session while this run
+        // is active, so each newly-started tool sees the latest allowed roots.
+        allowedDirectories = sessionDirectories(session);
         let resultText = call.output;
         let resultBlocks: Array<{ type: "text"; text: string }> | undefined;
         let abortAfterResult: Error | undefined;
         let endTurnAfterResult = false;
         if (call.status !== "error") {
-          if (call.name === ENTER_PLAN_MODE_TOOL_NAME) {
+          if (interruptions.length > 0 && call.status === "queued") {
+            call.status = "error";
+            call.output = "Tool call skipped because queued input interrupted the run.";
+            call.statusDisplay = { text: "NOT RUN" };
+            resultText = call.output;
+          } else if (call.name === ENTER_PLAN_MODE_TOOL_NAME) {
             const started = Date.now();
             try {
               if (!approvalCapable || session.agentType) throw new Error("EnterPlanMode is unavailable in this session");
@@ -1141,18 +1203,64 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         await store.save(session);
         if (abortAfterResult) throw abortAfterResult;
         throwIfSessionAborted(controller.signal);
+        queuedSessionMessages.operationCompleted(sessionId);
+        takeReadyInputs();
         if (endTurnAfterResult) {
-          emit("done", { message: assistantMessage, session });
-          return;
+          endTurnAfterToolResult = true;
+          break;
         }
       }
 
-      const loop = planModeCalls.length > 0 ? null : toolLoopTracker.record([...toolDrafts.values()].map(({ call }) => ({
-          name: call.name,
-          input: call.input,
-          status: call.status,
-          output: call.output,
-        })));
+      const roundWasInterrupted = interruptions.length > 0;
+      if (interruptions.some((input) => input.source === "automatic-compaction")) {
+        const compacted = await runAutomaticCompaction();
+        if (compacted) {
+          queuedSessionMessages.removeManualCompaction(sessionId);
+          const manualCompaction = interruptions.findIndex((input) =>
+            input.source === "user"
+            && input.kind === "command"
+            && input.content.trim().toLowerCase() === "/compact");
+          if (manualCompaction >= 0) interruptions.splice(manualCompaction, 1);
+        }
+      }
+      const userInterruption = interruptions.find((input) => input.source === "user");
+      if (userInterruption?.kind === "message") {
+        const queuedUserMessage: Message = {
+          id: randomUUID(),
+          role: "user",
+          content: userInterruption.content,
+          createdAt: new Date().toISOString(),
+          status: "complete",
+        };
+        session.messages.push(queuedUserMessage);
+        // The interruption starts a fresh user turn: skill model/effort
+        // overrides from the interrupted turn no longer apply.
+        turnModel = undefined;
+        turnEffort = undefined;
+        await store.save(session);
+        emit("user_message", { message: queuedUserMessage });
+      } else if (userInterruption?.kind === "command") {
+        emit("done", { message: assistantMessage, session });
+        return;
+      }
+
+      if ((orderedCalls.length === 0 || endTurnAfterToolResult) && userInterruption?.kind !== "message") {
+        if (session.parentSessionId) {
+          session.agentStatus = "complete";
+          await store.save(session);
+        }
+        emit("done", { message: assistantMessage, session });
+        return;
+      }
+
+      const loop = !roundWasInterrupted && planModeCalls.length === 0
+        ? toolLoopTracker.record([...toolDrafts.values()].map(({ call }) => ({
+            name: call.name,
+            input: call.input,
+            status: call.status,
+            output: call.output,
+          })))
+        : null;
       if (loop) throw new Error(formatToolLoopError(loop));
       assistantMessage = createAssistantMessage();
       session.messages.push(assistantMessage);
@@ -1172,6 +1280,10 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     if (!response.writableEnded) emit("error", { error: message, message: assistantMessage, session });
   } finally {
     automaticNameRuns.get(sessionId)?.listeners.delete(onAutomaticName);
+    // Anything still queued was never injected; the client dispatches it once
+    // this run has finished.
+    queuedSessionMessages.clear(sessionId);
+    interruptibleSessions.delete(sessionId);
     activeSessions.unregister(sessionId, controller);
     response.end();
   }
@@ -1506,12 +1618,11 @@ async function listDirectoryCompletions(response: ServerResponse, sessionId: str
   json(response, 200, { directories });
 }
 
-async function autoCompactSession(session: Session, signal: AbortSignal): Promise<void> {
-  if (!compactionTarget(session)) return;
+function shouldAutoCompactSession(session: Session): boolean {
+  if (!compactionTarget(session)) return false;
   const compactTokens = providerCatalog.model(session.model).compactTokens;
   const history = buildProviderHistory(session.messages, undefined, session.compaction);
-  if (!shouldAutoCompact(compactTokens, sessionContextTokens(session), history)) return;
-  await compactSession(session, signal);
+  return shouldAutoCompact(compactTokens, sessionContextTokens(session), history);
 }
 
 function compactionTarget(session: Session): Message | undefined {
@@ -1564,15 +1675,18 @@ async function compactSession(
 }
 
 async function executeCommand(request: IncomingMessage, response: ServerResponse, sessionId: string): Promise<void> {
-  if (activeSessions.has(sessionId)) return json(response, 409, { error: "Wait for the current response to finish" });
-  const session = await store.get(sessionId);
-  if (!session) return json(response, 404, { error: "Session not found" });
-  if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
   const body = await readJson(request);
   const rawCommand = typeof body.command === "string" ? body.command.trim() : "";
   const firstWhitespace = rawCommand.search(/\s/);
   const command = (firstWhitespace === -1 ? rawCommand : rawCommand.slice(0, firstWhitespace)).toLowerCase();
   const argument = firstWhitespace === -1 ? "" : rawCommand.slice(firstWhitespace).trim();
+  const runsDuringResponse = builtInCommand(rawCommand)?.runsDuringResponse === true;
+  if (activeSessions.has(sessionId) && !runsDuringResponse) {
+    return json(response, 409, { error: "Wait for the current response to finish" });
+  }
+  const session = activeSessions.session(sessionId) ?? await store.get(sessionId);
+  if (!session) return json(response, 404, { error: "Session not found" });
+  if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
 
   if (command === "/add-dir") {
     if (!argument) return json(response, 400, { error: "Usage: /add-dir <directory>" });
@@ -1619,7 +1733,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
 
     const controller = new AbortController();
     request.once("aborted", () => controller.abort());
-    activeSessions.register(sessionId, undefined, controller);
+    activeSessions.register(sessionId, undefined, controller, session);
     try {
       const title = await generateSessionTitle(providerForSession(session), session.messages, controller.signal, session.compaction);
       return json(response, 200, { command: "name", session: await store.rename(session, title) });
@@ -1648,7 +1762,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     response.on("close", () => {
       if (!response.writableEnded) controller.abort();
     });
-    activeSessions.register(sessionId, undefined, controller);
+    activeSessions.register(sessionId, undefined, controller, session);
     response.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-cache, no-transform",

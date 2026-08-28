@@ -18,6 +18,7 @@ import {
   taskRuntime,
   type PromptFileReference,
 } from "./client-formatters.js";
+import { BUILT_IN_COMMANDS, builtInCommand, type BuiltInCommand } from "./built-in-commands.js";
 import {
   diffLineClass,
   diffSummary,
@@ -66,26 +67,14 @@ interface SessionSnapshot {
   planModeRequest?: PlanModeRequest;
 }
 interface QuestionSelection { labels: Set<string>; other: string; otherSelected: boolean; focusIndex: number }
-interface CommandDefinition { name: string; description: string }
 interface DirectoryCompletion { value: string; absolutePath: string; kind?: "directory" | "file" }
 interface MarkdownRenderer { render(source: string): string }
 declare const markdownit: (options: { html: boolean; linkify: boolean; breaks: boolean; typographer: boolean }) => MarkdownRenderer;
 
-const commands: CommandDefinition[] = [
-  { name: "/add-dir", description: "Add a working directory for this session" },
-  { name: "/cwd", description: "Show or change the current working directory" },
-  { name: "/context", description: "Show token usage for the current model context" },
-  { name: "/clear", description: "Erase this session's conversation and model context" },
-  { name: "/commit", description: "Commit current changes with a generated message; add 'push' to also push" },
-  { name: "/compact", description: "Summarize model context while keeping the full transcript" },
-  { name: "/fork", description: "Fork this session with its complete history" },
-  { name: "/git", description: "Inspect the repository: diff, show, status; commit [push]" },
-  { name: "/name", description: "Generate a session name, or pass a title" },
-  { name: "/tasks", description: "List and manage background tasks" },
-];
+const commands = BUILT_IN_COMMANDS;
 const markdown = markdownit({ html: false, linkify: true, breaks: false, typographer: false });
 const SESSION_ROUTE = /^\/s\/([a-z0-9.-]+)$/;
-let matchingCommands: CommandDefinition[] = [];
+let matchingCommands: BuiltInCommand[] = [];
 let selectedCommand = 0;
 let directoryCompletions: DirectoryCompletion[] = [];
 let directoryCompletionCommand: "/add-dir" | "/cwd" | null = null;
@@ -142,7 +131,7 @@ let authPollTimer: number | undefined;
 let sessionRunController: AbortController | null = null;
 let sessionRunId: string | null = null;
 let sessionRunReconnectTimer: number | undefined;
-let queuedMessage: { sessionId: string; content: string } | null = null;
+let queuedMessage: { sessionId: string; content: string; kind: "message" | "command"; queuedAt: number } | null = null;
 let pendingPlanHandoff: { sessionId: string; prompt: string } | null = null;
 
 const ESC_ABORT_WINDOW_MS = 500;
@@ -413,7 +402,7 @@ function wireEvents(): void {
     if (state.streaming) abortCurrentSession();
     else void sendMessage();
   });
-  elements.queue.addEventListener("click", queueCurrentMessage);
+  elements.queue.addEventListener("click", () => void queueCurrentMessage());
   elements.prompt.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "r") {
       event.preventDefault();
@@ -458,7 +447,7 @@ function wireEvents(): void {
     }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      if (state.streaming) queueCurrentMessage();
+      if (state.streaming) void queueCurrentMessage();
       else elements.composer.requestSubmit();
     }
   });
@@ -1396,6 +1385,16 @@ function applySessionEvent(context: SessionStreamContext, event: string, data: u
     setStreamAssistant(context, message);
     updateMessage(context.assistantElement, message);
     renderContextMeter();
+  } else if (event === "auto_compaction_start") {
+    notify("Auto-compacting context…");
+  } else if (event === "auto_compaction_complete") {
+    const session = (data as { session: Session }).session;
+    context.session = session;
+    updateRenderedSession(session);
+    renderContextMeter();
+    consumeQueuedManualCompaction(session.id);
+  } else if (event === "auto_compaction_error") {
+    notify(`Auto-compaction failed · ${(data as { error: string }).error}`);
   } else if (event === "tool_update") {
     applyToolUpdate(context.session, data as { messageId: string; toolCall: ToolCall });
   } else if (event === "tool_output") {
@@ -1417,6 +1416,13 @@ function applySessionEvent(context: SessionStreamContext, event: string, data: u
     context.session.messages.push(message);
     context.assistantMessage = message;
     context.assistantElement = appendMessage(message);
+  } else if (event === "user_message") {
+    const message = (data as { message: Message }).message;
+    if (!context.session.messages.some((candidate) => candidate.id === message.id)) {
+      context.session.messages.push(message);
+      appendMessage(message);
+    }
+    consumeQueuedMessage(message);
   } else if (event === "session_named") {
     context.session.title = (data as { title: string }).title;
     renderHeader();
@@ -1454,21 +1460,81 @@ async function executePlanHandoff(handoff: { sessionId: string; prompt: string }
   }
 }
 
-function queueCurrentMessage(): void {
+async function queueCurrentMessage(): Promise<void> {
   const session = state.session;
   const content = elements.prompt.value.trim();
   if (!session || !state.streaming || !content) return;
-  queuedMessage = { sessionId: session.id, content };
-  clearPrompt();
+  const command = builtInCommand(content);
+  if (command?.runsDuringResponse) {
+    await runCommand(content);
+    return;
+  }
+  const kind: "command" | "message" = command ? "command" : "message";
+  const previousQueued = queuedMessage;
+  const pending = { sessionId: session.id, content, kind, queuedAt: Date.now() };
+  queuedMessage = pending;
   renderQueuedMessage();
+  let serverRunUnavailable = false;
+  try {
+    const response = await fetch(`/api/sessions/${session.id}/queued-message`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content, kind }),
+    });
+    // Keep the input queued locally when the interruptible server run has
+    // already ended (or has not registered yet). The stream-finalizer will
+    // dispatch it once the client observes that the session is ready.
+    serverRunUnavailable = response.status === 409;
+    if (!response.ok && !serverRunUnavailable) throw new Error(await responseError(response));
+  } catch (error) {
+    if (queuedMessage === pending) {
+      queuedMessage = previousQueued;
+      renderQueuedMessage();
+    }
+    notify(messageFrom(error));
+    return;
+  }
+  if (elements.prompt.value.trim() === content) clearPrompt();
+  // The stream may have finalized while the queue request was in flight, before
+  // the server reported whether it could accept the queued input.
+  if (serverRunUnavailable && !state.streaming && queuedMessage === pending) sendQueuedMessage(session.id);
 }
 
 function sendQueuedMessage(sessionId: string): void {
-  if (!queuedMessage || queuedMessage.sessionId !== sessionId || state.session?.id !== sessionId) return;
-  const content = queuedMessage.content;
+  const queued = queuedMessage;
+  if (!queued || queued.sessionId !== sessionId || state.session?.id !== sessionId) return;
+  if (queued.kind === "command") {
+    queuedMessage = null;
+    renderQueuedMessage();
+    void runCommand(queued.content, false);
+    return;
+  }
+  // The server may have injected the message mid-run even if that event never
+  // reached us (for example after a dropped connection).
+  const alreadyDelivered = state.session.messages.some((message) =>
+    message.role === "user"
+    && (!message.kind || message.kind === "chat")
+    && message.content === queued.content
+    && Date.parse(message.createdAt) + 1_000 >= queued.queuedAt);
   queuedMessage = null;
   renderQueuedMessage();
-  void sendMessage(content);
+  if (!alreadyDelivered) void sendMessage(queued.content);
+}
+
+/** Stops tracking a queued message the server injected mid-run. */
+function consumeQueuedMessage(message: Message): void {
+  if (!queuedMessage || queuedMessage.kind !== "message" || message.role !== "user" || message.content !== queuedMessage.content) return;
+  queuedMessage = null;
+  renderQueuedMessage();
+}
+
+/** Automatic compaction satisfies a queued manual /compact command. */
+function consumeQueuedManualCompaction(sessionId: string): void {
+  if (queuedMessage?.sessionId !== sessionId
+    || queuedMessage.kind !== "command"
+    || queuedMessage.content.trim().toLowerCase() !== "/compact") return;
+  queuedMessage = null;
+  renderQueuedMessage();
 }
 
 function renderQueuedMessage(): void {
@@ -2077,7 +2143,8 @@ function messageElement(messageId: string): HTMLElement | null {
 
 async function runCommand(command: string, clearComposer = true): Promise<void> {
   const session = state.session;
-  if (!session || state.streaming) return;
+  const duringResponse = state.streaming;
+  if (!session || (duringResponse && !builtInCommand(command)?.runsDuringResponse)) return;
   if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/compact") return runCompactCommand(command, clearComposer);
   if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/git") {
     const request = parseGitCommand(command);
@@ -2102,7 +2169,7 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
     return sendMessage(prompt);
   }
   if (clearComposer) clearPrompt();
-  setBusy(true);
+  if (!duringResponse) setBusy(true);
   try {
     const result = await api<{ command: "add-dir" | "cwd" | "context" | "clear" | "compact" | "fork" | "name" | "tasks"; session: Session; directory?: string; cwdChanged?: boolean; previousSessionId?: string; tasks?: BackgroundTask[] }>(
       `/api/sessions/${session.id}/commands`,
@@ -2130,7 +2197,7 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
   } catch (error) {
     notify(messageFrom(error));
   } finally {
-    setBusy(false);
+    if (!duringResponse) setBusy(false);
     elements.prompt.focus();
   }
 }
@@ -3152,6 +3219,7 @@ function updateCommandMenu(): void {
     matchingCommands = gitMatches.map((suggestion) => ({
       name: suggestion.value,
       description: suggestion.description,
+      runsDuringResponse: false,
     }));
     selectedCommand = 0;
     if (matchingCommands.length === 0) return hideCommandMenu();
@@ -3280,14 +3348,14 @@ function acceptDirectoryCompletion(directory: DirectoryCompletion): void {
   elements.prompt.focus();
 }
 
-function selectCommand(command: CommandDefinition, execute: boolean): void {
+function selectCommand(command: BuiltInCommand, execute: boolean): void {
   const continuesTyping = command.name === "/add-dir" || command.name === "/cwd" || command.name === "/git";
   elements.prompt.value = continuesTyping ? `${command.name} ` : command.name;
   if (continuesTyping) updateCommandMenu();
   else hideCommandMenu();
   resizePrompt();
   if (execute && !continuesTyping) {
-    if (state.streaming) queueCurrentMessage();
+    if (state.streaming) void queueCurrentMessage();
     else elements.composer.requestSubmit();
   }
   else elements.prompt.focus();

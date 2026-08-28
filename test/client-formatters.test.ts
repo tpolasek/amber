@@ -13,6 +13,18 @@ import {
   replacePromptFileReference,
   taskRuntime,
 } from "../src/client-formatters.js";
+import { BUILT_IN_COMMANDS, builtInCommand } from "../src/built-in-commands.js";
+
+test("classifies built-in commands that can run during a response", () => {
+  assert.deepEqual(
+    BUILT_IN_COMMANDS.filter((command) => command.runsDuringResponse).map((command) => command.name),
+    ["/add-dir", "/context"],
+  );
+  assert.equal(builtInCommand(" /CONTEXT ")?.runsDuringResponse, true);
+  assert.equal(builtInCommand("/compact")?.runsDuringResponse, false);
+  assert.equal(builtInCommand("/bashes")?.name, "/tasks");
+  assert.equal(builtInCommand("ordinary message"), undefined);
+});
 
 test("compacts header paths while preserving useful trailing directories", () => {
   assert.equal(compactHeaderPath("/Users/amber", "/Users/amber"), "~");

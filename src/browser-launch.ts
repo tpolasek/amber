@@ -21,6 +21,7 @@ export function browserCommand(url: string, platform: NodeJS.Platform = process.
 }
 
 export function openBrowser(url: string): void {
+  if (browserLaunchSuppressed()) return;
   const launch = browserCommand(url);
   if (!launch) return;
   const child = spawn(launch.command, launch.args, {
@@ -29,4 +30,9 @@ export function openBrowser(url: string): void {
   });
   child.once("error", () => undefined);
   child.unref();
+}
+
+/** Automated runs (end-to-end tests) suppress the browser window with AMBER_NO_BROWSER. */
+export function browserLaunchSuppressed(env: Record<string, string | undefined> = process.env): boolean {
+  return /^(1|true|yes)$/i.test(env.AMBER_NO_BROWSER ?? "");
 }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { browserCommand, browserUrl } from "../src/browser-launch.js";
+import { browserCommand, browserLaunchSuppressed, browserUrl } from "../src/browser-launch.js";
 
 test("builds a browser-safe local server URL", () => {
   assert.equal(browserUrl("127.0.0.1", 3000), "http://127.0.0.1:3000");
@@ -18,4 +18,14 @@ test("uses each platform's native browser opener", () => {
     args: ["/d", "/s", "/c", "start", "", url],
   });
   assert.equal(browserCommand(url, "aix"), null);
+});
+
+test("suppresses browser launching for automated runs", () => {
+  assert.equal(browserLaunchSuppressed({}), false);
+  assert.equal(browserLaunchSuppressed({ AMBER_NO_BROWSER: undefined }), false);
+  assert.equal(browserLaunchSuppressed({ AMBER_NO_BROWSER: "" }), false);
+  assert.equal(browserLaunchSuppressed({ AMBER_NO_BROWSER: "0" }), false);
+  assert.equal(browserLaunchSuppressed({ AMBER_NO_BROWSER: "1" }), true);
+  assert.equal(browserLaunchSuppressed({ AMBER_NO_BROWSER: "true" }), true);
+  assert.equal(browserLaunchSuppressed({ AMBER_NO_BROWSER: "YES" }), true);
 });
