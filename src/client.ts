@@ -14,6 +14,7 @@ import {
   promptFileReferenceAt,
   relativeTime,
   replacePromptFileReference,
+  skillCommandSuggestions,
   taskRuntime,
   type PromptFileReference,
 } from "./client-formatters.js";
@@ -3221,11 +3222,42 @@ function updateCommandMenu(): void {
     return;
   }
   const value = elements.prompt.value.trim().toLowerCase();
-  if (!/^\/[a-z-]*$/.test(value)) return hideCommandMenu();
-  matchingCommands = commands.filter((command) => command.name.startsWith(value));
+  if (!/^\/[a-z:-]*$/.test(value)) return hideCommandMenu();
+  const session = state.session;
+  const skillMatches = session
+    ? skillCommandSuggestions(sessionSkillCache.get(session.id) ?? [], value, commands)
+    : [];
+  if (session && value === "/") void refreshSessionSkills(session.id);
+  matchingCommands = [
+    ...commands.filter((command) => command.name.startsWith(value)),
+    ...skillMatches.map((suggestion) => ({
+      name: suggestion.value,
+      description: suggestion.description,
+      runsDuringResponse: false,
+    })),
+  ];
   selectedCommand = 0;
   if (matchingCommands.length === 0) return hideCommandMenu();
   renderCommandMenu();
+}
+
+const sessionSkillCache = new Map<string, { name: string; description: string }[]>();
+const sessionSkillFetchMs = new Map<string, number>();
+
+/** Refreshes the cached skill list when the command menu is opened from a bare "/". */
+async function refreshSessionSkills(sessionId: string): Promise<void> {
+  if (Date.now() - (sessionSkillFetchMs.get(sessionId) ?? 0) < 5_000) return;
+  sessionSkillFetchMs.set(sessionId, Date.now());
+  try {
+    const result = await api<{ skills: { name: string; description: string }[] }>(
+      `/api/sessions/${sessionId}/skills`,
+    );
+    sessionSkillCache.set(sessionId, result.skills);
+  } catch {
+    sessionSkillFetchMs.delete(sessionId);
+    return;
+  }
+  if (/^\/[a-z:-]*$/.test(elements.prompt.value.trim().toLowerCase())) updateCommandMenu();
 }
 
 async function updateDirectoryCompletions(command: "/add-dir" | "/cwd", path: string): Promise<void> {

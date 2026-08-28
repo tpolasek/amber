@@ -10,6 +10,7 @@ import {
   parseGitCommand,
   promptFileReferenceAt,
   replacePromptFileReference,
+  skillCommandSuggestions,
   taskRuntime,
 } from "../src/client-formatters.js";
 import { BUILT_IN_COMMANDS, builtInCommand } from "../src/built-in-commands.js";
@@ -64,6 +65,28 @@ test("suggests supported /git parameters as the command is typed", () => {
   );
   assert.deepEqual((gitCommandSuggestions("/git commit p") ?? []).map((item) => item.value), ["/git commit push"]);
   assert.deepEqual(gitCommandSuggestions("/git log"), []);
+});
+
+test("suggests session skills as slash commands without built-in collisions", () => {
+  const skills = [
+    { name: "commit", description: "Commit current changes" },
+    { name: "review-pr", description: "Review a pull request" },
+    { name: "ns:deploy", description: "Deploy the app" },
+  ];
+  const commands = [{ name: "/commit" }, { name: "/tasks" }];
+
+  assert.deepEqual(skillCommandSuggestions(skills, "/", commands), [
+    { value: "/review-pr", description: "Review a pull request" },
+    { value: "/ns:deploy", description: "Deploy the app" },
+  ]);
+  assert.deepEqual(skillCommandSuggestions(skills, "/c", commands), []);
+  assert.deepEqual(skillCommandSuggestions(skills, "/rev", []), [
+    { value: "/review-pr", description: "Review a pull request" },
+  ]);
+  assert.deepEqual(skillCommandSuggestions(skills, "/ns:", commands), [
+    { value: "/ns:deploy", description: "Deploy the app" },
+  ]);
+  assert.deepEqual(skillCommandSuggestions(skills, "commit", commands), []);
 });
 
 test("parses /git subcommands into views and commit requests", () => {

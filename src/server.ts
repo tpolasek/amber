@@ -403,6 +403,20 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       : json(response, 404, { error: "Session not found" });
   }
 
+  const skillsMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/skills$`));
+  if (method === "GET" && skillsMatch?.[1]) {
+    const session = activeSessions.session(skillsMatch[1]) ?? await store.get(skillsMatch[1]);
+    if (!session) return json(response, 404, { error: "Session not found" });
+    const skills = invocableSkills(
+      await sessionSkills(session),
+      session.skillTouchedPaths ?? [],
+      sessionWorkingDirectory(session),
+    ).filter((skill) => skill.userInvocable);
+    return json(response, 200, {
+      skills: skills.map((skill) => ({ name: skill.name, description: skill.description })),
+    });
+  }
+
   const gitMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/git$`));
   if (method === "GET" && gitMatch?.[1]) {
     const session = await store.get(gitMatch[1]);

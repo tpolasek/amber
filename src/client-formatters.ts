@@ -94,6 +94,24 @@ export const GIT_COMMAND_SUGGESTIONS: GitCommandSuggestion[] = [
   { value: "/git commit push", description: "Commit current changes and push" },
 ];
 
+export interface SkillSuggestion {
+  value: string;
+  description: string;
+}
+
+/** Session skills matching the typed slash command, with built-in name collisions dropped. */
+export function skillCommandSuggestions(
+  skills: readonly { name: string; description: string }[],
+  typed: string,
+  commands: readonly { name: string }[],
+): SkillSuggestion[] {
+  const prefix = typed.startsWith("/") ? typed : `/${typed}`;
+  return skills
+    .filter((skill) => `/${skill.name}`.startsWith(prefix))
+    .filter((skill) => !commands.some((command) => command.name === `/${skill.name}`))
+    .map((skill) => ({ value: `/${skill.name}`, description: skill.description }));
+}
+
 export function gitCommandSuggestions(input: string): GitCommandSuggestion[] | null {
   const value = input.trimStart();
   if (!/^\/git(?:\s|$)/i.test(value)) return null;
