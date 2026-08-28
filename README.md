@@ -14,7 +14,7 @@ What makes it different:
 * Claude Code, rebuilt. **Reverse-engineered from Claude Code's behavior**, reproducing the prompt flow accurately while stripping it down to a lightweight tool.
 
 ## Themes 
-It supports 3 themes out of the box, here are the other two:
+It supports 4 themes out of the box. `light+` follows the VS Code Light+ palette; the other alternate themes are shown below.
 ### Theme = hacker
 
 <img width="auto" height="633" alt="amber_hacker" src="https://github.com/user-attachments/assets/802655e8-bdb4-4445-8a1b-f5b75f6d3489" />
@@ -60,7 +60,7 @@ npm run dev
 AMBER reads **~/.amber/settings.toml**. Each provider is configured with **api = "anthropic"** (Anthropic Messages API) or **api = "openai"** (OpenAI Responses API); **api** defaults to **"anthropic"** when omitted. Either way, providers discover their available models from **/v1/models**. OpenAI-protocol providers prefer the Responses API and automatically fall back to **Chat Completions** when the server does not implement it (LM Studio, Ollama, vLLM, llama.cpp), so local servers work without extra configuration.
 
 ```toml
-theme = "dark" # dark (current Amber), light (Solarized Light), or hacker (terminal green)
+theme = "dark" # dark (current Amber), light (Solarized Light), light+ (VS Code Light+), or hacker (terminal green)
 default_provider = "zai"
 default_agent_provider = "openai"
 default_agent_model = "gpt-5.4" # Optional; otherwise uses the agent provider's default model.

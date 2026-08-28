@@ -216,7 +216,9 @@ export class SessionStore {
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .slice(0, limit)
       .map((session) => {
-        const visibleMessages = session.messages.filter((message) => message.kind !== "tool-result" && message.kind !== "skill");
+        const visibleMessages = session.messages.filter((message) =>
+          message.kind !== "tool-result" && message.kind !== "skill" && message.kind !== "agent-notification"
+        );
         return {
           id: session.id,
           title: session.title,

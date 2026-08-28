@@ -33,7 +33,7 @@ export function createAgentTool(definitions: readonly AgentDefinition[]): ToolDe
       "",
       "Always include a short description (3-5 words). Brief the agent like a smart colleague who has not seen this conversation, and clearly say whether it should write code or only research.",
       "Launch multiple agents concurrently whenever possible by returning multiple Agent tool uses in a single response. Amber starts all Agent calls from that response in parallel.",
-      "Amber currently runs agents in the foreground on the configured model. The model and run_in_background fields are accepted for Claude Code wire compatibility; omit them unless needed by another compatible client.",
+      "Set run_in_background to true for independent work that should continue while you proceed. The launch returns immediately with a linked sub-session, and its status and result are injected into your next model turn after it finishes.",
     ].join("\n"),
     input_schema: {
       type: "object",
@@ -52,7 +52,7 @@ export function createAgentTool(definitions: readonly AgentDefinition[]): ToolDe
         },
         run_in_background: {
           type: "boolean",
-          description: "Set to true to run this agent in the background. You will be notified when it completes.",
+          description: "Set to true to run this agent in the background and return immediately with its linked sub-session.",
         },
       },
       required: ["description", "prompt"],

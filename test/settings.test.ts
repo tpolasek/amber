@@ -15,7 +15,7 @@ test("creates a settings template on first load", async () => {
 
   assert.deepEqual(settings, SETTINGS_TEMPLATE);
   assert.deepEqual(parse(source), SETTINGS_TEMPLATE);
-  assert.match(source, /^theme = "dark" # dark \(current Amber\), light \(Solarized Light\), or hacker \(terminal green\)$/m);
+  assert.match(source, /^theme = "dark" # dark \(current Amber\), light \(Solarized Light\), light\+ \(VS Code Light\+\), or hacker \(terminal green\)$/m);
   assert.match(source, /^# default_agent_provider = ""$/m);
   assert.match(source, /^# default_agent_model = ""$/m);
   assert.match(source, /# model = "<INSERT_AGENT_PROVIDER_SLASH_MODEL_HERE>"/);
@@ -212,7 +212,7 @@ test("accepts legacy top-level provider settings", async () => {
 });
 
 test("loads each supported color theme", async () => {
-  for (const theme of ["dark", "light", "hacker"] as const) {
+  for (const theme of ["dark", "light", "light+", "hacker"] as const) {
     const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
     const settingsDirectory = join(homeDirectory, ".amber");
     await mkdir(settingsDirectory);
@@ -238,7 +238,7 @@ test("rejects an unsupported color theme", async () => {
     },
   }), "utf8");
 
-  await assert.rejects(loadSettings(homeDirectory), /theme must be dark, light, or hacker/);
+  await assert.rejects(loadSettings(homeDirectory), /theme must be dark, light, light\+, or hacker/);
 });
 
 test("does not migrate legacy JSON settings", async () => {

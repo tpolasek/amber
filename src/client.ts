@@ -35,8 +35,8 @@ interface TokenUsage { input: number; output: number }
 type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
 interface ToolStatusDisplay { text: string; appendElapsed?: boolean }
 interface ToolReadRange { startLine: number; endLine: number; totalLines: number }
-interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string; readRange?: ToolReadRange; statusDisplay?: ToolStatusDisplay; agentSessionId?: string; agentType?: string; agentModel?: string; skillModel?: string; skillEffort?: string }
-interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; thinkingProvider?: "anthropic" | "openai"; streamingThinking?: boolean; resyncedThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result" | "skill"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean; skillName?: string }
+interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string; readRange?: ToolReadRange; statusDisplay?: ToolStatusDisplay; agentSessionId?: string; agentType?: string; agentModel?: string; agentNotificationDeliveredAt?: string; skillModel?: string; skillEffort?: string }
+interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; thinkingProvider?: "anthropic" | "openai"; streamingThinking?: boolean; resyncedThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result" | "skill" | "agent-notification"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean; skillName?: string }
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
 type PlanningTaskStatus = "pending" | "in_progress" | "completed";
 interface PlanningTask { id: string; subject: string; description: string; activeForm: string; status: PlanningTaskStatus; owner: string; blocks: string[]; blockedBy: string[]; metadata: Record<string, unknown> }
@@ -44,7 +44,7 @@ interface InvokedSkill { name: string; path: string; content: string; invokedAt:
 interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; model?: string; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error"; planningTasks?: PlanningTask[]; planningTaskArchiveHighWaterMark?: number; contextTokens?: number; planMode?: SessionPlanMode; skillRoots?: string[]; skillTouchedPaths?: string[]; invokedSkills?: InvokedSkill[] }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface AvailableModel { key: string; provider: string; api: "anthropic" | "openai"; model: string; displayName: string; thinkingLevel: "none" | "low" | "medium" | "high" | "xhigh" | "max"; compactTokens?: number }
-interface Config { provider: string; model: string; defaultModel: string; models: AvailableModel[]; mode: "live"; homeDirectory: string; workspaceRoot: string; authActionToken: string; theme: "dark" | "light" | "hacker" }
+interface Config { provider: string; model: string; defaultModel: string; models: AvailableModel[]; mode: "live"; homeDirectory: string; workspaceRoot: string; authActionToken: string; theme: "dark" | "light" | "light+" | "hacker" }
 interface AuthProviderStatus { id: "openai-codex"; name: string; authName: string; configured: boolean; providerConfigured: boolean }
 type AuthLoginStatus = { status: "pending" } | { status: "complete" } | { status: "failed"; error: string } | { status: "cancelled" };
 type AuthLoginStart =
@@ -2572,7 +2572,9 @@ function renderSession(): void {
   elements.composerShell.hidden = Boolean(session.parentSessionId);
   elements.emptyState.hidden = session.messages.length > 0;
   for (const message of session.messages) {
-    if (message.kind !== "tool-result" && message.kind !== "skill") appendMessage(message);
+    if (message.kind !== "tool-result" && message.kind !== "skill" && message.kind !== "agent-notification") {
+      appendMessage(message);
+    }
   }
   resetPromptHistory();
   closeHistorySearch(false);
@@ -2596,7 +2598,9 @@ function updateRenderedSession(session: Session): void {
   const previousScrollTop = elements.transcript.scrollTop;
   const wasFollowingBottom = transcriptScrollPin.shouldFollowBottom();
   state.session = session;
-  const visibleMessages = session.messages.filter((message) => message.kind !== "tool-result" && message.kind !== "skill");
+  const visibleMessages = session.messages.filter((message) =>
+    message.kind !== "tool-result" && message.kind !== "skill" && message.kind !== "agent-notification"
+  );
   const visibleIds = new Set(visibleMessages.map((message) => message.id));
   elements.transcript.querySelectorAll<HTMLElement>(".message").forEach((element) => {
     if (element.dataset.messageId && visibleIds.has(element.dataset.messageId)) return;
@@ -3374,7 +3378,12 @@ function hideCommandMenu(): void {
 function sessionPromptHistory(): string[] {
   if (!state.session) return [];
   return state.session.messages
-    .filter((message) => message.role === "user" && message.kind !== "tool-result" && message.kind !== "skill")
+    .filter((message) =>
+      message.role === "user"
+      && message.kind !== "tool-result"
+      && message.kind !== "skill"
+      && message.kind !== "agent-notification"
+    )
     .map((message) => message.content)
     .reverse();
 }

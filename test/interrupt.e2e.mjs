@@ -50,36 +50,40 @@ function createMockProvider() {
       const payload = JSON.parse(body);
       requests.push(payload);
       const plan = planResponse(payload);
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      const frame = (data) => response.write(`event: ${data.type}\ndata: ${JSON.stringify(data)}\n\n`);
-      frame({ type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } });
-      let index = 0;
-      if (plan.text) {
-        frame({ type: "content_block_start", index, content_block: { type: "text" } });
-        frame({ type: "content_block_delta", index, delta: { type: "text_delta", text: plan.text } });
-        frame({ type: "content_block_stop", index });
-        index += 1;
-      }
-      for (const tool of plan.tools ?? []) {
+      const respond = () => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        const frame = (data) => response.write(`event: ${data.type}\ndata: ${JSON.stringify(data)}\n\n`);
+        frame({ type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } });
+        let index = 0;
+        if (plan.text) {
+          frame({ type: "content_block_start", index, content_block: { type: "text" } });
+          frame({ type: "content_block_delta", index, delta: { type: "text_delta", text: plan.text } });
+          frame({ type: "content_block_stop", index });
+          index += 1;
+        }
+        for (const tool of plan.tools ?? []) {
+          frame({
+            type: "content_block_start",
+            index,
+            content_block: { type: "tool_use", id: tool.id, name: tool.name ?? "Bash" },
+          });
+          frame({
+            type: "content_block_delta",
+            index,
+            delta: { type: "input_json_delta", partial_json: JSON.stringify(tool.input ?? { command: tool.command }) },
+          });
+          frame({ type: "content_block_stop", index });
+          index += 1;
+        }
         frame({
-          type: "content_block_start",
-          index,
-          content_block: { type: "tool_use", id: tool.id, name: tool.name ?? "Bash" },
+          type: "message_delta",
+          delta: { stop_reason: (plan.tools?.length ?? 0) > 0 ? "tool_use" : "end_turn" },
+          usage: { input_tokens: 10, output_tokens: 2 },
         });
-        frame({
-          type: "content_block_delta",
-          index,
-          delta: { type: "input_json_delta", partial_json: JSON.stringify(tool.input ?? { command: tool.command }) },
-        });
-        frame({ type: "content_block_stop", index });
-        index += 1;
-      }
-      frame({
-        type: "message_delta",
-        delta: { stop_reason: (plan.tools?.length ?? 0) > 0 ? "tool_use" : "end_turn" },
-        usage: { input_tokens: 10, output_tokens: 2 },
-      });
-      response.end();
+        response.end();
+      };
+      if (plan.delayMs) setTimeout(respond, plan.delayMs);
+      else respond();
     });
   });
   return {
@@ -96,6 +100,9 @@ function planResponse(payload) {
   if (JSON.stringify(messages).includes("compacted context")) {
     return { text: "continued after automatic compaction" };
   }
+  if (JSON.stringify(messages).includes("<task-notification>")) {
+    return { text: "parent received background result" };
+  }
   const bashUses = messages
     .filter((message) => message.role === "assistant" && Array.isArray(message.content))
     .flatMap((message) => message.content.filter((block) => block.type === "tool_use" && block.name === "Bash"));
@@ -105,6 +112,28 @@ function planResponse(payload) {
   const firstUser = messages.find((message) => message.role === "user");
   const firstText = typeof firstUser?.content === "string" ? firstUser.content
     : Array.isArray(firstUser?.content) ? firstUser.content.map((block) => block.text ?? "").join(" ") : "";
+  if (firstText.includes("BACKGROUND CHILD DELAY")) {
+    return { text: "background child complete", delayMs: 1_500 };
+  }
+  if (firstText.includes("BACKGROUND AGENT SCENARIO")) {
+    const agentUses = messages
+      .filter((message) => message.role === "assistant" && Array.isArray(message.content))
+      .flatMap((message) => message.content.filter((block) => block.type === "tool_use" && block.name === "Agent"));
+    return agentUses.length === 0
+      ? {
+          tools: [{
+            id: "background-agent",
+            name: "Agent",
+            input: {
+              description: "Delayed background child",
+              prompt: "BACKGROUND CHILD DELAY",
+              subagent_type: "general-purpose",
+              run_in_background: true,
+            },
+          }],
+        }
+      : { text: "parent continued without waiting" };
+  }
   if (firstText.includes("PLAN DECLINE")) {
     return { tools: [{ id: "enter-plan", name: "EnterPlanMode", input: {} }] };
   }
@@ -394,6 +423,67 @@ async function runAutomaticCompactionScenario(mock, amber) {
       && JSON.stringify(continuedRequest.messages[0]).includes("generated summary"));
 }
 
+async function runBackgroundAgentScenario(mock, amber) {
+  console.log("\n== background agent launch");
+  mock.reset();
+  const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
+    name: "background agent launch",
+    path: tmpdir(),
+  });
+  const sessionId = body.session.id;
+  const started = Date.now();
+  const response = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content: "BACKGROUND AGENT SCENARIO" }),
+  });
+  await readStream(response, () => undefined);
+  const parentDuration = Date.now() - started;
+  const snapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+  const agentCall = snapshot.session.messages
+    .flatMap((message) => message.toolCalls ?? [])
+    .find((call) => call.name === "Agent");
+  check("background Agent returns before its child completes",
+    parentDuration < 1_000, `${parentDuration}ms`);
+  check("background Agent launch is persisted as non-blocking",
+    agentCall?.status === "complete"
+      && agentCall.statusDisplay?.text === "BACKGROUND"
+      && Boolean(agentCall.agentSessionId), JSON.stringify(agentCall));
+  check("parent model continues immediately after the background launch",
+    snapshot.session.messages.filter((message) => message.role === "assistant").at(-1)?.content
+      === "parent continued without waiting");
+
+  const childId = agentCall?.agentSessionId;
+  if (!childId) return;
+  const initialChild = await (await fetch(amberUrl(amber.port, `/api/sessions/${childId}`))).json();
+  check("background child remains active after the parent turn ends",
+    initialChild.session?.agentStatus === "running", initialChild.session?.agentStatus);
+  await waitFor(async () => {
+    const child = await (await fetch(amberUrl(amber.port, `/api/sessions/${childId}`))).json();
+    return child.session?.agentStatus === "complete";
+  }, 5_000, "the background agent to complete");
+  const completedChild = await (await fetch(amberUrl(amber.port, `/api/sessions/${childId}`))).json();
+  check("background child persists its result",
+    completedChild.session.messages.filter((message) => message.role === "assistant").at(-1)?.content
+      === "background child complete");
+
+  const notificationResponse = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content: "Use any completed background results." }),
+  });
+  await readStream(notificationResponse, () => undefined);
+  const notifiedParent = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+  const notification = notifiedParent.session.messages.find((message) => message.kind === "agent-notification");
+  check("the next parent turn receives the background result notification",
+    notification?.content.includes(`<task-id>${childId}</task-id>`)
+      && notification.content.includes("<status>complete</status>")
+      && notification.content.includes("background child complete"), notification?.content);
+  check("the parent LLM responds with the delivered background context",
+    notifiedParent.session.messages.filter((message) => message.role === "assistant").at(-1)?.content
+      === "parent received background result");
+}
+
 async function runTerminalToolCompactionScenario(mock, amber) {
   console.log("\n== automatic compaction after terminal tool result");
   mock.reset();
@@ -502,6 +592,12 @@ await writeFile(join(runDirectory, "home", ".amber", "settings.toml"), [
   'thinking_level = "none"',
   "compact_tokens = 500",
   "",
+  "[[agents]]",
+  'type = "general-purpose"',
+  'whenToUse = "Run e2e agent scenarios."',
+  'systemPrompt = "Complete the assigned e2e task."',
+  "readOnly = false",
+  "",
 ].join("\n"));
 
 const mock = createMockProvider();
@@ -523,6 +619,7 @@ try {
     JSON.stringify(multi.skipped.map((call) => [call.status, call.statusDisplay])));
 
   await runQueuedCommandScenario(mock, amber);
+  await runBackgroundAgentScenario(mock, amber);
   await runAutomaticCompactionScenario(mock, amber);
   await runTerminalToolCompactionScenario(mock, amber);
   await runRedundantManualCompactionScenario(mock, amber);

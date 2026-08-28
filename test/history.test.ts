@@ -220,6 +220,33 @@ test("provider history merges an injected skill message into the tool-result use
   ]);
 });
 
+test("provider history includes a hidden background-agent notification with the next user turn", () => {
+  const now = new Date().toISOString();
+  const messages: Message[] = [
+    { id: "user", role: "user", content: "Continue the work", createdAt: now, status: "complete" },
+    {
+      id: "notification",
+      role: "user",
+      content: "<task-notification>Agent result</task-notification>",
+      createdAt: now,
+      status: "complete",
+      kind: "agent-notification",
+    },
+  ];
+
+  assert.deepEqual(buildProviderHistory(messages), [{
+    role: "user",
+    content: [
+      { type: "text", text: "Continue the work" },
+      {
+        type: "text",
+        text: "<task-notification>Agent result</task-notification>",
+        cache_control: { type: "ephemeral" },
+      },
+    ],
+  }]);
+});
+
 test("provider history reinjects compacted skill instructions without duplicating active ones", () => {
   const now = new Date().toISOString();
   const base = { createdAt: now, status: "complete" as const };

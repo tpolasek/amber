@@ -39,6 +39,7 @@ export interface ToolCall {
   agentSessionId?: string;
   agentType?: string;
   agentModel?: string;
+  agentNotificationDeliveredAt?: string;
   skillModel?: string;
   skillEffort?: string;
 }
@@ -52,7 +53,7 @@ export interface Message {
   thinkingProvider?: ProviderProtocol;
   createdAt: string;
   status: MessageStatus;
-  kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result" | "skill";
+  kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result" | "skill" | "agent-notification";
   sourceSessionId?: string;
   forkedSessionId?: string;
   usage?: TokenUsage;

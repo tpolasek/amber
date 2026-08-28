@@ -42,6 +42,12 @@ test("defaults Agent calls to general-purpose and accepts code-review", () => {
     prompt: "Review git diff.",
     subagent_type: "code-review",
   }, AGENTS).subagentType, "code-review");
+  assert.equal(parseAgentInput({
+    description: "Review in background",
+    prompt: "Review git diff.",
+    subagent_type: "code-review",
+    run_in_background: true,
+  }, AGENTS).runInBackground, true);
   assert.equal(getAgentDefinition(AGENTS, "code-review").readOnly, true);
 });
 

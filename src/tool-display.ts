@@ -36,6 +36,9 @@ export function diffLineClass(line: string): string {
 }
 
 export function toolStatusLabel(call: ToolCall, now = Date.now()): string {
+  if (call.name === "Agent" && call.status === "complete" && call.input.run_in_background === true) {
+    return "BACKGROUND";
+  }
   if (call.name === "Agent" && call.status === "complete" && call.durationMs !== undefined) {
     return `AGENT COMPLETE · ${formatDuration(call.durationMs)}`;
   }

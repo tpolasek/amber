@@ -8,7 +8,10 @@ export function isModelMessage(message: Message): boolean {
 }
 
 function isProviderMessage(message: Message): boolean {
-  return isModelMessage(message) || message.kind === "tool-result" || message.kind === "skill";
+  return isModelMessage(message)
+    || message.kind === "tool-result"
+    || message.kind === "skill"
+    || message.kind === "agent-notification";
 }
 
 export function buildProviderHistory(
@@ -59,7 +62,7 @@ export function buildProviderHistory(
       && previous?.role === "user" && Array.isArray(previous.content) && Array.isArray(providerMessage.content)
     ) {
       previous.content.push(...providerMessage.content);
-    } else if (message.kind === "skill" && previous?.role === "user") {
+    } else if ((message.kind === "skill" || message.kind === "agent-notification") && previous?.role === "user") {
       history.pop();
       history.push({
         role: "user",

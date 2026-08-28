@@ -14,7 +14,7 @@ export interface AmberSettings {
   agents: AgentDefinition[];
 }
 
-export type AmberTheme = "dark" | "light" | "hacker";
+export type AmberTheme = "dark" | "light" | "light+" | "hacker";
 
 export interface ModelSettings {
   thinking_level?: ThinkingLevel;
@@ -90,7 +90,7 @@ Rules:
 } as const;
 
 export const SETTINGS_TEMPLATE_SOURCE = `${stringify(SETTINGS_TEMPLATE).trimEnd()
-  .replace('theme = "dark"', 'theme = "dark" # dark (current Amber), light (Solarized Light), or hacker (terminal green)')
+  .replace('theme = "dark"', 'theme = "dark" # dark (current Amber), light (Solarized Light), light+ (VS Code Light+), or hacker (terminal green)')
   .replace('default_provider = "default"', `default_provider = "default"
 # default_agent_provider = ""
 # default_agent_model = ""`)}
@@ -180,8 +180,8 @@ function parseSettings(parsed: unknown, settingsPath: string): AmberSettings {
 
 function parseTheme(value: unknown, field: string): AmberTheme {
   if (value === undefined || value === "dark") return "dark";
-  if (value === "light" || value === "hacker") return value;
-  throw new Error(`${field} must be dark, light, or hacker`);
+  if (value === "light" || value === "light+" || value === "hacker") return value;
+  throw new Error(`${field} must be dark, light, light+, or hacker`);
 }
 
 function parseProviders(value: unknown, settingsPath: string): Record<string, ProviderSettings> {

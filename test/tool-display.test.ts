@@ -72,3 +72,19 @@ test("formats tool subjects and statuses independently of the DOM", () => {
     agentModel: "mimo-2.5",
   })), "general-purpose · mimo-2.5");
 });
+
+test("keeps completed background agent launches labeled as background", () => {
+  assert.equal(toolStatusLabel({
+    id: "agent-background",
+    name: "Agent",
+    input: {
+      description: "Independent review",
+      prompt: "Review the change.",
+      run_in_background: true,
+    },
+    status: "complete",
+    output: "Agent running in background",
+    durationMs: 25,
+    statusDisplay: { text: "BACKGROUND" },
+  }), "BACKGROUND");
+});

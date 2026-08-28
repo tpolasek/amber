@@ -655,6 +655,12 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     let turnEffort: ThinkingLevel | undefined;
     let automaticCompactionQueued = false;
     for (;;) {
+      const agentNotifications = await completedBackgroundAgentNotifications(session);
+      if (agentNotifications.length > 0) {
+        const assistantIndex = session.messages.findIndex((message) => message.id === assistantMessage.id);
+        session.messages.splice(assistantIndex < 0 ? session.messages.length : assistantIndex, 0, ...agentNotifications);
+        await store.save(session);
+      }
       const skills = await sessionSkills(session);
       const activeProvider = turnModel ? providerCatalog.provider(turnModel) : providerForSession(session);
       const baseHistory = buildProviderHistory(session.messages, assistantMessage.id, session.compaction, session.invokedSkills);
@@ -1496,20 +1502,54 @@ async function executeAgentCall(
     call.agentModel = providerForSession(child).model;
     await persistParent();
     onUpdate(call);
-    resultText = await runSessionPrompt(child.id, input.prompt, signal);
-    const stats = await agentUsage(child.id);
-    resultBlocks = [
-      { type: "text", text: resultText },
-      {
-        type: "text",
-        text: `agentId: ${child.id} (use SendMessage with to: '${child.id}' to continue this agent)\n`
-          + `<usage>total_tokens: ${stats.totalTokens}\ntool_uses: ${stats.toolUses}\nduration_ms: ${Date.now() - started}</usage>`,
-      },
-    ];
-    call.status = "complete";
-    call.output = resultText;
-    call.statusDisplay = { text: "AGENT COMPLETE" };
-    await persistParent();
+    if (input.runInBackground) {
+      const backgroundController = new AbortController();
+      const abortBackground = () => backgroundController.abort();
+      signal.addEventListener("abort", abortBackground, { once: true });
+      if (signal.aborted) backgroundController.abort();
+      const childId = child.id;
+      const backgroundRun = runSessionPrompt(childId, input.prompt, backgroundController.signal);
+      void backgroundRun.catch(async (error) => {
+        try {
+          const persistedChild = await store.get(childId);
+          if (persistedChild?.agentStatus === "running") {
+            persistedChild.agentStatus = "error";
+            await store.save(persistedChild);
+            broadcastSessionEvent(persistedChild.id, "error", {
+              error: errorMessage(error),
+              session: persistedChild,
+            });
+          }
+        } catch (persistError) {
+          console.error(`Could not persist background agent failure ${childId}:`, persistError);
+        }
+      }).finally(() => signal.removeEventListener("abort", abortBackground));
+
+      resultText = `Agent running in background with ID: ${child.id}. Open the linked sub-session to inspect its progress and result.`;
+      resultBlocks = [
+        { type: "text", text: resultText },
+        { type: "text", text: `agentId: ${child.id}` },
+      ];
+      call.status = "complete";
+      call.output = resultText;
+      call.statusDisplay = { text: "BACKGROUND" };
+      await persistParent();
+    } else {
+      resultText = await runSessionPrompt(child.id, input.prompt, signal);
+      const stats = await agentUsage(child.id);
+      resultBlocks = [
+        { type: "text", text: resultText },
+        {
+          type: "text",
+          text: `agentId: ${child.id} (use SendMessage with to: '${child.id}' to continue this agent)\n`
+            + `<usage>total_tokens: ${stats.totalTokens}\ntool_uses: ${stats.toolUses}\nduration_ms: ${Date.now() - started}</usage>`,
+        },
+      ];
+      call.status = "complete";
+      call.output = resultText;
+      call.statusDisplay = { text: "AGENT COMPLETE" };
+      await persistParent();
+    }
   } catch (error) {
     call.status = "error";
     call.output = errorMessage(error);
@@ -1549,6 +1589,39 @@ async function agentUsage(sessionId: string): Promise<{ totalTokens: number; too
     ),
     toolUses: session.messages.filter((message) => message.kind === "tool-result").length,
   };
+}
+
+async function completedBackgroundAgentNotifications(session: Session): Promise<Message[]> {
+  const notifications: Message[] = [];
+  for (const call of session.messages.flatMap((message) => message.toolCalls ?? [])) {
+    if (call.name !== AGENT_TOOL_NAME
+      || call.input.run_in_background !== true
+      || !call.agentSessionId
+      || call.agentNotificationDeliveredAt) continue;
+    const child = await store.get(call.agentSessionId);
+    if (!child || (child.agentStatus !== "complete" && child.agentStatus !== "error")) continue;
+    const result = child.messages
+      .filter((message) => message.role === "assistant" && isModelMessage(message))
+      .at(-1)?.content.trim();
+    const deliveredAt = new Date().toISOString();
+    call.agentNotificationDeliveredAt = deliveredAt;
+    notifications.push({
+      id: randomUUID(),
+      role: "user",
+      content: [
+        "<task-notification>",
+        `<task-id>${child.id}</task-id>`,
+        `<status>${child.agentStatus}</status>`,
+        `<summary>${child.agentDescription ?? child.title}</summary>`,
+        `<result>${result || (child.agentStatus === "error" ? "Agent failed without a final response." : "Agent completed without a text response.")}</result>`,
+        "</task-notification>",
+      ].join("\n"),
+      createdAt: deliveredAt,
+      status: "complete",
+      kind: "agent-notification",
+    });
+  }
+  return notifications;
 }
 
 async function runSessionPrompt(sessionId: string, prompt: string, signal: AbortSignal): Promise<string> {
