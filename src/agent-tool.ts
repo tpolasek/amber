@@ -94,6 +94,15 @@ export function getAgentDefinition(definitions: readonly AgentDefinition[], type
   return definition;
 }
 
+export function resolveAgentModel(
+  definitionModel: string | undefined,
+  defaultAgentModel: string | undefined,
+  sessionModel: string | undefined,
+  defaultModel: string,
+): string {
+  return definitionModel ?? defaultAgentModel ?? sessionModel ?? defaultModel;
+}
+
 export function startAgentRuns<T extends { id: string }, TResult>(
   calls: readonly T[],
   run: (call: T) => Promise<TResult>,

@@ -112,6 +112,59 @@ test("uses explicit models when discovery is unavailable", async () => {
   assert.deepEqual(catalog.models.map((model) => model.key), ["zai/glm-5.3"]);
 });
 
+test("selects a provider default for agents independently of the session provider", async () => {
+  const settings: AmberSettings = {
+    default_provider: "zai",
+    default_agent_provider: "openai",
+    providers: {
+      zai: {
+        api: "anthropic",
+        auth_key: "key",
+        auth_url: "https://zai.example.test",
+        default_model: "glm-main",
+        models: {},
+      },
+      openai: {
+        api: "openai",
+        auth_key: "key",
+        auth_url: "https://openai.example.test",
+        default_model: "gpt-agent",
+        models: {},
+      },
+    },
+    agents: [],
+  };
+  const unavailable: typeof fetch = async () => new Response("not supported", { status: 404 });
+
+  const catalog = await ProviderCatalog.load(settings, unavailable);
+  assert.equal(catalog.defaultModel, "zai/glm-main");
+  assert.equal(catalog.defaultAgentModel, "openai/gpt-agent");
+});
+
+test("default agent model overrides its provider default and remains available without discovery", async () => {
+  const settings: AmberSettings = {
+    default_provider: "zai",
+    default_agent_provider: "zai",
+    default_agent_model: "glm-agent",
+    providers: {
+      zai: {
+        api: "anthropic",
+        auth_key: "key",
+        auth_url: "https://zai.example.test",
+        default_model: "glm-main",
+        models: {},
+      },
+    },
+    agents: [],
+  };
+  const unavailable: typeof fetch = async () => new Response("not supported", { status: 404 });
+
+  const catalog = await ProviderCatalog.load(settings, unavailable);
+  assert.equal(catalog.defaultModel, "zai/glm-main");
+  assert.equal(catalog.defaultAgentModel, "zai/glm-agent");
+  assert.deepEqual(catalog.models.map((model) => model.key), ["zai/glm-main", "zai/glm-agent"]);
+});
+
 test("requires discovery when no models are configured", async () => {
   const settings: AmberSettings = {
     providers: {

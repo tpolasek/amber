@@ -8,6 +8,8 @@ import type { ProviderProtocol, ThinkingLevel } from "./types.js";
 export interface AmberSettings {
   theme?: AmberTheme;
   default_provider?: string;
+  default_agent_provider?: string;
+  default_agent_model?: string;
   providers: Record<string, ProviderSettings>;
   agents: AgentDefinition[];
 }
@@ -88,8 +90,11 @@ Rules:
 } as const;
 
 export const SETTINGS_TEMPLATE_SOURCE = `${stringify(SETTINGS_TEMPLATE).trimEnd()
-  .replace('theme = "dark"', 'theme = "dark" # dark (current Amber), light (Solarized Light), or hacker (terminal green)')}
-# model = "<INSERT_AGENT_MODEL_HERE>"
+  .replace('theme = "dark"', 'theme = "dark" # dark (current Amber), light (Solarized Light), or hacker (terminal green)')
+  .replace('default_provider = "default"', `default_provider = "default"
+# default_agent_provider = ""
+# default_agent_model = ""`)}
+# model = "<INSERT_AGENT_PROVIDER_SLASH_MODEL_HERE>"
 
 # The provider above uses the Anthropic Messages API (api = "anthropic", the default).
 # To add an OpenAI Responses API provider, uncomment and fill in:
@@ -155,9 +160,19 @@ function parseSettings(parsed: unknown, settingsPath: string): AmberSettings {
   if (defaultProvider && !providers[defaultProvider]) {
     throw new Error(`${settingsPath}: default_provider '${defaultProvider}' is not configured`);
   }
+  const defaultAgentProvider = optionalString(settings.default_agent_provider, `${settingsPath}: default_agent_provider`);
+  const defaultAgentModel = optionalString(settings.default_agent_model, `${settingsPath}: default_agent_model`);
+  if (defaultAgentProvider && !providers[defaultAgentProvider]) {
+    throw new Error(`${settingsPath}: default_agent_provider '${defaultAgentProvider}' is not configured`);
+  }
+  if (defaultAgentModel && !defaultAgentProvider) {
+    throw new Error(`${settingsPath}: default_agent_model requires default_agent_provider`);
+  }
   return {
     theme,
     ...(defaultProvider ? { default_provider: defaultProvider } : {}),
+    ...(defaultAgentProvider ? { default_agent_provider: defaultAgentProvider } : {}),
+    ...(defaultAgentModel ? { default_agent_model: defaultAgentModel } : {}),
     providers,
     agents: parseAgentDefinitions(settings.agents, settingsPath),
   };

@@ -21,11 +21,18 @@ export interface ProviderCatalogOptions {
 export class ProviderCatalog {
   readonly models: AvailableModel[];
   readonly defaultModel: string;
+  readonly defaultAgentModel: string | undefined;
   readonly #providers: Map<string, LlmProvider>;
 
-  private constructor(models: AvailableModel[], defaultModel: string, providers: Map<string, LlmProvider>) {
+  private constructor(
+    models: AvailableModel[],
+    defaultModel: string,
+    defaultAgentModel: string | undefined,
+    providers: Map<string, LlmProvider>,
+  ) {
     this.models = models;
     this.defaultModel = defaultModel;
+    this.defaultAgentModel = defaultAgentModel;
     this.#providers = providers;
   }
 
@@ -45,9 +52,13 @@ export class ProviderCatalog {
     for (const [providerName, provider] of configuredProviders) {
       const driver = driverFor(provider, options.openAICodexAuth);
       const explicitModelNames = Object.keys(provider.models);
+      const configuredAgentModel = settings.default_agent_provider === providerName
+        ? configuredSetting(settings.default_agent_model)
+        : undefined;
       const fallbackModels = [...new Set([
         ...explicitModelNames,
         ...(configuredSetting(provider.default_model) ? [configuredSetting(provider.default_model)!] : []),
+        ...(configuredAgentModel ? [configuredAgentModel] : []),
       ])];
       let discovered;
       try {
@@ -68,6 +79,10 @@ export class ProviderCatalog {
           discovered.push({ id: modelName, displayName: modelName });
           discoveredById.set(modelName, discovered.at(-1)!);
         }
+      }
+      if (configuredAgentModel && !discoveredById.has(configuredAgentModel)) {
+        discovered.push({ id: configuredAgentModel, displayName: configuredAgentModel });
+        discoveredById.set(configuredAgentModel, discovered.at(-1)!);
       }
       const defaultModelName = configuredSetting(provider.default_model) ?? discovered[0]?.id;
       if (!defaultModelName) throw new Error(`Provider '${providerName}' returned no models`);
@@ -104,7 +119,15 @@ export class ProviderCatalog {
     const defaultProvider = settings.default_provider ?? configuredProviders[0]![0];
     const defaultModel = providerDefaults.get(defaultProvider);
     if (!defaultModel) throw new Error(`Default provider '${defaultProvider}' has no models`);
-    return new ProviderCatalog(models, defaultModel, providers);
+    const defaultAgentModel = settings.default_agent_provider
+      ? configuredSetting(settings.default_agent_model)
+        ? `${settings.default_agent_provider}/${configuredSetting(settings.default_agent_model)!}`
+        : providerDefaults.get(settings.default_agent_provider)
+      : undefined;
+    if (defaultAgentModel && !providers.has(defaultAgentModel)) {
+      throw new Error(`Default agent model '${defaultAgentModel}' is not configured`);
+    }
+    return new ProviderCatalog(models, defaultModel, defaultAgentModel, providers);
   }
 
   provider(modelKey: string | undefined): LlmProvider {

@@ -16,7 +16,9 @@ test("creates a settings template on first load", async () => {
   assert.deepEqual(settings, SETTINGS_TEMPLATE);
   assert.deepEqual(parse(source), SETTINGS_TEMPLATE);
   assert.match(source, /^theme = "dark" # dark \(current Amber\), light \(Solarized Light\), or hacker \(terminal green\)$/m);
-  assert.match(source, /# model = "<INSERT_AGENT_MODEL_HERE>"/);
+  assert.match(source, /^# default_agent_provider = ""$/m);
+  assert.match(source, /^# default_agent_model = ""$/m);
+  assert.match(source, /# model = "<INSERT_AGENT_PROVIDER_SLASH_MODEL_HERE>"/);
   assert.doesNotMatch(source, /INSERT_AGENT_AUTH/);
   assert.equal((await stat(settingsPath)).mode & 0o777, 0o600);
 });
@@ -68,6 +70,46 @@ test("loads settings with no configured agents", async () => {
     },
     agents: [],
   });
+});
+
+test("loads optional default agent provider and model", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const settingsDirectory = join(homeDirectory, ".amber");
+  await mkdir(settingsDirectory);
+  await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+    default_agent_provider: " openai ",
+    default_agent_model: " gpt-agent ",
+    providers: {
+      zai: { auth_key: "zai-key", auth_url: "https://zai.example.test", models: {} },
+      openai: { api: "openai", auth_key: "openai-key", auth_url: "https://openai.example.test", models: {} },
+    },
+  }), "utf8");
+
+  const settings = await loadSettings(homeDirectory);
+  assert.equal(settings.default_agent_provider, "openai");
+  assert.equal(settings.default_agent_model, "gpt-agent");
+});
+
+test("validates default agent provider and model", async () => {
+  const writeSettings = async (settings: object): Promise<string> => {
+    const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+    const settingsDirectory = join(homeDirectory, ".amber");
+    await mkdir(settingsDirectory);
+    await writeFile(join(settingsDirectory, "settings.toml"), stringify(settings), "utf8");
+    return homeDirectory;
+  };
+  const providers = {
+    zai: { auth_key: "key", auth_url: "https://example.test", models: {} },
+  };
+
+  await assert.rejects(
+    loadSettings(await writeSettings({ default_agent_provider: "missing", providers })),
+    /default_agent_provider 'missing' is not configured/,
+  );
+  await assert.rejects(
+    loadSettings(await writeSettings({ default_agent_model: "agent-model", providers })),
+    /default_agent_model requires default_agent_provider/,
+  );
 });
 
 test("loads a qualified provider model for each agent", async () => {

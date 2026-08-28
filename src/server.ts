@@ -44,7 +44,7 @@ import { executeGrep, GREP_TOOL, parseGrepInput } from "./grep-tool.js";
 import { executeGlob, GLOB_TOOL, parseGlobInput } from "./glob-tool.js";
 import { completeDirectories, completeDirectoryRoots, completeFiles } from "./directory-completion.js";
 import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
-import { AGENT_TOOL_NAME, getAgentDefinition, parseAgentInput, startAgentRuns } from "./agent-tool.js";
+import { AGENT_TOOL_NAME, getAgentDefinition, parseAgentInput, resolveAgentModel, startAgentRuns } from "./agent-tool.js";
 import { ActiveSessionRuns, abortSessionOperations } from "./session-aborts.js";
 import { SessionInputPriorityQueue } from "./session-queue.js";
 import {
@@ -1483,9 +1483,12 @@ async function executeAgentCall(
   try {
     throwIfSessionAborted(signal);
     const input = parseAgentInput(call.input, agentDefinitions);
-    const agentModel = getAgentDefinition(agentDefinitions, input.subagentType).model
-      ?? parent.model
-      ?? providerCatalog.defaultModel;
+    const agentModel = resolveAgentModel(
+      getAgentDefinition(agentDefinitions, input.subagentType).model,
+      providerCatalog.defaultAgentModel,
+      parent.model,
+      providerCatalog.defaultModel,
+    );
     child = await store.createAgentSession(parent, input.subagentType, input.description, agentModel);
     throwIfSessionAborted(signal);
     call.agentSessionId = child.id;

@@ -62,6 +62,8 @@ AMBER reads **~/.amber/settings.toml**. Each provider is configured with **api =
 ```toml
 theme = "dark" # dark (current Amber), light (Solarized Light), or hacker (terminal green)
 default_provider = "zai"
+default_agent_provider = "openai"
+default_agent_model = "gpt-5.4" # Optional; otherwise uses the agent provider's default model.
 
 [providers.zai]
 api = "anthropic"        # "anthropic" (default) or "openai"
@@ -99,12 +101,12 @@ type = "explore"
 whenToUse = "Search and inspect a codebase."
 systemPrompt = "Inspect the requested code and return concise findings."
 readOnly = true
-model = "zai/glm-5.3" # Optional; otherwise inherits the session model.
+model = "zai/glm-5.3" # Optional; overrides the global agent defaults.
 ```
 
 The theme is applied when Amber starts. Change **theme** and restart Amber to switch palettes.
 
-Provider credentials belong under **[providers.\<name>]**, never under an agent. API-key provider configuration comes from **settings.toml**; no environment variables are used. **api** selects the provider's protocol: **"anthropic"** (the default) or **"openai"**. OpenAI-protocol providers accept slashed model ids such as **xiaomi/mimo-v2-pro**, so OpenRouter-style backends work. Models are referenced as **provider/model**. Select a session's model from the model name in the browser's top-right corner.
+Provider credentials belong under **[providers.\<name>]**, never under an agent. API-key provider configuration comes from **settings.toml**; no environment variables are used. **api** selects the provider's protocol: **"anthropic"** (the default) or **"openai"**. OpenAI-protocol providers accept slashed model ids such as **xiaomi/mimo-v2-pro**, so OpenRouter-style backends work. Models in `[[agents]]` are referenced as **provider/model**. Agent model precedence is the per-agent `model`, then `default_agent_model` within `default_agent_provider`, then that provider's default model; without agent defaults, agents inherit the session model. Select a session's model from the model name in the browser's top-right corner.
 
 ### ChatGPT Plus/Pro OAuth for OpenAI Codex
 

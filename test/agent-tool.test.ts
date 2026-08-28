@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAgentTool, getAgentDefinition, parseAgentInput, startAgentRuns } from "../src/agent-tool.js";
+import {
+  createAgentTool,
+  getAgentDefinition,
+  parseAgentInput,
+  resolveAgentModel,
+  startAgentRuns,
+} from "../src/agent-tool.js";
 
 const AGENTS = [
   { type: "general-purpose", whenToUse: "Handle general tasks.", systemPrompt: "Do the task.", readOnly: false },
@@ -43,6 +49,13 @@ test("supports custom configured agent types and defaults to the first", () => {
   const agents = [{ type: "research", whenToUse: "Research.", systemPrompt: "Research it.", readOnly: true }];
   assert.equal(parseAgentInput({ description: "Research issue", prompt: "Investigate." }, agents).subagentType, "research");
   assert.match(createAgentTool(agents).description, /research: Research\./);
+});
+
+test("resolves agent models by configured precedence", () => {
+  assert.equal(resolveAgentModel("custom/model", "agent/default", "session/model", "app/default"), "custom/model");
+  assert.equal(resolveAgentModel(undefined, "agent/default", "session/model", "app/default"), "agent/default");
+  assert.equal(resolveAgentModel(undefined, undefined, "session/model", "app/default"), "session/model");
+  assert.equal(resolveAgentModel(undefined, undefined, undefined, "app/default"), "app/default");
 });
 
 test("rejects unknown Agent types", () => {
