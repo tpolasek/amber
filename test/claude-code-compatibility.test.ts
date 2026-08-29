@@ -7,6 +7,7 @@ import {
   createClaudeCodeTools,
   injectClaudeCodeUserContext,
   structureClaudeCodeUserMessages,
+  toolsForAgentMode,
   toolsForPlanMode,
 } from "../src/claude-code-compatibility.js";
 import { getAgentDefinition } from "../src/agent-tool.js";
@@ -117,6 +118,18 @@ test("structures an agent prompt with the date reminder and uses the shared chil
     "TaskUpdate",
     "Write",
   ]);
+});
+
+test("keeps Skill available to read-only and planning agents", () => {
+  assert.deepEqual(toolsForAgentMode(true).map((tool) => tool.name), [
+    "Bash",
+    "Glob",
+    "Grep",
+    "Read",
+    "Skill",
+  ]);
+  assert.deepEqual(toolsForAgentMode(false), CLAUDE_CODE_AGENT_TOOLS);
+  assert.notEqual(toolsForAgentMode(false), CLAUDE_CODE_AGENT_TOOLS);
 });
 
 test("advertises exactly one browser plan control for the active mode", () => {

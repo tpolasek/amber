@@ -49,6 +49,7 @@ test("defaults Agent calls to general-purpose and accepts code-review", () => {
     run_in_background: true,
   }, AGENTS).runInBackground, true);
   assert.equal(getAgentDefinition(AGENTS, "code-review").readOnly, true);
+  assert.match(createAgentTool(AGENTS).description, /Tools: Bash, Glob, Grep, Read, Skill/);
 });
 
 test("supports custom configured agent types and defaults to the first", () => {

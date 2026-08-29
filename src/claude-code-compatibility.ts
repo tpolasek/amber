@@ -52,6 +52,18 @@ export const CLAUDE_CODE_AGENT_TOOLS: ToolDefinition[] = [
   ...catalogTools.slice(writeIndex),
 ];
 
+/** Keeps skills available even when an agent is restricted to read-only tools. */
+export function toolsForAgentMode(restricted: boolean): ToolDefinition[] {
+  if (!restricted) return [...CLAUDE_CODE_AGENT_TOOLS];
+  return CLAUDE_CODE_AGENT_TOOLS.filter((tool) =>
+    tool.name === "Bash"
+      || tool.name === "Glob"
+      || tool.name === "Grep"
+      || tool.name === "Read"
+      || tool.name === SKILL_TOOL.name
+  );
+}
+
 export function buildClaudeCodeSystemPrompt(currentDirectory: string, model: string): ProviderSystemBlock[] {
   const shell = basename(process.env.SHELL ?? "unknown");
   const environment = [

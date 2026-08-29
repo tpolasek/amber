@@ -174,6 +174,8 @@ test("creates linked agent sub-sessions using the parent id and a short uuid", a
   parent.directories = ["/tmp/example-workspace"];
   parent.cwd = "/tmp/example-workspace";
   parent.model = "zai/glm-5.3";
+  parent.skillRoots = ["/tmp/example-workspace/packages/nested"];
+  parent.skillTouchedPaths = ["/tmp/example-workspace/packages/nested/src/file.ts"];
   await store.save(parent);
 
   const child = await store.createAgentSession(parent, "code-review", "Review latest diff");
@@ -186,6 +188,10 @@ test("creates linked agent sub-sessions using the parent id and a short uuid", a
   assert.equal(child.messages[0]?.kind, "agent-banner");
   assert.equal(child.messages[0]?.sourceSessionId, parent.id);
   assert.deepEqual(child.directories, parent.directories);
+  assert.deepEqual(child.skillRoots, parent.skillRoots);
+  assert.notEqual(child.skillRoots, parent.skillRoots);
+  assert.deepEqual(child.skillTouchedPaths, parent.skillTouchedPaths);
+  assert.notEqual(child.skillTouchedPaths, parent.skillTouchedPaths);
   assert.equal((await store.get(child.id))?.parentSessionId, parent.id);
   assert.deepEqual((await store.list()).map((session) => session.id), [parent.id]);
 });

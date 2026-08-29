@@ -65,6 +65,8 @@ export class SessionStore {
       ...(parent.cwd ? { cwd: parent.cwd } : {}),
       ...(parent.addDirInitialized !== undefined ? { addDirInitialized: parent.addDirInitialized } : {}),
       ...(parent.planMode?.active ? { planMode: structuredClone(parent.planMode) } : {}),
+      ...(parent.skillRoots ? { skillRoots: structuredClone(parent.skillRoots) } : {}),
+      ...(parent.skillTouchedPaths ? { skillTouchedPaths: structuredClone(parent.skillTouchedPaths) } : {}),
     };
     await this.save(session);
     return session;

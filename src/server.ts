@@ -56,10 +56,10 @@ import {
 import {
   buildClaudeCodeAgentSystemPrompt,
   buildClaudeCodeSystemPrompt,
-  CLAUDE_CODE_AGENT_TOOLS,
   createClaudeCodeTools,
   injectClaudeCodeUserContext,
   structureClaudeCodeUserMessages,
+  toolsForAgentMode,
   toolsForPlanMode,
 } from "./claude-code-compatibility.js";
 import {
@@ -1375,7 +1375,9 @@ async function sessionSkills(session: Session): Promise<SkillDefinition[]> {
   const context: SkillDiscoveryContext = {
     cwd: sessionWorkingDirectory(session),
     homeDirectory: homedir(),
-    addDirRoots: session.directories ?? [],
+    // Keep skills from every directory the session can access, including the
+    // server's original workspace after the user changes the session CWD.
+    addDirRoots: sessionDirectoryRoots(session),
     extraProjectRoots: session.skillRoots ?? [],
     touchedPaths: session.skillTouchedPaths ?? [],
   };
@@ -1445,11 +1447,7 @@ function sessionContextTokens(session: Session): number {
 function sessionTools(session: Session, approvalCapable = true): ToolDefinition[] {
   if (session.agentType) {
     const definition = getAgentDefinition(agentDefinitions, session.agentType);
-    return session.planMode?.active || definition.readOnly
-      ? CLAUDE_CODE_AGENT_TOOLS.filter((tool) =>
-        tool.name === "Bash" || tool.name === "Glob" || tool.name === "Grep" || tool.name === "Read"
-      )
-      : CLAUDE_CODE_AGENT_TOOLS;
+    return toolsForAgentMode(session.planMode?.active === true || definition.readOnly);
   }
   return toolsForPlanMode(claudeCodeTools, session.planMode?.active === true, approvalCapable);
 }
