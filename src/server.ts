@@ -312,6 +312,13 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return observeSessionEvents(request, response, sessionEventsMatch[1]);
   }
   if (method === "DELETE" && sessionMatch?.[1]) {
+    // Finish abort cleanup before checking active state so deleting during an
+    // already-registered compaction does not require a second attempt.
+    const compaction = compactionRuns.get(sessionMatch[1]);
+    if (compaction) {
+      compaction.controller.abort();
+      await compaction.completion;
+    }
     if (activeSessions.has(sessionMatch[1])) return json(response, 409, { error: "Wait for the current response to finish" });
     await stopAutomaticSessionName(sessionMatch[1]);
     const removed = await store.remove(sessionMatch[1]);
@@ -647,19 +654,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     snapshotSave = snapshotSave.then(() => store.save(snapshot));
     return snapshotSave;
   };
-  const runAutomaticCompaction = async (): Promise<boolean> => {
-    emit("auto_compaction_start", {});
-    try {
-      await compactSession(session, controller.signal, (generatedCharacters) => {
-        emit("auto_compaction_progress", { generatedCharacters });
-      });
-      emit("auto_compaction_complete", { session });
-      return true;
-    } catch (error) {
-      emit("auto_compaction_error", { error: errorMessage(error) });
-      return false;
-    }
-  };
   try {
     let allowedDirectories = sessionDirectories(session);
     const currentDirectory = sessionWorkingDirectory(session);
@@ -667,7 +661,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     // Skill model/effort overrides apply only to the model calls of this user turn.
     let turnModel: string | undefined;
     let turnEffort: ThinkingLevel | undefined;
-    let automaticCompactionQueued = false;
     for (;;) {
       const agentNotifications = await completedBackgroundAgentNotifications(session);
       if (agentNotifications.length > 0) {
@@ -740,10 +733,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       await store.save(session);
       emit("assistant_complete", { message: assistantMessage });
       throwIfSessionAborted(controller.signal);
-      if (!automaticCompactionQueued && shouldAutoCompactSession(session)) {
-        queuedSessionMessages.enqueueAutomaticCompaction(sessionId);
-        automaticCompactionQueued = true;
-      }
 
       const orderedCalls = [...toolDrafts.values()].map(({ call }) => call);
       const planModeCalls = orderedCalls.filter((call) => isPlanModeTool(call.name));
@@ -766,7 +755,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         interruptions.sort((left, right) => left.priority - right.priority);
       };
       if (orderedCalls.length === 0) {
-        queuedSessionMessages.operationCompleted(sessionId);
         takeReadyInputs();
       }
       let agentLinkSaveChain = Promise.resolve();
@@ -1223,7 +1211,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         await store.save(session);
         if (abortAfterResult) throw abortAfterResult;
         throwIfSessionAborted(controller.signal);
-        queuedSessionMessages.operationCompleted(sessionId);
         takeReadyInputs();
         if (endTurnAfterResult) {
           endTurnAfterToolResult = true;
@@ -1231,24 +1218,33 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         }
       }
 
+      // Crossed the auto-compact threshold: queue the server /compact and take
+      // it now that the tool batch has finished.
+      if (shouldAutoCompactSession(session)) queuedSessionMessages.enqueueCompaction(sessionId);
+      takeReadyInputs();
+
       const roundWasInterrupted = interruptions.length > 0;
-      if (interruptions.some((input) => input.source === "automatic-compaction")) {
-        const compacted = await runAutomaticCompaction();
-        if (compacted) {
-          queuedSessionMessages.removeManualCompaction(sessionId);
-          const manualCompaction = interruptions.findIndex((input) =>
-            input.source === "user"
-            && input.kind === "command"
-            && input.content.trim().toLowerCase() === "/compact");
-          if (manualCompaction >= 0) interruptions.splice(manualCompaction, 1);
+      let interruption = interruptions.shift();
+      if (interruption?.priority === 0
+        && interruption.kind === "command"
+        && interruption.content.trim().toLowerCase() === "/compact") {
+        await startSessionCompaction(session, emit).completion;
+        // Input can be queued while summary generation is in flight. Pull it
+        // in now and honor the queue's replaceable-user-slot semantics by
+        // taking the newest remaining priority-two entry.
+        takeReadyInputs();
+        interruption = interruptions.pop();
+        // The automatic run also satisfies a manual /compact that was queued
+        // during the tool call. Any queued message remains to be injected below.
+        if (interruption?.kind === "command" && interruption.content.trim().toLowerCase() === "/compact") {
+          interruption = undefined;
         }
       }
-      const userInterruption = interruptions.find((input) => input.source === "user");
-      if (userInterruption?.kind === "message") {
+      if (interruption?.kind === "message") {
         const queuedUserMessage: Message = {
           id: randomUUID(),
           role: "user",
-          content: userInterruption.content,
+          content: interruption.content,
           createdAt: new Date().toISOString(),
           status: "complete",
         };
@@ -1259,12 +1255,15 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         turnEffort = undefined;
         await store.save(session);
         emit("user_message", { message: queuedUserMessage });
-      } else if (userInterruption?.kind === "command") {
+      } else if (interruption?.kind === "command") {
+        if (interruption.content.trim().toLowerCase() === "/compact") {
+          await startSessionCompaction(session, emit).completion;
+        }
         emit("done", { message: assistantMessage, session });
         return;
       }
 
-      if ((orderedCalls.length === 0 || endTurnAfterToolResult) && userInterruption?.kind !== "message") {
+      if ((orderedCalls.length === 0 || endTurnAfterToolResult) && interruption?.kind !== "message") {
         if (session.parentSessionId) {
           session.agentStatus = "complete";
           await store.save(session);
@@ -1764,6 +1763,50 @@ async function compactSession(
   await store.save(session);
 }
 
+interface CompactionRun {
+  controller: AbortController;
+  progress: { generatedCharacters: number };
+  completion: Promise<{ compacted: boolean; error?: string }>; // never rejects
+}
+const compactionRuns = new Map<string, CompactionRun>();
+
+/** Runs /compact server-side, decoupled from any client connection. */
+function startSessionCompaction(
+  session: Session,
+  emit: (event: string, data: unknown) => void = (event, data) => broadcastSessionEvent(session.id, event, data),
+): CompactionRun {
+  const existing = compactionRuns.get(session.id);
+  if (existing) return existing;
+  const controller = new AbortController();
+  const run: CompactionRun = {
+    controller,
+    progress: { generatedCharacters: 0 },
+    completion: Promise.resolve({ compacted: false }),
+  };
+  // Register before notifying so a snapshot taken concurrently always sees the run.
+  compactionRuns.set(session.id, run);
+  activeSessions.register(session.id, session.parentSessionId, controller, session);
+  emit("compaction_start", {});
+  run.completion = (async () => {
+    try {
+      await compactSession(session, controller.signal, (generatedCharacters) => {
+        run.progress.generatedCharacters = generatedCharacters;
+        emit("compaction_progress", { generatedCharacters });
+      });
+      emit("compaction_complete", { session });
+      return { compacted: true };
+    } catch (error) {
+      const error_ = errorMessage(error);
+      emit("compaction_error", { error: error_ });
+      return { compacted: false, error: error_ };
+    } finally {
+      if (compactionRuns.get(session.id) === run) compactionRuns.delete(session.id);
+      activeSessions.unregister(session.id, controller);
+    }
+  })();
+  return run;
+}
+
 async function executeCommand(request: IncomingMessage, response: ServerResponse, sessionId: string): Promise<void> {
   const body = await readJson(request);
   const rawCommand = typeof body.command === "string" ? body.command.trim() : "";
@@ -1771,7 +1814,8 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
   const command = (firstWhitespace === -1 ? rawCommand : rawCommand.slice(0, firstWhitespace)).toLowerCase();
   const argument = firstWhitespace === -1 ? "" : rawCommand.slice(firstWhitespace).trim();
   const runsDuringResponse = builtInCommand(rawCommand)?.runsDuringResponse === true;
-  if (activeSessions.has(sessionId) && !runsDuringResponse) {
+  const joiningCompaction = command === "/compact" && compactionRuns.has(sessionId);
+  if (activeSessions.has(sessionId) && !runsDuringResponse && !joiningCompaction) {
     return json(response, 409, { error: "Wait for the current response to finish" });
   }
   const session = activeSessions.session(sessionId) ?? await store.get(sessionId);
@@ -1844,36 +1888,22 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     return json(response, 200, { command: "clear", session: await store.clear(session) });
   }
   if (command === "/compact") {
-    if (!compactionTarget(session)) {
+    const existing = compactionRuns.get(sessionId);
+    if (!existing && !compactionTarget(session)) {
       return json(response, 400, { error: session.compaction ? "No new conversation to compact" : "No conversation to compact" });
     }
-    const controller = new AbortController();
-    request.once("aborted", () => controller.abort());
-    response.on("close", () => {
-      if (!response.writableEnded) controller.abort();
-    });
-    activeSessions.register(sessionId, undefined, controller, session);
-    response.writeHead(200, {
-      "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-cache, no-transform",
-      connection: "keep-alive",
-      "x-accel-buffering": "no",
-    });
-    sendEvent(response, "start", { message: "Compacting model context…" });
-    try {
-      await compactSession(session, controller.signal, (generatedCharacters) => {
-        if (!response.destroyed && !response.writableEnded) {
-          sendEvent(response, "progress", { generatedCharacters });
-        }
-      });
-      if (!response.destroyed && !response.writableEnded) sendEvent(response, "done", { command: "compact", session });
-    } catch (error) {
-      if (!response.destroyed && !response.writableEnded) sendEvent(response, "error", { error: errorMessage(error) });
-    } finally {
-      activeSessions.unregister(sessionId, controller);
-      response.end();
+    const result = existing
+      ? await existing.completion // join (e.g. client re-dispatch, second window)
+      : await startSessionCompaction(session).completion;
+    // Standalone command compaction has no message stream to publish a terminal
+    // event, so close observers with the final snapshot here. A joined run owns
+    // its own terminal event and must not be ended by this request.
+    if (!existing) {
+      const completed = await store.get(sessionId) ?? session;
+      broadcastSessionEvent(sessionId, "done", { session: completed });
     }
-    return;
+    if (!result.compacted) return json(response, 502, { error: result.error });
+    return json(response, 200, { command: "compact", session: await store.get(sessionId) ?? session });
   }
   if (command === "/fork") {
     const now = new Date().toISOString();
@@ -2110,9 +2140,11 @@ async function sessionSnapshot(session: Session): Promise<Record<string, unknown
       allowedPrompts,
     };
   }
+  const compaction = compactionRuns.get(session.id);
   return {
     session,
     active: activeSessions.has(session.id),
+    ...(compaction ? { compaction: compaction.progress } : {}),
     ...(question ? { questionRequest: question } : {}),
     ...(planModeRequest ? { planModeRequest } : {}),
   };

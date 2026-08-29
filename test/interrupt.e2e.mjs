@@ -38,6 +38,8 @@ async function pathExists(path) {
 /** A scripted Anthropic-compatible provider: bash calls until interrupted. */
 function createMockProvider() {
   let requests = [];
+  let compactionFailuresRemaining = 0;
+  let nextCompactionDelayMs = 0;
   const server = createServer((request, response) => {
     let body = "";
     request.on("data", (chunk) => { body += chunk; });
@@ -49,7 +51,17 @@ function createMockProvider() {
       }
       const payload = JSON.parse(body);
       requests.push(payload);
+      if (!payload.tools && compactionFailuresRemaining > 0) {
+        compactionFailuresRemaining -= 1;
+        response.writeHead(500, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "forced compaction failure" } }));
+        return;
+      }
       const plan = planResponse(payload);
+      if (!payload.tools && nextCompactionDelayMs > 0) {
+        plan.delayMs = nextCompactionDelayMs;
+        nextCompactionDelayMs = 0;
+      }
       const respond = () => {
         response.writeHead(200, { "content-type": "text/event-stream" });
         const frame = (data) => response.write(`event: ${data.type}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -88,7 +100,13 @@ function createMockProvider() {
   });
   return {
     requests: () => requests,
-    reset: () => { requests = []; },
+    reset: () => {
+      requests = [];
+      compactionFailuresRemaining = 0;
+      nextCompactionDelayMs = 0;
+    },
+    failNextCompaction: () => { compactionFailuresRemaining += 1; },
+    delayNextCompaction: (delayMs) => { nextCompactionDelayMs = delayMs; },
     listen: (port) => new Promise((resolve) => server.listen(port, "127.0.0.1", resolve)),
     close: () => server.close(),
   };
@@ -136,6 +154,9 @@ function planResponse(payload) {
   }
   if (firstText.includes("PLAN DECLINE")) {
     return { tools: [{ id: "enter-plan", name: "EnterPlanMode", input: {} }] };
+  }
+  if (firstText.includes("DELETE DURING COMPACTION")) {
+    return { text: "ready to compact" };
   }
   // A "MULTI" prompt answers with four tool calls at once; otherwise one per response.
   if (firstText.includes("MULTI")) {
@@ -367,11 +388,11 @@ async function runQueuedCommandScenario(mock, amber) {
 }
 
 async function runAutomaticCompactionScenario(mock, amber) {
-  console.log("\n== queued automatic compaction");
+  console.log("\n== server-inserted automatic compaction");
   mock.reset();
   const events = [];
   const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
-    name: "queued automatic compaction",
+    name: "server-inserted automatic compaction",
     path: tmpdir(),
   });
   const sessionId = body.session.id;
@@ -390,37 +411,133 @@ async function runAutomaticCompactionScenario(mock, amber) {
     content: INTERRUPT_TEXT,
     kind: "message",
   });
-  check("user input queues alongside automatic compaction", queued.status === 202, JSON.stringify(queued));
+  check("user input queues alongside the inserted compaction", queued.status === 202, JSON.stringify(queued));
   await finished;
 
   const completedTool = events.findIndex((event) => event.toolCall?.name === "Bash" && event.toolCall.status === "complete");
-  const compactionStarted = events.findIndex((event) => event.event === "auto_compaction_start");
-  check("automatic compaction waited for the current tool",
+  const compactionStarted = events.findIndex((event) => event.event === "compaction_start");
+  check("compaction waited for the current tool",
     completedTool >= 0 && compactionStarted > completedTool, `${completedTool} -> ${compactionStarted}`);
-  check("automatic compaction completed in the same run",
-    events.some((event) => event.event === "auto_compaction_complete"));
+  const compactionCompleted = events.findIndex((event) => event.event === "compaction_complete");
+  const doneIndex = events.findIndex((event) => event.event === "done");
+  check("compaction completed before the run ended",
+    compactionCompleted >= 0 && doneIndex > compactionCompleted, `${compactionCompleted} -> ${doneIndex}`);
+  check("compaction streamed live progress", events.some((event) => event.event === "compaction_progress"));
   const compactionRequest = mock.requests().find((request) => !request.tools);
   check("the compaction request omitted the system prompt",
     compactionRequest && !Object.hasOwn(compactionRequest, "system"), JSON.stringify(compactionRequest?.system));
-  const compactionCompleted = events.findIndex((event) => event.event === "auto_compaction_complete");
+
+  let snapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+  check("compaction persisted a summary", snapshot.session.compaction?.summary === "Summary:\ncompacted context");
   const userInjected = events.findIndex((event) => event.event === "user_message");
-  check("priority-one compaction ran before priority-two user input",
-    compactionCompleted >= 0 && userInjected > compactionCompleted, `${compactionCompleted} -> ${userInjected}`);
+  check("the accepted queued message was injected after compaction",
+    userInjected > compactionCompleted
+      && snapshot.session.messages.some((message) => message.role === "user" && message.content === INTERRUPT_TEXT),
+    `${compactionCompleted} -> ${userInjected}`);
+  check("the model resumed the tool-driven turn after automatic compaction",
+    snapshot.session.messages.filter((message) => message.role === "assistant" && message.kind !== "compact-banner")
+      .at(-1)?.content === "continued after automatic compaction");
+  const resumedRequest = mock.requests().find((request) => request.tools
+    && JSON.stringify(request.messages).includes("compacted context"));
+  check("the resumed turn used the compacted history",
+    Array.isArray(resumedRequest?.system)
+      && resumedRequest.system.length > 0
+      && resumedRequest.messages[0]?.role === "user"
+      && JSON.stringify(resumedRequest.messages[0]).includes("generated summary"));
+}
+
+async function runFailedCompactionDetachedObserverScenario(mock, amber) {
+  console.log("\n== failed automatic compaction with detached observer");
+  mock.reset();
+  mock.failNextCompaction();
+  const ownerEvents = [];
+  const observerEvents = [];
+  const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
+    name: "failed compaction detached observer",
+    path: tmpdir(),
+  });
+  const sessionId = body.session.id;
+  const streamResponse = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content: `Run one command, then continue. ${"x".repeat(3_000)}` }),
+  });
+  if (!streamResponse.ok) throw new Error(`message stream failed: ${await streamResponse.text()}`);
+  const ownerFinished = readStream(streamResponse, (event, data) => ownerEvents.push({ event, ...data }));
+
+  // Observe through the connection used by a second tab rather than relying
+  // on the message request's client-side finally block to resend input.
+  const observerResponse = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/events`));
+  if (!observerResponse.ok) throw new Error(`observer stream failed: ${await observerResponse.text()}`);
+  const observerFinished = readStream(observerResponse, (event, data) => observerEvents.push({ event, ...data }));
+  await waitFor(
+    () => observerEvents.some((event) => event.toolCall?.name === "Bash" && event.toolCall.status === "running"),
+    30_000,
+    "the detached observer to see the bash call",
+  );
+
+  const queued = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/queued-message`), {
+    content: INTERRUPT_TEXT,
+    kind: "message",
+  });
+  check("detached observer queues a message before compaction failure",
+    queued.status === 202 && queued.body.queued === true, JSON.stringify(queued));
+  await Promise.all([ownerFinished, observerFinished]);
+
+  const compactionError = observerEvents.findIndex((event) => event.event === "compaction_error");
+  const userInjected = observerEvents.findIndex((event) =>
+    event.event === "user_message" && event.message?.content === INTERRUPT_TEXT);
+  const doneIndex = observerEvents.findIndex((event) => event.event === "done");
+  check("detached observer saw the forced compaction failure", compactionError >= 0);
+  check("server delivered the accepted message after compaction failure",
+    userInjected > compactionError && doneIndex > userInjected,
+    `${compactionError} -> ${userInjected} -> ${doneIndex}`);
 
   const snapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
-  check("automatic compaction persisted a summary", snapshot.session.compaction?.summary === "Summary:\ncompacted context");
-  check("queued user input remained present after compaction",
-    snapshot.session.messages.some((message) => message.role === "user" && message.content === INTERRUPT_TEXT));
-  check("the model continued against compacted history",
-    snapshot.session.messages.filter((message) => message.role === "assistant").at(-1)?.content
-      === "continued after automatic compaction");
-  const continuedRequest = mock.requests().find((request) =>
-    request.tools && JSON.stringify(request.messages).includes("compacted context"));
-  check("post-compaction context has the system prompt followed by the compact message",
-    Array.isArray(continuedRequest?.system)
-      && continuedRequest.system.length > 0
-      && continuedRequest.messages[0]?.role === "user"
-      && JSON.stringify(continuedRequest.messages[0]).includes("generated summary"));
+  const delivered = snapshot.session.messages.filter((message) =>
+    message.role === "user" && message.content === INTERRUPT_TEXT);
+  check("failed compaction persisted the queued message exactly once", delivered.length === 1, `${delivered.length}`);
+  check("the model handled the queued message without client re-dispatch",
+    snapshot.session.messages
+      .filter((message) => message.role === "assistant" && message.kind !== "compact-banner")
+      .at(-1)?.content?.startsWith("ACK interrupt after"));
+}
+
+async function runDeleteDuringCompactionScenario(mock, amber) {
+  console.log("\n== delete during registered compaction");
+  mock.reset();
+  const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
+    name: "delete during compaction",
+    path: tmpdir(),
+  });
+  const sessionId = body.session.id;
+  const messageResponse = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content: "DELETE DURING COMPACTION" }),
+  });
+  if (!messageResponse.ok) throw new Error(`message stream failed: ${await messageResponse.text()}`);
+  await readStream(messageResponse, () => undefined);
+
+  mock.delayNextCompaction(5_000);
+  const compactRequest = postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/commands`), {
+    command: "/compact",
+  });
+  await waitFor(async () => {
+    const response = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`));
+    if (!response.ok) return false;
+    return Boolean((await response.json()).compaction);
+  }, 10_000, "the manual compaction to register");
+
+  const deletion = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`), { method: "DELETE" });
+  const deletionBody = await deletion.json().catch(() => ({}));
+  const compactResult = await compactRequest;
+  check("delete waits for compaction abort cleanup and succeeds",
+    deletion.status === 200 && deletionBody.deletedSessionId === sessionId,
+    `${deletion.status} ${JSON.stringify(deletionBody)}`);
+  check("the aborted compact command reports failure", compactResult.status === 502, JSON.stringify(compactResult));
+  const missing = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`));
+  check("the deleted session remains absent after compaction cleanup", missing.status === 404, `${missing.status}`);
 }
 
 async function runBackgroundAgentScenario(mock, amber) {
@@ -514,11 +631,11 @@ async function runTerminalToolCompactionScenario(mock, amber) {
 
   const terminalResult = events.findIndex((event) =>
     event.toolCall?.name === "EnterPlanMode" && event.toolCall.statusDisplay?.text === "DECLINED");
-  const compactionStarted = events.findIndex((event) => event.event === "auto_compaction_start");
+  const compactionStarted = events.findIndex((event) => event.event === "compaction_start");
   check("automatic compaction runs after a terminal tool result",
     terminalResult >= 0 && compactionStarted > terminalResult, `${terminalResult} -> ${compactionStarted}`);
   check("terminal-result compaction completed before the stream ended",
-    events.some((event) => event.event === "auto_compaction_complete"));
+    events.some((event) => event.event === "compaction_complete"));
   const snapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
   check("terminal-result compaction persisted its summary",
     snapshot.session.compaction?.summary === "Summary:\ncompacted context");
@@ -551,16 +668,21 @@ async function runRedundantManualCompactionScenario(mock, amber) {
   check("manual compact queues alongside automatic compaction", queued.status === 202, JSON.stringify(queued));
   await finished;
 
-  check("automatic compaction satisfied the queued manual compact",
-    events.filter((event) => event.event === "auto_compaction_complete").length === 1);
-  check("the run continued after removing the redundant command",
-    events.some((event) => event.event === "continuation"));
+  check("the server-inserted compaction ran exactly once",
+    events.filter((event) => event.event === "compaction_complete").length === 1);
+  const compactionCompleted = events.findIndex((event) => event.event === "compaction_complete");
+  const doneIndex = events.findIndex((event) => event.event === "done");
+  const continuationIndex = events.findIndex((event) => event.event === "continuation");
+  check("the run resumed after the compaction",
+    compactionCompleted >= 0 && continuationIndex > compactionCompleted && doneIndex > continuationIndex,
+    `${compactionCompleted} -> ${continuationIndex} -> ${doneIndex}`);
+  check("the queued manual compact did not cause a second compaction failure",
+    !events.some((event) => event.event === "compaction_error"));
   const snapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
-  check("the redundant manual compact did not cause a second compaction failure",
-    !events.some((event) => event.event === "auto_compaction_error"));
-  check("the continued response used the automatic summary",
-    snapshot.session.messages.filter((message) => message.role === "assistant").at(-1)?.content
-      === "continued after automatic compaction");
+  check("the automatic summary was persisted",
+    snapshot.session.compaction?.summary === "Summary:\ncompacted context");
+  check("the model continued the interrupted turn after compaction",
+    snapshot.session.messages.some((message) => message.content === "continued after automatic compaction"));
 }
 
 async function writeBrowserStubs(runDirectory) {
@@ -621,6 +743,8 @@ try {
   await runQueuedCommandScenario(mock, amber);
   await runBackgroundAgentScenario(mock, amber);
   await runAutomaticCompactionScenario(mock, amber);
+  await runFailedCompactionDetachedObserverScenario(mock, amber);
+  await runDeleteDuringCompactionScenario(mock, amber);
   await runTerminalToolCompactionScenario(mock, amber);
   await runRedundantManualCompactionScenario(mock, amber);
 

@@ -7,7 +7,7 @@ test("takes returns and removes the queued message", () => {
   queue.enqueueUser("session", { content: "stop after this one", kind: "message" });
 
   assert.deepEqual(queue.takeReady("session"), [{
-    content: "stop after this one", kind: "message", priority: 2, source: "user",
+    content: "stop after this one", kind: "message", priority: 2,
   }]);
   assert.deepEqual(queue.takeReady("session"), []);
 });
@@ -18,7 +18,7 @@ test("queuing again replaces a message that has not been delivered", () => {
   queue.enqueueUser("session", { content: "/context", kind: "command" });
 
   assert.deepEqual(queue.takeReady("session"), [{
-    content: "/context", kind: "command", priority: 2, source: "user",
+    content: "/context", kind: "command", priority: 2,
   }]);
 });
 
@@ -39,41 +39,35 @@ test("clear drops an undelivered message", () => {
   assert.deepEqual(queue.takeReady("session"), []);
 });
 
-test("automatic compaction waits for an operation and has top priority", () => {
+test("server compaction sorts before user input regardless of enqueue order", () => {
   const queue = new SessionInputPriorityQueue();
   queue.enqueueUser("session", { content: "user input", kind: "message" });
-  queue.enqueueAutomaticCompaction("session");
-  assert.equal(queue.takeReady("session")[0]?.source, "user");
+  queue.enqueueCompaction("session");
 
-  queue.operationCompleted("session");
-  assert.equal(queue.takeReady("session")[0]?.source, "automatic-compaction");
+  assert.deepEqual(queue.takeReady("session").map((entry) => entry.content), ["/compact", "user input"]);
 });
 
-test("ready compaction sorts before user input regardless of enqueue order", () => {
+test("replacing the user slot keeps a queued compaction", () => {
   const queue = new SessionInputPriorityQueue();
-  queue.enqueueAutomaticCompaction("session");
-  queue.enqueueUser("session", { content: "user input", kind: "message" });
-  queue.operationCompleted("session");
+  queue.enqueueCompaction("session");
+  queue.enqueueUser("session", { content: "first", kind: "message" });
+  queue.enqueueUser("session", { content: "second", kind: "message" });
 
-  assert.deepEqual(queue.takeReady("session").map((entry) => entry.source), ["automatic-compaction", "user"]);
+  assert.deepEqual(queue.takeReady("session").map((entry) => entry.content), ["/compact", "second"]);
 });
 
-test("successful automatic compaction can remove a redundant manual compact", () => {
+test("enqueueCompaction is a no-op when a server compact is already queued", () => {
   const queue = new SessionInputPriorityQueue();
-  queue.enqueueAutomaticCompaction("session");
+  queue.enqueueCompaction("session");
+  queue.enqueueCompaction("session");
+
+  assert.deepEqual(queue.takeReady("session").map((entry) => entry.content), ["/compact"]);
+});
+
+test("enqueueCompaction is a no-op when a user compact is already queued", () => {
+  const queue = new SessionInputPriorityQueue();
   queue.enqueueUser("session", { content: "/COMPACT", kind: "command" });
+  queue.enqueueCompaction("session");
 
-  assert.equal(queue.removeManualCompaction("session"), true);
-  queue.operationCompleted("session");
-  assert.deepEqual(queue.takeReady("session").map((entry) => entry.source), ["automatic-compaction"]);
-});
-
-test("removing a manual compact preserves other queued commands", () => {
-  const queue = new SessionInputPriorityQueue();
-  queue.enqueueAutomaticCompaction("session");
-  queue.enqueueUser("session", { content: "/name keep-me", kind: "command" });
-
-  assert.equal(queue.removeManualCompaction("session"), false);
-  queue.operationCompleted("session");
-  assert.deepEqual(queue.takeReady("session").map((entry) => entry.content), ["/compact", "/name keep-me"]);
+  assert.deepEqual(queue.takeReady("session").map((entry) => entry.content), ["/COMPACT"]);
 });

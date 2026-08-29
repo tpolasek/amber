@@ -63,6 +63,7 @@ type PlanModeRequest =
 interface SessionSnapshot {
   session: Session;
   active: boolean;
+  compaction?: { generatedCharacters: number };
   questionRequest?: AskUserQuestionRequest;
   planModeRequest?: PlanModeRequest;
 }
@@ -674,6 +675,7 @@ async function loadSession(id: string): Promise<void> {
   if (!snapshot.session.parentSessionId) setStreaming(snapshot.active);
   syncPendingInteraction(snapshot);
   renderSession();
+  syncCompactionProgress(snapshot);
   renderSessionList();
   document.body.classList.remove("sidebar-open");
 }
@@ -1329,6 +1331,70 @@ function setStreamAssistant(context: SessionStreamContext, message: Message | nu
     : null;
 }
 
+interface CompactProgress { message: Message; element: HTMLElement }
+
+/** Tracks the in-transcript progress banner shared by /compact and server auto-compaction. */
+let compactProgress: CompactProgress | null = null;
+
+/** Returns the live progress banner, creating or re-attaching to a rendered one as needed. */
+function ensureCompactProgress(session: Session): CompactProgress {
+  const rendered = session.messages.find((message) => message.kind === "compact-banner" && message.status === "streaming");
+  const tracked = compactProgress?.message.status === "streaming" ? compactProgress : undefined;
+  const message = tracked?.message ?? rendered;
+  if (message) {
+    const element = elements.transcript.querySelector<HTMLElement>(`.message[data-message-id="${CSS.escape(message.id)}"]`);
+    if (element) {
+      compactProgress = { message, element };
+      return compactProgress;
+    }
+  }
+  return compactProgress = startCompactProgress(session, "compact-progress");
+}
+
+function startCompactProgress(session: Session, idPrefix: string): CompactProgress {
+  const message: Message = {
+    id: `${idPrefix}-${Date.now()}`,
+    role: "assistant",
+    content: "Compacting model context…",
+    createdAt: new Date().toISOString(),
+    status: "streaming",
+    kind: "compact-banner",
+  };
+  session.messages.push(message);
+  const progress: CompactProgress = { message, element: appendMessage(message) };
+  elements.emptyState.hidden = true;
+  return progress;
+}
+
+function updateCompactProgress(progress: CompactProgress, generatedCharacters: number): void {
+  const generatedTokens = Math.ceil(generatedCharacters / 4);
+  progress.message.content = `Compacting model context… ≈${generatedTokens.toLocaleString()} tokens generated`;
+  updateMessage(progress.element, progress.message);
+}
+
+function removeCompactProgress(progress: CompactProgress, session: Session): void {
+  progress.element.remove();
+  session.messages = session.messages.filter((message) => message.id !== progress.message.id);
+}
+
+/** Re-creates or removes the compaction banner after a transcript (re)render. */
+function syncCompactionProgress(snapshot: SessionSnapshot): void {
+  const session = state.session;
+  if (!session || session.id !== snapshot.session.id) return;
+  if (snapshot.compaction) {
+    compactProgress = ensureCompactProgress(session);
+    updateCompactProgress(compactProgress, snapshot.compaction.generatedCharacters);
+    return;
+  }
+  const stale = session.messages.filter((message) => message.kind === "compact-banner" && message.status === "streaming");
+  if (stale.length === 0) return;
+  session.messages = session.messages.filter((message) => !stale.includes(message));
+  for (const message of stale) {
+    elements.transcript.querySelector<HTMLElement>(`.message[data-message-id="${CSS.escape(message.id)}"]`)?.remove();
+  }
+  if (compactProgress && stale.includes(compactProgress.message)) compactProgress = null;
+}
+
 function applySessionEvent(context: SessionStreamContext, event: string, data: unknown): void {
   if (state.session?.id !== context.session.id) return;
   if (event === "snapshot") {
@@ -1339,6 +1405,7 @@ function applySessionEvent(context: SessionStreamContext, event: string, data: u
     if (!snapshot.session.parentSessionId) setStreaming(snapshot.active);
     syncPendingInteraction(snapshot);
     updateRenderedSession(snapshot.session);
+    syncCompactionProgress(snapshot);
     setStreamAssistant(context, createSessionStreamContext(snapshot.session).assistantMessage);
     if (!snapshot.session.parentSessionId && wasStreaming && !snapshot.active) sendQueuedMessage(snapshot.session.id);
   } else if (event === "start") {
@@ -1385,16 +1452,24 @@ function applySessionEvent(context: SessionStreamContext, event: string, data: u
     setStreamAssistant(context, message);
     updateMessage(context.assistantElement, message);
     renderContextMeter();
-  } else if (event === "auto_compaction_start") {
-    notify("Auto-compacting context…");
-  } else if (event === "auto_compaction_complete") {
+  } else if (event === "compaction_start") {
+    compactProgress = ensureCompactProgress(context.session);
+  } else if (event === "compaction_progress") {
+    compactProgress = ensureCompactProgress(context.session);
+    updateCompactProgress(compactProgress, (data as { generatedCharacters: number }).generatedCharacters);
+  } else if (event === "compaction_complete") {
+    compactProgress = null;
     const session = (data as { session: Session }).session;
     context.session = session;
     updateRenderedSession(session);
     renderContextMeter();
     consumeQueuedManualCompaction(session.id);
-  } else if (event === "auto_compaction_error") {
-    notify(`Auto-compaction failed · ${(data as { error: string }).error}`);
+  } else if (event === "compaction_error") {
+    if (compactProgress) {
+      removeCompactProgress(compactProgress, context.session);
+      compactProgress = null;
+    }
+    notify(`Compaction failed · ${(data as { error: string }).error}`);
   } else if (event === "tool_update") {
     applyToolUpdate(context.session, data as { messageId: string; toolCall: ToolCall });
   } else if (event === "tool_output") {
@@ -1432,6 +1507,7 @@ function applySessionEvent(context: SessionStreamContext, event: string, data: u
     if (!session.parentSessionId && state.controller === null) setStreaming(false);
     updateRenderedSession(session);
     setStreamAssistant(context, null);
+    if (!session.parentSessionId && state.controller === null) sendQueuedMessage(session.id);
   } else if (event === "error") {
     const payload = data as { error: string; message?: Message; session?: Session };
     if (payload.session) {
@@ -2483,52 +2559,25 @@ async function runCompactCommand(command: string, clearComposer = true): Promise
   if (!session || state.streaming) return;
   if (clearComposer) clearPrompt();
   setStreaming(true);
-  state.controller = new AbortController();
+  compactProgress = ensureCompactProgress(session);
+  // Open the /events observe stream; progress arrives via compaction_* broadcasts.
+  syncSessionRunUpdates();
 
-  const progressMessage: Message = {
-    id: `compact-progress-${Date.now()}`,
-    role: "assistant",
-    content: "Compacting model context…",
-    createdAt: new Date().toISOString(),
-    status: "streaming",
-    kind: "compact-banner",
-  };
-  session.messages.push(progressMessage);
-  const progressElement = appendMessage(progressMessage);
-  elements.emptyState.hidden = true;
-
-  let streamError = "";
   try {
-    const response = await fetch(`/api/sessions/${session.id}/commands`, {
+    const result = await api<{ command: "compact"; session: Session }>(`/api/sessions/${session.id}/commands`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
       body: JSON.stringify({ command }),
-      signal: state.controller.signal,
     });
-    if (!response.ok) throw new Error(await responseError(response));
-    if (!response.body) throw new Error("Server returned no stream");
-
-    await readEventStream(response.body, (event, data) => {
-      if (event === "progress") {
-        const generatedCharacters = (data as { generatedCharacters: number }).generatedCharacters;
-        const generatedTokens = Math.ceil(generatedCharacters / 4);
-        progressMessage.content = `Compacting model context… ≈${generatedTokens.toLocaleString()} tokens generated`;
-        updateMessage(progressElement, progressMessage);
-      } else if (event === "done") {
-        state.session = (data as { command: "compact"; session: Session }).session;
-        renderSession();
-        notify("Context compacted · full history retained");
-      } else if (event === "error") {
-        streamError = (data as { error: string }).error;
-      }
-    });
-    if (streamError) throw new Error(streamError);
+    state.session = result.session;
+    renderSession();
+    notify("Context compacted · full history retained");
   } catch (error) {
-    if (!(error instanceof DOMException && error.name === "AbortError")) notify(messageFrom(error));
+    notify(messageFrom(error));
     await refreshCurrentSession();
   } finally {
-    state.controller = null;
-    setStreaming(false);
+    // The banner lifecycle is finished by the event/response render.
+    compactProgress = null;
+    if (state.controller === null) setStreaming(false);
     sendQueuedMessage(session.id);
     await loadSessionList();
     elements.prompt.focus();
@@ -3110,6 +3159,7 @@ async function refreshCurrentSession(): Promise<boolean> {
     decorateStreamingMessage(snapshot);
     syncPendingInteraction(snapshot);
     updateRenderedSession(snapshot.session);
+    syncCompactionProgress(snapshot);
     return snapshot.active;
   } catch {
     // Preserve the last visible state and keep polling: the server may still be running.
