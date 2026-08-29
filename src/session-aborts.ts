@@ -47,7 +47,7 @@ export class ActiveSessionRuns {
     if (this.#runs.get(sessionId)?.controller === controller) this.#runs.delete(sessionId);
   }
 
-  abortTree(sessionId: string): string[] {
+  abortTree(sessionId: string, abortRelatedOperation?: (sessionId: string) => void): string[] {
     const sessionIds = new Set([sessionId]);
     let foundDescendant = true;
     while (foundDescendant) {
@@ -63,9 +63,14 @@ export class ActiveSessionRuns {
     const aborted: string[] = [];
     for (const candidateId of sessionIds) {
       const run = this.#runs.get(candidateId);
-      if (!run || run.controller.signal.aborted) continue;
-      run.controller.abort();
-      aborted.push(candidateId);
+      if (run && !run.controller.signal.aborted) {
+        run.controller.abort();
+        aborted.push(candidateId);
+      }
+      // Nested compaction has a distinct controller, while standalone
+      // compaction may share this active controller. Run this second so the
+      // active abort is still represented in the result in either case.
+      abortRelatedOperation?.(candidateId);
     }
     return aborted;
   }
@@ -80,8 +85,9 @@ export async function abortSessionOperations(
   activeSessions: ActiveSessionRuns,
   backgroundTasks: BackgroundSessionTasks,
   loadFamily: () => Promise<readonly SessionFamilyMember[]>,
+  abortRelatedOperation?: (sessionId: string) => void,
 ): Promise<SessionAbortResult> {
-  const sessionIds = activeSessions.abortTree(rootSessionId);
+  const sessionIds = activeSessions.abortTree(rootSessionId, abortRelatedOperation);
   const backgroundTaskIds: string[] = [];
   const stoppedSessions = new Set<string>();
 

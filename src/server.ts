@@ -155,6 +155,7 @@ const shutdown = () => {
   if (shuttingDown) return;
   shuttingDown = true;
   activeSessions.abortAll();
+  for (const run of compactionRuns.values()) run.controller.abort();
   backgroundTasks.stopAll();
   askUserQuestions.stopAll();
   planModeApprovals.stopAll();
@@ -338,6 +339,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       activeSessions,
       backgroundTasks,
       () => store.family(session.id),
+      (sessionId) => compactionRuns.get(sessionId)?.controller.abort(),
     );
     return json(response, 200, {
       aborted: sessionIds.length > 0 || backgroundTaskIds.length > 0,
@@ -1228,7 +1230,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       if (interruption?.priority === 0
         && interruption.kind === "command"
         && interruption.content.trim().toLowerCase() === "/compact") {
-        await startSessionCompaction(session, emit).completion;
+        await startSessionCompaction(session, emit, false).completion;
         // Input can be queued while summary generation is in flight. Pull it
         // in now and honor the queue's replaceable-user-slot semantics by
         // taking the newest remaining priority-two entry.
@@ -1257,7 +1259,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         emit("user_message", { message: queuedUserMessage });
       } else if (interruption?.kind === "command") {
         if (interruption.content.trim().toLowerCase() === "/compact") {
-          await startSessionCompaction(session, emit).completion;
+          await startSessionCompaction(session, emit, false).completion;
         }
         emit("done", { message: assistantMessage, session });
         return;
@@ -1766,6 +1768,7 @@ async function compactSession(
 interface CompactionRun {
   controller: AbortController;
   progress: { generatedCharacters: number };
+  registeredActive: boolean;
   completion: Promise<{ compacted: boolean; error?: string }>; // never rejects
 }
 const compactionRuns = new Map<string, CompactionRun>();
@@ -1774,6 +1777,7 @@ const compactionRuns = new Map<string, CompactionRun>();
 function startSessionCompaction(
   session: Session,
   emit: (event: string, data: unknown) => void = (event, data) => broadcastSessionEvent(session.id, event, data),
+  registerActive = true,
 ): CompactionRun {
   const existing = compactionRuns.get(session.id);
   if (existing) return existing;
@@ -1781,11 +1785,12 @@ function startSessionCompaction(
   const run: CompactionRun = {
     controller,
     progress: { generatedCharacters: 0 },
+    registeredActive: registerActive,
     completion: Promise.resolve({ compacted: false }),
   };
   // Register before notifying so a snapshot taken concurrently always sees the run.
   compactionRuns.set(session.id, run);
-  activeSessions.register(session.id, session.parentSessionId, controller, session);
+  if (run.registeredActive) activeSessions.register(session.id, session.parentSessionId, controller, session);
   emit("compaction_start", {});
   run.completion = (async () => {
     try {
@@ -1801,7 +1806,7 @@ function startSessionCompaction(
       return { compacted: false, error: error_ };
     } finally {
       if (compactionRuns.get(session.id) === run) compactionRuns.delete(session.id);
-      activeSessions.unregister(session.id, controller);
+      if (run.registeredActive) activeSessions.unregister(session.id, controller);
     }
   })();
   return run;

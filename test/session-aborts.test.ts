@@ -69,6 +69,7 @@ test("session abort stops only agent background tasks after aborting active runs
   runs.register("active-agent", "root", activeAgent);
 
   const stoppedSessions: string[] = [];
+  const abortedRelatedOperations: string[] = [];
   const backgroundTasks = {
     stopSession(sessionId: string): Array<{ id: string }> {
       stoppedSessions.push(sessionId);
@@ -89,9 +90,14 @@ test("session abort stops only agent background tasks after aborting active runs
         { id: "inactive-agent" },
       ];
     },
+    (sessionId) => {
+      abortedRelatedOperations.push(sessionId);
+      if (sessionId === "root") root.abort();
+    },
   );
 
   assert.deepEqual(result.sessionIds, ["root", "active-agent"]);
+  assert.deepEqual(abortedRelatedOperations, ["root", "active-agent"]);
   assert.deepEqual(stoppedSessions, ["active-agent", "inactive-agent"]);
   assert.deepEqual(result.backgroundTaskIds, ["background-active-agent", "background-inactive-agent"]);
 });

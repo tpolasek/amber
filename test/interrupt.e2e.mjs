@@ -40,6 +40,7 @@ function createMockProvider() {
   let requests = [];
   let compactionFailuresRemaining = 0;
   let nextCompactionDelayMs = 0;
+  let nextPostCompactionDelayMs = 0;
   const server = createServer((request, response) => {
     let body = "";
     request.on("data", (chunk) => { body += chunk; });
@@ -61,6 +62,12 @@ function createMockProvider() {
       if (!payload.tools && nextCompactionDelayMs > 0) {
         plan.delayMs = nextCompactionDelayMs;
         nextCompactionDelayMs = 0;
+      }
+      if (payload.tools
+        && JSON.stringify(payload.messages).includes("compacted context")
+        && nextPostCompactionDelayMs > 0) {
+        plan.delayMs = nextPostCompactionDelayMs;
+        nextPostCompactionDelayMs = 0;
       }
       const respond = () => {
         response.writeHead(200, { "content-type": "text/event-stream" });
@@ -104,9 +111,11 @@ function createMockProvider() {
       requests = [];
       compactionFailuresRemaining = 0;
       nextCompactionDelayMs = 0;
+      nextPostCompactionDelayMs = 0;
     },
     failNextCompaction: () => { compactionFailuresRemaining += 1; },
     delayNextCompaction: (delayMs) => { nextCompactionDelayMs = delayMs; },
+    delayNextPostCompactionResponse: (delayMs) => { nextPostCompactionDelayMs = delayMs; },
     listen: (port) => new Promise((resolve) => server.listen(port, "127.0.0.1", resolve)),
     close: () => server.close(),
   };
@@ -390,6 +399,7 @@ async function runQueuedCommandScenario(mock, amber) {
 async function runAutomaticCompactionScenario(mock, amber) {
   console.log("\n== server-inserted automatic compaction");
   mock.reset();
+  mock.delayNextPostCompactionResponse(1_500);
   const events = [];
   const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
     name: "server-inserted automatic compaction",
@@ -412,6 +422,20 @@ async function runAutomaticCompactionScenario(mock, amber) {
     kind: "message",
   });
   check("user input queues alongside the inserted compaction", queued.status === 202, JSON.stringify(queued));
+  await waitFor(
+    () => events.some((event) => event.event === "continuation"),
+    30_000,
+    "the model turn to resume after automatic compaction",
+  );
+  const activeSnapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+  check("the resumed outer turn remains registered as active", activeSnapshot.active === true);
+  const concurrent = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+    content: "must not start concurrently",
+  });
+  check("a concurrent message is rejected while the resumed turn runs",
+    concurrent.status === 409, JSON.stringify(concurrent));
+  const deletion = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`), { method: "DELETE" });
+  check("delete is rejected while the resumed outer turn runs", deletion.status === 409, `${deletion.status}`);
   await finished;
 
   const completedTool = events.findIndex((event) => event.toolCall?.name === "Bash" && event.toolCall.status === "complete");
