@@ -167,6 +167,12 @@ function planResponse(payload) {
   if (firstText.includes("DELETE DURING COMPACTION")) {
     return { text: "ready to compact" };
   }
+  // A "DISTINCT" prompt issues one differently-input bash call per round, so
+  // the tool-loop detector lets the run finish on its own.
+  if (firstText.includes("DISTINCT")) {
+    if (bashUses.length >= 6) return { text: "ran every command without interruption" };
+    return { tools: [{ id: `bash-${bashUses.length + 1}`, command: `echo tick ${bashUses.length + 1}` }] };
+  }
   // A "MULTI" prompt answers with four tool calls at once; otherwise one per response.
   if (firstText.includes("MULTI")) {
     return { tools: [0, 1, 2, 3].map((i) => ({ id: `multi-${bashUses.length}-${i}`, command: "sleep 1" })) };
@@ -564,6 +570,111 @@ async function runDeleteDuringCompactionScenario(mock, amber) {
   check("the deleted session remains absent after compaction cleanup", missing.status === 404, `${missing.status}`);
 }
 
+/**
+ * A dropped client connection (window refresh, closed tab) must not abort the
+ * run: it keeps streaming server-side, a re-attached observer sees it through,
+ * and an explicit /abort still stops it.
+ */
+async function runDisconnectedClientScenario(mock, amber) {
+  console.log("\n== client disconnect continues in background");
+  mock.reset();
+  const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
+    name: "client disconnect continues in background",
+    path: tmpdir(),
+  });
+  const sessionId = body.session.id;
+  const ownerController = new AbortController();
+  const streamResponse = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content: "DISTINCT run six bash commands one at a time." }),
+    signal: ownerController.signal,
+  });
+  if (!streamResponse.ok) throw new Error(`message stream failed: ${await streamResponse.text()}`);
+  const ownerEvents = [];
+  const ownerRead = readStream(streamResponse, (event, data) => ownerEvents.push({ event, ...data }));
+  await waitFor(
+    () => ownerEvents.some((event) => event.toolCall?.name === "Bash" && event.toolCall.status === "running"),
+    30_000,
+    "the first bash call to start",
+  );
+
+  // Drop the connection the way a window refresh does.
+  ownerController.abort();
+  await ownerRead.catch(() => undefined);
+
+  const detachedSnapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+  check("the run stays active after the client disconnects", detachedSnapshot.active === true);
+  const concurrent = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+    content: "must not start concurrently",
+  });
+  check("a message sent after the disconnect is rejected", concurrent.status === 409, JSON.stringify(concurrent));
+
+  // The refreshed tab re-attaches through the observe endpoint and watches the run out.
+  const observerEvents = [];
+  const observerResponse = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/events`));
+  if (!observerResponse.ok) throw new Error(`observer stream failed: ${await observerResponse.text()}`);
+  const observerRead = readStream(observerResponse, (event, data) => observerEvents.push({ event, ...data }));
+  await waitFor(
+    () => observerEvents.some((event) => event.event === "done"),
+    60_000,
+    "the detached run to finish while observed",
+  );
+  check("the re-attached observer received live tool events",
+    observerEvents.some((event) => event.toolCall?.name === "Bash" && event.toolCall.status === "complete"));
+  const snapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+  const bashes = snapshot.session.messages
+    .flatMap((message) => message.toolCalls ?? [])
+    .filter((call) => call.name === "Bash");
+  check("the detached run executed every bash call",
+    bashes.length === 6 && bashes.every((call) => call.status === "complete"),
+    `${bashes.filter((call) => call.status === "complete").length}/${bashes.length}`);
+  check("the detached run produced the final response",
+    snapshot.session.messages.filter((message) => message.role === "assistant").at(-1)?.content
+      === "ran every command without interruption");
+  await observerRead.catch(() => undefined);
+
+  // An explicit abort still stops a run nobody is attached to.
+  const abortEvents = [];
+  const { body: second } = await postJson(amberUrl(amber.port, "/api/sessions"), {
+    name: "explicit abort after disconnect",
+    path: tmpdir(),
+  });
+  const abortSessionId = second.session.id;
+  const abortController = new AbortController();
+  const abortResponse = await fetch(amberUrl(amber.port, `/api/sessions/${abortSessionId}/messages`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content: "MULTI run four bash commands." }),
+    signal: abortController.signal,
+  });
+  if (!abortResponse.ok) throw new Error(`abort stream failed: ${await abortResponse.text()}`);
+  const abortRead = readStream(abortResponse, (event, data) => abortEvents.push({ event, ...data }));
+  await waitFor(
+    () => abortEvents.some((event) => event.toolCall?.name === "Bash" && event.toolCall.status === "running"),
+    30_000,
+    "the abort scenario bash call to start",
+  );
+  abortController.abort();
+  await abortRead.catch(() => undefined);
+  const abortObserver = await fetch(amberUrl(amber.port, `/api/sessions/${abortSessionId}/events`));
+  const abortObserverRead = readStream(abortObserver, (event, data) => abortEvents.push({ event, ...data }));
+  const aborted = await postJson(amberUrl(amber.port, `/api/sessions/${abortSessionId}/abort`), {});
+  check("explicit abort stops the detached run",
+    aborted.body.aborted === true && aborted.body.sessionIds.includes(abortSessionId), JSON.stringify(aborted));
+  await waitFor(
+    () => abortEvents.some((event) => event.event === "error"),
+    30_000,
+    "the aborted run to report its error",
+  );
+  const finalSnapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${abortSessionId}`))).json();
+  check("the aborted run is no longer active", finalSnapshot.active === false);
+  check("the aborted run reported the stop to observers",
+    abortEvents.some((event) => event.event === "error" && event.error === "Generation stopped"),
+    JSON.stringify(abortEvents.filter((event) => event.event === "error")));
+  await abortObserverRead.catch(() => undefined);
+}
+
 async function runBackgroundAgentScenario(mock, amber) {
   console.log("\n== background agent launch");
   mock.reset();
@@ -769,6 +880,7 @@ try {
   await runAutomaticCompactionScenario(mock, amber);
   await runFailedCompactionDetachedObserverScenario(mock, amber);
   await runDeleteDuringCompactionScenario(mock, amber);
+  await runDisconnectedClientScenario(mock, amber);
   await runTerminalToolCompactionScenario(mock, amber);
   await runRedundantManualCompactionScenario(mock, amber);
 

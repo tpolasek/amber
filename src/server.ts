@@ -617,11 +617,10 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   automaticNameRuns.get(sessionId)?.sessions.add(session);
   const shouldAutoName = shouldAutoNameSession(session);
 
+  // The run is decoupled from this connection: a refresh or closed window
+  // leaves it streaming server-side, and clients re-attach through
+  // /api/sessions/:id/events. Only an explicit abort (or shutdown) stops it.
   const controller = new AbortController();
-  request.once("aborted", () => controller.abort());
-  response.on("close", () => {
-    if (!response.writableEnded) controller.abort();
-  });
   const now = new Date().toISOString();
   const userMessage: Message = { id: randomUUID(), role: "user", content, createdAt: now, status: "complete" };
   let assistantMessage = createAssistantMessage(now);
