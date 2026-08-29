@@ -98,7 +98,9 @@ export function toolMetadata(call: ToolCall): string {
   if (call.name === "Agent") {
     const type = call.agentType ?? (typeof call.input.subagent_type === "string" ? call.input.subagent_type : "default");
     const model = call.agentModel ?? (typeof call.input.model === "string" ? call.input.model : undefined);
-    values.push(model ? `${type} · ${model}` : type);
+    values.push(type);
+    if (model) values.push(model);
+    if (call.agentThinkingLevel) values.push(`thinking-${call.agentThinkingLevel}`);
   }
   if (call.name !== "Bash" && call.workingDirectory) values.push(call.workingDirectory);
   if (call.name === "Skill") {

@@ -39,6 +39,7 @@ export interface ToolCall {
   agentSessionId?: string;
   agentType?: string;
   agentModel?: string;
+  agentThinkingLevel?: ThinkingLevel;
   agentNotificationDeliveredAt?: string;
   skillModel?: string;
   skillEffort?: string;

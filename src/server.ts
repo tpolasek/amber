@@ -1511,7 +1511,9 @@ async function executeAgentCall(
     throwIfSessionAborted(signal);
     call.agentSessionId = child.id;
     call.agentType = input.subagentType;
-    call.agentModel = providerForSession(child).model;
+    const agentModelInfo = providerCatalog.model(child.model);
+    call.agentModel = agentModelInfo.key;
+    call.agentThinkingLevel = agentModelInfo.thinkingLevel;
     await persistParent();
     onUpdate(call);
     if (input.runInBackground) {

@@ -71,6 +71,12 @@ test("formats tool subjects and statuses independently of the DOM", () => {
     agentType: "general-purpose",
     agentModel: "mimo-2.5",
   })), "general-purpose · mimo-2.5");
+  assert.equal(toolMetadata(call({
+    name: "Agent",
+    agentType: "general-purpose",
+    agentModel: "zai/glm-5.3",
+    agentThinkingLevel: "high",
+  })), "general-purpose · zai/glm-5.3 · thinking-high");
 });
 
 test("keeps completed background agent launches labeled as background", () => {
