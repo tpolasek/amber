@@ -2950,9 +2950,7 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
     }
     thinking.open = activelyThinking ? true : wasStreaming ? false : wasOpen;
     const thinkingTokens = Math.ceil((message.thinking?.length ?? 0) / 4).toLocaleString();
-    thinkingStatus.textContent = activelyThinking
-      ? `≈${thinkingTokens} tokens · streaming`
-      : `≈${thinkingTokens} tokens · click to expand`;
+    thinkingStatus.textContent = `${thinkingTokens}/toks`;
   } else {
     stopStreamingThinkingReveal(element);
   }
@@ -3036,6 +3034,12 @@ function stopStreamingThinkingReveal(element: HTMLElement): void {
   streamingThinkingStates.delete(element);
 }
 
+function toolStatusText(call: ToolCall): string {
+  const label = toolStatusLabel(call);
+  const tokens = Math.ceil(call.output.length / 4);
+  return tokens > 0 ? `${tokens.toLocaleString()}/toks · ${label}` : label;
+}
+
 function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
   const previousOutputStates = new Map(
     [...container.querySelectorAll<HTMLDetailsElement>(".tool-output-details")]
@@ -3066,7 +3070,7 @@ function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
     }
     const status = document.createElement("span");
     status.className = "tool-call-status";
-    status.textContent = toolStatusLabel(call);
+    status.textContent = toolStatusText(call);
     header.append(title, status);
     card.append(header);
     if (!compactSubject) {
@@ -3147,7 +3151,7 @@ function updateElapsedToolStatuses(): void {
       if (call.status !== "running" || !call.statusDisplay?.appendElapsed || !call.startedAt) continue;
       const card = elements.transcript.querySelector<HTMLElement>(`.tool-call[data-tool-use-id="${CSS.escape(call.id)}"]`);
       const status = card?.querySelector<HTMLElement>(".tool-call-status");
-      if (status) status.textContent = toolStatusLabel(call);
+      if (status) status.textContent = toolStatusText(call);
     }
   }
 }
