@@ -90,6 +90,7 @@ const projectRoot = resolve(sourceDirectory, "../..");
 const isPackaged = Boolean((process as NodeJS.Process & { pkg?: unknown }).pkg);
 const workspaceRoot = await realpath(isPackaged ? process.cwd() : projectRoot);
 const publicDirectory = join(projectRoot, "public");
+const buildVersion = await resolveBuildVersion();
 const clientScript = join(sourceDirectory, "client.js");
 const clientFormattersScript = join(sourceDirectory, "client-formatters.js");
 const builtInCommandsScript = join(sourceDirectory, "built-in-commands.js");
@@ -574,7 +575,13 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return serveFile(response, join(publicDirectory, "themes.css"), "text/css; charset=utf-8", "no-cache");
   }
   if (method === "GET" && (url.pathname === "/" || /^\/s\/[a-z0-9.-]+$/.test(url.pathname))) {
-    return serveFile(response, join(publicDirectory, "index.html"), "text/html; charset=utf-8", "no-cache");
+    return serveFile(
+      response,
+      join(publicDirectory, "index.html"),
+      "text/html; charset=utf-8",
+      "no-cache",
+      (html) => html.replace("__BUILD_VERSION__", () => buildVersion),
+    );
   }
   json(response, 404, { error: "Not found" });
 }
@@ -2182,8 +2189,10 @@ async function serveFile(
   path: string,
   contentType: string,
   cacheControl = "public, max-age=3600",
+  transform?: (content: string) => string,
 ): Promise<void> {
-  const content = await readFile(path);
+  let content: Buffer | string = await readFile(path);
+  if (transform) content = transform(content.toString("utf8"));
   response.writeHead(200, {
     "content-type": contentType,
     "cache-control": cacheControl,
@@ -2191,6 +2200,18 @@ async function serveFile(
     "content-security-policy": "default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'",
   });
   response.end(content);
+}
+
+async function resolveBuildVersion(): Promise<string> {
+  const override = process.env.AMBER_VERSION?.trim();
+  if (override) return override;
+  try {
+    const stored = (await readFile(join(projectRoot, "dist", "build-version.txt"), "utf8")).trim();
+    if (stored) return stored;
+  } catch {
+    // No recorded build version (e.g. compiled directly with tsc).
+  }
+  return "dev";
 }
 
 function errorMessage(error: unknown): string {

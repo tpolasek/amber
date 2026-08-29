@@ -24,6 +24,8 @@ jobs:
             command: package:macos
             artifact: amber-macos
     runs-on: ${{ matrix.runner }}
+    env:
+      AMBER_VERSION: ${{ github.event.release.tag_name || github.sha }}
 
     steps:
       - uses: actions/checkout@v4

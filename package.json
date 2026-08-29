@@ -6,7 +6,7 @@
   "description": "An amber terminal interface for browser-based LLM sessions.",
   "bin": "dist/src/server.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/write-version.mjs && tsc -p tsconfig.json",
     "start": "node dist/src/server.js",
     "dev": "npm run build && node --watch dist/src/server.js",
     "package": "node scripts/package.mjs",
@@ -37,6 +37,7 @@
     "assets": [
       "public/**/*",
       "dist/src/**/*",
+      "dist/build-version.txt",
       "node_modules/markdown-it/dist/browser/markdown-it.umd.min.js"
     ]
   }
