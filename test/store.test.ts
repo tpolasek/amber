@@ -111,6 +111,7 @@ test("forks a session with independent history and a provenance banner", async (
   original.cwd = "/tmp/example-workspace/subdirectory";
   original.addDirInitialized = true;
   original.model = "zai/glm-5.3";
+  original.thinkingLevel = "high";
   original.fileReadState = {
     "/tmp/example-workspace/file.txt": { mtimeMs: 1, size: 4, hash: "hash", full: true },
   };
@@ -143,6 +144,7 @@ test("forks a session with independent history and a provenance banner", async (
   assert.equal(fork.cwd, original.cwd);
   assert.equal(fork.addDirInitialized, true);
   assert.equal(fork.model, "zai/glm-5.3");
+  assert.equal(fork.thinkingLevel, "high");
   assert.deepEqual(fork.fileReadState, original.fileReadState);
   assert.notEqual(fork.fileReadState, original.fileReadState);
   assert.deepEqual(fork.skillRoots, original.skillRoots);
@@ -265,6 +267,7 @@ test("creates a linked plan implementation session with fresh history", async ()
   source.directories = ["/tmp/example-workspace"];
   source.cwd = "/tmp/example-workspace/subdirectory";
   source.addDirInitialized = true;
+  source.thinkingLevel = "xhigh";
   source.planMode = { active: true, planFilePath: join(dirname(directory), "plans", `${source.id}.md`) };
   source.messages.push({
     id: "message-1", role: "user", content: "Plan this feature", createdAt: new Date().toISOString(), status: "complete",
@@ -285,6 +288,7 @@ test("creates a linked plan implementation session with fresh history", async ()
   assert.deepEqual(implementation.messages, [banner]);
   assert.deepEqual(implementation.directories, source.directories);
   assert.equal(implementation.cwd, source.cwd);
+  assert.equal(implementation.thinkingLevel, "xhigh");
   assert.equal(implementation.addDirInitialized, true);
   assert.equal(implementation.planMode, undefined);
   assert.equal(implementation.parentSessionId, undefined);

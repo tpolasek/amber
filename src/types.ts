@@ -80,6 +80,8 @@ export interface Session {
   updatedAt: string;
   messages: Message[];
   model?: string;
+  /** Per-session reasoning effort override; undefined uses the model default. */
+  thinkingLevel?: ThinkingLevel;
   compaction?: SessionCompaction;
   directories?: string[];
   cwd?: string;

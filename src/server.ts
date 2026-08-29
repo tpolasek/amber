@@ -83,6 +83,7 @@ import {
 } from "./plan-mode.js";
 import type { LlmProvider, ThinkingLevel, ToolDefinition } from "./types.js";
 import type { Message, Session, SessionInvokedSkill, TokenUsage, ToolCall } from "./types.js";
+import { parseThinkingLevel } from "./thinking-level.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(sourceDirectory, "../..");
@@ -94,6 +95,7 @@ const clientFormattersScript = join(sourceDirectory, "client-formatters.js");
 const builtInCommandsScript = join(sourceDirectory, "built-in-commands.js");
 const streamingThinkingScript = join(sourceDirectory, "streaming-thinking.js");
 const toolDisplayScript = join(sourceDirectory, "tool-display.js");
+const thinkingLevelScript = join(sourceDirectory, "thinking-level.js");
 const markdownScript = join(projectRoot, "node_modules", "markdown-it", "dist", "browser", "markdown-it.umd.min.js");
 const amberDirectory = join(homedir(), ".amber");
 const defaultDataDirectory = join(amberDirectory, "data", "sessions");
@@ -306,6 +308,23 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     session.model = model;
     await store.save(session);
     return json(response, 200, { session });
+  }
+
+  const sessionThinkingLevelMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/thinking-level$`));
+  if (method === "POST" && sessionThinkingLevelMatch?.[1]) {
+    if (activeSessions.has(sessionThinkingLevelMatch[1])) {
+      return json(response, 409, { error: "Thinking level can only be changed when the session is ready for a new prompt" });
+    }
+    const session = await store.get(sessionThinkingLevelMatch[1]);
+    if (!session) return json(response, 404, { error: "Session not found" });
+    if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
+    try {
+      session.thinkingLevel = parseThinkingLevel((await readJson(request)).thinkingLevel);
+      await store.save(session);
+      return json(response, 200, { session });
+    } catch (error) {
+      return json(response, 400, { error: errorMessage(error) });
+    }
   }
 
   const sessionEventsMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/events$`));
@@ -542,6 +561,9 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   if (method === "GET" && url.pathname === "/tool-display.js") {
     return serveFile(response, toolDisplayScript, "text/javascript; charset=utf-8", "no-cache");
   }
+  if (method === "GET" && url.pathname === "/thinking-level.js") {
+    return serveFile(response, thinkingLevelScript, "text/javascript; charset=utf-8", "no-cache");
+  }
   if (method === "GET" && url.pathname === "/vendor/markdown-it.js") {
     return serveFile(response, markdownScript, "text/javascript; charset=utf-8", "public, max-age=31536000, immutable");
   }
@@ -671,6 +693,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       }
       const skills = await sessionSkills(session);
       const activeProvider = turnModel ? providerCatalog.provider(turnModel) : providerForSession(session);
+      const thinkingLevel = turnEffort ?? session.thinkingLevel;
       const baseHistory = buildProviderHistory(session.messages, assistantMessage.id, session.compaction, session.invokedSkills);
       const reminder = renderSkillReminder(invocableSkills(skills, session.skillTouchedPaths ?? [], currentDirectory), session.contextTokens);
       const history = session.agentType
@@ -682,7 +705,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         tools: sessionTools(session, approvalCapable),
         system: sessionSystemPrompt(session, currentDirectory, activeProvider.model),
         ...(session.agentType ? { temperature: 1 } : {}),
-        ...(turnEffort ? { thinkingLevel: turnEffort } : {}),
+        ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
       })) {
         if (event.type === "delta") {
           assistantMessage.content += event.text;

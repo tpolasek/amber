@@ -96,6 +96,10 @@ button { color: inherit; }
 .session-directory + .session-directory::before { content: "·"; margin-right: 14px; color: var(--divider-directory); }
 .session-directory.cwd { color: var(--fg-tool-header); }
 .session-directory b { color: var(--success); font-weight: 600; }
+.topbar-controls { flex: none; display: flex; align-items: center; gap: 5px; }
+.thinking-level-button { min-width: 66px; padding: 6px 8px; border: 1px solid var(--amber-dim); background: var(--amber-faint); color: var(--amber-hot); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; cursor: pointer; }
+.thinking-level-button:hover:not(:disabled), .thinking-level-button:focus-visible { outline: 0; border-color: var(--amber); background: var(--accent-a18); }
+.thinking-level-button:disabled { cursor: default; opacity: .65; }
 .provider-status { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border: 0; background: transparent; color: var(--muted); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; cursor: pointer; }
 .provider-status:hover:not(:disabled), .provider-status:focus-visible { outline: 0; background: var(--amber-faint); color: var(--amber-hot); }
 .provider-status:disabled { cursor: default; opacity: .65; }

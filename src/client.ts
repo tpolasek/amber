@@ -19,6 +19,7 @@ import {
   type PromptFileReference,
 } from "./client-formatters.js";
 import { BUILT_IN_COMMANDS, builtInCommand, type BuiltInCommand } from "./built-in-commands.js";
+import { nextThinkingLevel, type ThinkingLevel } from "./thinking-level.js";
 import {
   diffLineClass,
   diffSummary,
@@ -35,15 +36,15 @@ interface TokenUsage { input: number; output: number }
 type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
 interface ToolStatusDisplay { text: string; appendElapsed?: boolean }
 interface ToolReadRange { startLine: number; endLine: number; totalLines: number }
-interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string; readRange?: ToolReadRange; statusDisplay?: ToolStatusDisplay; agentSessionId?: string; agentType?: string; agentModel?: string; agentThinkingLevel?: "none" | "low" | "medium" | "high" | "xhigh" | "max"; agentNotificationDeliveredAt?: string; skillModel?: string; skillEffort?: string }
+interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string; readRange?: ToolReadRange; statusDisplay?: ToolStatusDisplay; agentSessionId?: string; agentType?: string; agentModel?: string; agentThinkingLevel?: ThinkingLevel; agentNotificationDeliveredAt?: string; skillModel?: string; skillEffort?: string }
 interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; thinkingProvider?: "anthropic" | "openai"; streamingThinking?: boolean; resyncedThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result" | "skill" | "agent-notification"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean; skillName?: string }
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
 type PlanningTaskStatus = "pending" | "in_progress" | "completed";
 interface PlanningTask { id: string; subject: string; description: string; activeForm: string; status: PlanningTaskStatus; owner: string; blocks: string[]; blockedBy: string[]; metadata: Record<string, unknown> }
 interface InvokedSkill { name: string; path: string; content: string; invokedAt: string }
-interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; model?: string; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error"; planningTasks?: PlanningTask[]; planningTaskArchiveHighWaterMark?: number; contextTokens?: number; planMode?: SessionPlanMode; skillRoots?: string[]; skillTouchedPaths?: string[]; invokedSkills?: InvokedSkill[] }
+interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; model?: string; thinkingLevel?: ThinkingLevel; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error"; planningTasks?: PlanningTask[]; planningTaskArchiveHighWaterMark?: number; contextTokens?: number; planMode?: SessionPlanMode; skillRoots?: string[]; skillTouchedPaths?: string[]; invokedSkills?: InvokedSkill[] }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
-interface AvailableModel { key: string; provider: string; api: "anthropic" | "openai"; model: string; displayName: string; thinkingLevel: "none" | "low" | "medium" | "high" | "xhigh" | "max"; compactTokens?: number }
+interface AvailableModel { key: string; provider: string; api: "anthropic" | "openai"; model: string; displayName: string; thinkingLevel: ThinkingLevel; compactTokens?: number }
 interface Config { provider: string; model: string; defaultModel: string; models: AvailableModel[]; mode: "live"; homeDirectory: string; workspaceRoot: string; authActionToken: string; theme: "dark" | "light" | "light+" | "hacker" }
 interface AuthProviderStatus { id: "openai-codex"; name: string; authName: string; configured: boolean; providerConfigured: boolean }
 type AuthLoginStatus = { status: "pending" } | { status: "complete" } | { status: "failed"; error: string } | { status: "cancelled" };
@@ -172,6 +173,8 @@ const elements = {
   sessionDirectories: required<HTMLElement>("session-directories"),
   model: required<HTMLElement>("model-label"),
   modelSelector: required<HTMLButtonElement>("model-selector"),
+  thinkingLevel: required<HTMLElement>("thinking-level-label"),
+  thinkingLevelButton: required<HTMLButtonElement>("thinking-level-button"),
   providerDot: required<HTMLElement>("provider-dot"),
   modeBanner: required<HTMLElement>("mode-banner"),
   modePlan: required<HTMLInputElement>("mode-plan"),
@@ -339,6 +342,7 @@ function wireEvents(): void {
     if (event.target === elements.sessionDialog) closeSessionDialog();
   });
   elements.modelSelector.addEventListener("click", openModelDialog);
+  elements.thinkingLevelButton.addEventListener("click", () => void cycleThinkingLevel());
   elements.modelDialogClose.addEventListener("click", closeModelDialog);
   elements.authSettings.addEventListener("click", () => void openAuthDialog());
   elements.authClose.addEventListener("click", () => void closeAuthDialog());
@@ -1228,6 +1232,34 @@ async function selectModel(model: AvailableModel): Promise<void> {
     setBusy(false);
     if (elements.modelDialog.hidden) elements.prompt.focus();
     else elements.modelSearch.focus();
+  }
+}
+
+function effectiveThinkingLevel(session: Session, config: Config): ThinkingLevel {
+  if (session.thinkingLevel) return session.thinkingLevel;
+  const model = config.models.find((candidate) => candidate.key === (session.model ?? config.defaultModel));
+  return model?.thinkingLevel ?? "none";
+}
+
+async function cycleThinkingLevel(): Promise<void> {
+  const session = state.session;
+  const config = state.config;
+  if (!session || !config || session.parentSessionId || state.streaming) return;
+  const thinkingLevel = nextThinkingLevel(effectiveThinkingLevel(session, config));
+  setBusy(true);
+  try {
+    const result = await api<{ session: Session }>(`/api/sessions/${session.id}/thinking-level`, {
+      method: "POST",
+      body: JSON.stringify({ thinkingLevel }),
+    });
+    state.session = result.session;
+    renderHeader();
+    notify(`Thinking level · ${thinkingLevel}`);
+  } catch (error) {
+    notify(messageFrom(error));
+  } finally {
+    setBusy(false);
+    elements.prompt.focus();
   }
 }
 
@@ -2755,6 +2787,11 @@ function renderModelStatus(): void {
   elements.model.textContent = model;
   elements.model.title = model;
   elements.modelSelector.disabled = !session || Boolean(session.parentSessionId) || state.streaming;
+  const thinkingLevel = session ? effectiveThinkingLevel(session, config) : "none";
+  elements.thinkingLevel.textContent = thinkingLevel;
+  elements.thinkingLevelButton.title = `Thinking level: ${thinkingLevel}. Click to select the next level.`;
+  elements.thinkingLevelButton.setAttribute("aria-label", elements.thinkingLevelButton.title);
+  elements.thinkingLevelButton.disabled = !session || Boolean(session.parentSessionId) || state.streaming;
 }
 
 function renderPlanningTasks(): void {
