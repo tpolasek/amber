@@ -19,7 +19,7 @@ const STATIC_READ_DIRECTORIES = [join(homedir(), ".amber", "plans")];
 
 export const READ_TOOL: ToolDefinition = {
   name: "Read",
-  description: `Read a text file from the local filesystem. Relative file_path values resolve from the session current working directory; absolute and ~/ paths are also accepted. By default this reads up to ${MAX_LINES_TO_READ} lines from line 1. Results use cat -n style line numbers. Use offset and limit for large files. Read files, not directories. Previously returned ranges remain in conversation context; do not reread them. A redundant Read returns only a short cache reminder.`,
+  description: `Read a text file from the local filesystem. Relative file_path values resolve from the session current working directory; absolute and ~/ paths are also accepted. By default this reads up to ${MAX_LINES_TO_READ} lines from line 1. Results use cat -n style line numbers. Use offset and limit for large files. Read files, not directories. Previously returned ranges remain in conversation context; do not reread them. A redundant Read returns only a short cache reminder. Only plain text files are supported; images, PDFs, and notebooks are rejected.`,
   input_schema: {
     type: "object",
     properties: {
