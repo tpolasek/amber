@@ -7,7 +7,7 @@ export function isModelMessage(message: Message): boolean {
   return message.kind === undefined || message.kind === "chat";
 }
 
-function isProviderMessage(message: Message): boolean {
+export function isProviderMessage(message: Message): boolean {
   return isModelMessage(message)
     || message.kind === "tool-result"
     || message.kind === "skill"
@@ -20,9 +20,13 @@ export function buildProviderHistory(
   compaction?: SessionCompaction,
   invokedSkills?: SessionInvokedSkill[],
 ): ProviderMessage[] {
-  const boundaryIndex = compaction
+  const storedBoundaryIndex = compaction
     ? messages.findIndex((message) => message.id === compaction.throughMessageId)
     : -1;
+  const bannerIndex = storedBoundaryIndex >= 0
+    ? messages.findIndex((message, index) => index > storedBoundaryIndex && message.kind === "compact-banner")
+    : -1;
+  const boundaryIndex = bannerIndex >= 0 ? bannerIndex : storedBoundaryIndex;
   const activeMessages = boundaryIndex >= 0 ? messages.slice(boundaryIndex + 1) : messages;
   const history: ProviderMessage[] = [];
   for (const message of activeMessages

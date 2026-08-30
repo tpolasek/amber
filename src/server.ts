@@ -11,7 +11,7 @@ import { ProviderCatalog } from "./provider-catalog.js";
 import { loadSettings } from "./settings.js";
 import { AuthStorage } from "./auth-storage.js";
 import { OpenAICodexAuth } from "./openai-codex-oauth.js";
-import { buildProviderHistory, isModelMessage } from "./history.js";
+import { buildProviderHistory, isModelMessage, isProviderMessage } from "./history.js";
 import { generateSessionTitle, shouldAutoNameSession } from "./session-title.js";
 import { estimateHistoryTokens, formatCompactionBanner, generateCompactionSummary, shouldAutoCompact } from "./compaction.js";
 import { BASH_TOOL, BashExecutor, parseBashInput } from "./bash-tool.js";
@@ -1772,10 +1772,18 @@ function compactionTarget(session: Session): Message | undefined {
   const previousBoundary = session.compaction
     ? session.messages.findIndex((message) => message.id === session.compaction?.throughMessageId)
     : -1;
-  return session.messages
-    .slice(previousBoundary + 1)
-    .filter((message) => message.status === "complete" && isModelMessage(message))
-    .at(-1);
+  const activeMessages = session.messages.slice(previousBoundary + 1);
+  let targetIndex = -1;
+  for (let index = 0; index < activeMessages.length; index += 1) {
+    const message = activeMessages[index];
+    if (message?.status === "complete" && isModelMessage(message)) targetIndex = index;
+  }
+  if (targetIndex < 0) return undefined;
+  for (let index = targetIndex + 1; index < activeMessages.length; index += 1) {
+    const message = activeMessages[index];
+    if (message?.status === "complete" && isProviderMessage(message)) targetIndex = index;
+  }
+  return activeMessages[targetIndex];
 }
 
 async function compactSession(

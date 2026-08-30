@@ -45,6 +45,43 @@ test("provider history uses the active summary and messages after the compaction
   assert.deepEqual(history[1], { role: "user", content: "Now add tests" });
 });
 
+test("provider history excludes tool results already included in a compaction summary", () => {
+  const now = new Date().toISOString();
+  const messages: Message[] = [
+    { id: "user", role: "user", content: "Write the file", createdAt: now, status: "complete" },
+    {
+      id: "boundary",
+      role: "assistant",
+      content: "",
+      createdAt: now,
+      status: "complete",
+      toolCalls: [{ id: "write-call", name: "Write", input: { file_path: "/tmp/file" }, status: "complete", output: "" }],
+    },
+    {
+      id: "result",
+      role: "user",
+      content: "File written",
+      createdAt: now,
+      status: "complete",
+      kind: "tool-result",
+      toolUseId: "write-call",
+    },
+    { id: "banner", role: "assistant", content: "Context compacted here", createdAt: now, status: "complete", kind: "compact-banner" },
+    { id: "continue", role: "user", content: "Continue", createdAt: now, status: "complete" },
+  ];
+
+  const history = buildProviderHistory(messages, undefined, {
+    summary: "The file was written.",
+    throughMessageId: "boundary",
+    createdAt: now,
+    coveredMessageCount: 2,
+  });
+
+  assert.equal(history.length, 2);
+  assert.match(history[0]?.content as string, /The file was written/);
+  assert.deepEqual(history[1], { role: "user", content: "Continue" });
+});
+
 test("provider history safely falls back to raw messages when a compaction boundary is missing", () => {
   const message: Message = {
     id: "user", role: "user", content: "Keep the raw history", createdAt: new Date().toISOString(), status: "complete",
