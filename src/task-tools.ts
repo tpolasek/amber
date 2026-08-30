@@ -60,6 +60,23 @@ export interface TaskOutputInput {
   timeoutMs: number;
 }
 
+export type BackgroundAgentStatus = "running" | "complete" | "error";
+
+export interface BackgroundAgentTask {
+  id: string;
+  agentType: string;
+  description: string;
+  status: BackgroundAgentStatus;
+  result: string;
+  startedAt: string;
+  completedAt?: string;
+}
+
+/** Resolves background agent sub-sessions by task ID. */
+export interface BackgroundAgentSource {
+  task(sessionId: string, taskId: string): Promise<BackgroundAgentTask | null>;
+}
+
 export function parseTaskOutputInput(input: Record<string, unknown>): TaskOutputInput {
   if (typeof input.task_id !== "string" || !input.task_id.trim()) throw new Error("TaskOutput task_id is required");
   if (input.block !== undefined && typeof input.block !== "boolean") throw new Error("TaskOutput block must be a boolean");
@@ -78,15 +95,73 @@ export function parseTaskStopInput(input: Record<string, unknown>): string {
 
 export async function executeTaskOutput(
   manager: BackgroundTaskManager,
+  agents: BackgroundAgentSource,
   sessionId: string,
   input: TaskOutputInput,
   signal?: AbortSignal,
 ): Promise<{ output: string; resultText: string }> {
-  const retrieval = await manager.output(sessionId, input.taskId, input.block, input.timeoutMs, signal);
-  return {
-    output: formatVisibleOutput(retrieval.task),
-    resultText: formatTaskOutputResult(retrieval.retrievalStatus, retrieval.task),
-  };
+  if (manager.get(sessionId, input.taskId)) {
+    const retrieval = await manager.output(sessionId, input.taskId, input.block, input.timeoutMs, signal);
+    return {
+      output: formatVisibleOutput(retrieval.task),
+      resultText: formatTaskOutputResult(retrieval.retrievalStatus, retrieval.task),
+    };
+  }
+
+  const agent = await retrieveAgentTask(agents, sessionId, input, signal);
+  if (agent) {
+    return {
+      output: formatAgentVisibleOutput(agent.task),
+      resultText: formatAgentTaskOutputResult(agent.retrievalStatus, agent.task),
+    };
+  }
+  throw new Error(`No task found with ID: ${input.taskId}`);
+}
+
+interface AgentTaskRetrieval {
+  retrievalStatus: "success" | "timeout" | "not_ready";
+  task: BackgroundAgentTask;
+}
+
+const AGENT_POLL_INTERVAL_MS = 250;
+
+async function retrieveAgentTask(
+  agents: BackgroundAgentSource,
+  sessionId: string,
+  input: TaskOutputInput,
+  signal?: AbortSignal,
+): Promise<AgentTaskRetrieval | null> {
+  const task = await agents.task(sessionId, input.taskId);
+  if (!task) return null;
+  if (task.status !== "running") return { retrievalStatus: "success", task };
+  if (!input.block || input.timeoutMs <= 0) {
+    return { retrievalStatus: input.block ? "timeout" : "not_ready", task };
+  }
+
+  const deadline = Date.now() + input.timeoutMs;
+  for (;;) {
+    await delay(Math.min(AGENT_POLL_INTERVAL_MS, deadline - Date.now()), signal);
+    const current = await agents.task(sessionId, input.taskId);
+    if (current && current.status !== "running") return { retrievalStatus: "success", task: current };
+    if (Date.now() >= deadline) return { retrievalStatus: "timeout", task: current ?? task };
+  }
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer);
+      const error = new Error("TaskOutput aborted");
+      error.name = "AbortError";
+      reject(error);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, Math.max(0, ms));
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+  });
 }
 
 export function executeTaskStop(
@@ -124,6 +199,35 @@ function formatTaskOutputResult(retrievalStatus: "success" | "timeout" | "not_re
     `<status>${task.status}</status>`,
     ...(task.exitCode !== null ? [`<exit_code>${task.exitCode}</exit_code>`] : []),
     ...(output.trim() ? [`<output>\n${output.trimEnd()}\n</output>`] : []),
+  ];
+  return parts.join("\n\n");
+}
+
+function agentStatusText(status: BackgroundAgentStatus): string {
+  return status === "complete" ? "completed" : status === "error" ? "failed" : "running";
+}
+
+function formatAgentVisibleOutput(task: BackgroundAgentTask): string {
+  const sections = [
+    `status: ${agentStatusText(task.status)}`,
+    `agent: ${task.agentType}`,
+    ...(task.result.trim() ? [`result:\n${task.result.trimEnd()}`] : []),
+  ];
+  return sections.join("\n\n");
+}
+
+function formatAgentTaskOutputResult(
+  retrievalStatus: "success" | "timeout" | "not_ready",
+  task: BackgroundAgentTask,
+): string {
+  const parts = [
+    `<retrieval_status>${retrievalStatus}</retrieval_status>`,
+    `<task_id>${task.id}</task_id>`,
+    `<task_type>agent</task_type>`,
+    `<agent_type>${task.agentType}</agent_type>`,
+    `<status>${agentStatusText(task.status)}</status>`,
+    ...(task.description.trim() ? [`<summary>${task.description}</summary>`] : []),
+    ...(task.result.trim() ? [`<output>\n${task.result.trimEnd()}\n</output>`] : []),
   ];
   return parts.join("\n\n");
 }

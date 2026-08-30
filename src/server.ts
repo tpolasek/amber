@@ -23,6 +23,7 @@ import {
   executeTaskStop,
   parseTaskOutputInput,
   parseTaskStopInput,
+  type BackgroundAgentSource,
 } from "./task-tools.js";
 import { executePlanningTaskTool, PLANNING_TASK_TOOLS } from "./planning-task-tools.js";
 import {
@@ -1040,6 +1041,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             try {
               const result = await executeTaskOutput(
                 backgroundTasks,
+                backgroundAgentTasks,
                 sessionId,
                 parseTaskOutputInput(call.input),
                 controller.signal,
@@ -1569,7 +1571,7 @@ async function executeAgentCall(
         }
       }).finally(() => signal.removeEventListener("abort", abortBackground));
 
-      resultText = `Agent running in background with ID: ${child.id}. Open the linked sub-session to inspect its progress and result.`;
+      resultText = `Agent running in background with ID: ${child.id}. Use TaskOutput with this ID to check its status or wait for its result; its result is also delivered as a task notification once it finishes.`;
       resultBlocks = [
         { type: "text", text: resultText },
         { type: "text", text: `agentId: ${child.id}` },
@@ -1644,9 +1646,7 @@ async function completedBackgroundAgentNotifications(session: Session): Promise<
       || call.agentNotificationDeliveredAt) continue;
     const child = await store.get(call.agentSessionId);
     if (!child || (child.agentStatus !== "complete" && child.agentStatus !== "error")) continue;
-    const result = child.messages
-      .filter((message) => message.role === "assistant" && isModelMessage(message))
-      .at(-1)?.content.trim();
+    const result = agentFinalMessage(child);
     const deliveredAt = new Date().toISOString();
     call.agentNotificationDeliveredAt = deliveredAt;
     notifications.push({
@@ -1666,6 +1666,29 @@ async function completedBackgroundAgentNotifications(session: Session): Promise<
     });
   }
   return notifications;
+}
+
+/** Resolves background agent sub-sessions launched directly by a session. */
+const backgroundAgentTasks: BackgroundAgentSource = {
+  async task(parentSessionId, taskId) {
+    const child = await store.get(taskId);
+    if (!child || child.parentSessionId !== parentSessionId || !child.agentStatus) return null;
+    return {
+      id: child.id,
+      agentType: child.agentType ?? "agent",
+      description: child.agentDescription ?? child.title,
+      status: child.agentStatus,
+      result: agentFinalMessage(child),
+      startedAt: child.createdAt,
+      ...(child.agentStatus === "running" ? {} : { completedAt: child.updatedAt }),
+    };
+  },
+};
+
+function agentFinalMessage(session: Session): string {
+  return session.messages
+    .filter((message) => message.role === "assistant" && isModelMessage(message))
+    .at(-1)?.content.trim() ?? "";
 }
 
 async function runSessionPrompt(sessionId: string, prompt: string, signal: AbortSignal): Promise<string> {

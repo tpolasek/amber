@@ -9,7 +9,35 @@ import {
   executeTaskStop,
   parseTaskOutputInput,
   parseTaskStopInput,
+  type BackgroundAgentSource,
+  type BackgroundAgentTask,
 } from "../src/task-tools.js";
+
+const NO_AGENTS: BackgroundAgentSource = {
+  async task() {
+    return null;
+  },
+};
+
+function agentSource(sessionId: string, task: BackgroundAgentTask): BackgroundAgentSource {
+  return {
+    async task(requestedSessionId, taskId) {
+      return requestedSessionId === sessionId && taskId === task.id ? { ...task } : null;
+    },
+  };
+}
+
+function runningAgent(overrides: Partial<BackgroundAgentTask> = {}): BackgroundAgentTask {
+  return {
+    id: "girl.desert.grand.6bbl8fx5",
+    agentType: "general-purpose",
+    description: "Research background agents",
+    status: "running",
+    result: "",
+    startedAt: new Date().toISOString(),
+    ...overrides,
+  };
+}
 
 test("background Bash returns immediately and TaskOutput waits for stdout and stderr", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-task-"));
@@ -29,7 +57,7 @@ test("background Bash returns immediately and TaskOutput waits for stdout and st
   assert.equal(pending.retrievalStatus, "not_ready");
   assert.equal(pending.task.status, "running");
 
-  const result = await executeTaskOutput(manager, "session-one", {
+  const result = await executeTaskOutput(manager, NO_AGENTS, "session-one", {
     taskId: task.id, block: true, timeoutMs: 2_000,
   });
   assert.match(result.output, /status: completed/);
@@ -153,4 +181,106 @@ test("task tool parsers use Claude Code argument conventions", () => {
   assert.equal(parseTaskStopInput({ shell_id: "legacy" }), "legacy");
   assert.throws(() => parseTaskOutputInput({ task_id: "b123", timeout: -1 }), /timeout/);
   assert.throws(() => parseTaskStopInput({}), /task_id/);
+});
+
+test("TaskOutput resolves a completed background agent", async () => {
+  const manager = new BackgroundTaskManager();
+  const agent = runningAgent({
+    status: "complete",
+    result: "Background agents live in sub-sessions.\n",
+    completedAt: new Date().toISOString(),
+  });
+  const result = await executeTaskOutput(manager, agentSource("session-one", agent), "session-one", {
+    taskId: agent.id, block: true, timeoutMs: 0,
+  });
+  assert.match(result.output, /status: completed/);
+  assert.match(result.output, /agent: general-purpose/);
+  assert.match(result.output, /result:\nBackground agents live in sub-sessions\./);
+  assert.match(result.resultText, /<retrieval_status>success<\/retrieval_status>/);
+  assert.match(result.resultText, /<task_id>girl\.desert\.grand\.6bbl8fx5<\/task_id>/);
+  assert.match(result.resultText, /<task_type>agent<\/task_type>/);
+  assert.match(result.resultText, /<agent_type>general-purpose<\/agent_type>/);
+  assert.match(result.resultText, /<status>completed<\/status>/);
+  assert.match(result.resultText, /<summary>Research background agents<\/summary>/);
+  assert.match(result.resultText, /<output>\nBackground agents live in sub-sessions\.\n<\/output>/);
+});
+
+test("TaskOutput resolves a failed background agent", async () => {
+  const manager = new BackgroundTaskManager();
+  const agent = runningAgent({ status: "error", result: "Agent failed without a final response." });
+  const result = await executeTaskOutput(manager, agentSource("session-one", agent), "session-one", {
+    taskId: agent.id, block: true, timeoutMs: 0,
+  });
+  assert.match(result.output, /status: failed/);
+  assert.match(result.resultText, /<status>failed<\/status>/);
+  assert.match(result.resultText, /<output>\nAgent failed without a final response\.\n<\/output>/);
+});
+
+test("TaskOutput waits for a running background agent to finish", async () => {
+  const manager = new BackgroundTaskManager();
+  const agent = runningAgent();
+  const source: BackgroundAgentSource = {
+    async task(sessionId, taskId) {
+      if (sessionId !== "session-one" || taskId !== agent.id) return null;
+      if (agent.status === "running" && Date.now() - Date.parse(agent.startedAt) >= 50) {
+        agent.status = "complete";
+        agent.result = "Finished after waiting.";
+      }
+      return { ...agent };
+    },
+  };
+  const result = await executeTaskOutput(manager, source, "session-one", {
+    taskId: agent.id, block: true, timeoutMs: 2_000,
+  });
+  assert.match(result.resultText, /<retrieval_status>success<\/retrieval_status>/);
+  assert.match(result.resultText, /<status>completed<\/status>/);
+  assert.match(result.resultText, /<output>\nFinished after waiting\.\n<\/output>/);
+});
+
+test("TaskOutput reports a running background agent without blocking", async () => {
+  const manager = new BackgroundTaskManager();
+  const agent = runningAgent({ result: "Still searching…" });
+  const result = await executeTaskOutput(manager, agentSource("session-one", agent), "session-one", {
+    taskId: agent.id, block: false, timeoutMs: 5_000,
+  });
+  assert.match(result.resultText, /<retrieval_status>not_ready<\/retrieval_status>/);
+  assert.match(result.resultText, /<status>running<\/status>/);
+  assert.equal(agent.status, "running");
+});
+
+test("TaskOutput times out while a background agent keeps running", async () => {
+  const manager = new BackgroundTaskManager();
+  const agent = runningAgent();
+  const result = await executeTaskOutput(manager, agentSource("session-one", agent), "session-one", {
+    taskId: agent.id, block: true, timeoutMs: 260,
+  });
+  assert.match(result.resultText, /<retrieval_status>timeout<\/retrieval_status>/);
+  assert.match(result.resultText, /<status>running<\/status>/);
+  assert.equal(agent.status, "running");
+});
+
+test("aborting a TaskOutput wait leaves a background agent running", async () => {
+  const manager = new BackgroundTaskManager();
+  const agent = runningAgent();
+  const controller = new AbortController();
+  const waiting = executeTaskOutput(manager, agentSource("session-one", agent), "session-one", {
+    taskId: agent.id, block: true, timeoutMs: 5_000,
+  }, controller.signal);
+  controller.abort();
+  await assert.rejects(waiting, { name: "AbortError" });
+  assert.equal(agent.status, "running");
+});
+
+test("background agent IDs cannot cross sessions and unknown IDs fail", async () => {
+  const manager = new BackgroundTaskManager();
+  const agent = runningAgent();
+  const source = agentSource("session-one", agent);
+  await assert.rejects(
+    executeTaskOutput(manager, source, "session-two", { taskId: agent.id, block: false, timeoutMs: 0 }),
+    /No task found with ID: girl\.desert\.grand\.6bbl8fx5/,
+  );
+  await assert.rejects(
+    executeTaskOutput(manager, NO_AGENTS, "session-one", { taskId: "b00000000", block: false, timeoutMs: 0 }),
+    /No task found with ID: b00000000/,
+  );
 });

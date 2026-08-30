@@ -33,7 +33,7 @@ export function createAgentTool(definitions: readonly AgentDefinition[]): ToolDe
       "",
       "Always include a short description (3-5 words). Brief the agent like a smart colleague who has not seen this conversation, and clearly say whether it should write code or only research.",
       "Launch multiple agents concurrently whenever possible by returning multiple Agent tool uses in a single response. Amber starts all Agent calls from that response in parallel.",
-      "Set run_in_background to true for independent work that should continue while you proceed. The launch returns immediately with a linked sub-session, and its status and result are injected into your next model turn after it finishes.",
+      "Set run_in_background to true for independent work that should continue while you proceed. The launch returns immediately with the linked sub-session's ID; use TaskOutput with that ID to check its status or wait for its result, which is also injected into your next model turn after it finishes.",
     ].join("\n"),
     input_schema: {
       type: "object",
