@@ -240,6 +240,7 @@ test("treats model inherit, invalid effort, and markdown-only files as absent", 
 
 test("substitutes arguments, indexed positions, and named placeholders", () => {
   assert.deepEqual(parseSkillArguments('a "b c" d'), ["a", "b c", "d"]);
+  assert.deepEqual(parseSkillArguments(String.raw`"say \"hi\" now"`), ['say "hi" now']);
   assert.deepEqual(parseSkillArguments("a $HOME"), ["a", "$HOME"]);
   assert.deepEqual(parseSkillArguments(""), []);
 

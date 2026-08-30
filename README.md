@@ -9,7 +9,7 @@ Amber takes advantage of the fact that it's in a web browser to do many things t
 What makes it different:
 * Amber takes advantage of **hyperlinks everywhere**.
 * **Supports OpenAI Codex plans** and pretty much any other provider with OpenAI API and Anthropic API support.
-* Only 6 runtime npm dependencies — **diff**, **markdown-it**, **smol-toml**, **yaml**, **ignore**, and **shell-quote**. No framework, no database, no bloat.
+* Only 4 runtime npm dependencies — **diff**, **markdown-it**, **smol-toml**, and **yaml**. No framework, no database, no bloat.
 * Easily configurable sub-agents. You can even **customize the model per each agent.**
 * Claude Code, rebuilt. **Reverse-engineered from Claude Code's behavior**, reproducing the prompt flow accurately while stripping it down to a lightweight tool.
 
@@ -132,20 +132,17 @@ Amber uses OpenAI Codex's public native-client ID and sends `originator=amber`. 
 
 ## Dependencies
 
-AMBER intentionally has only six direct runtime npm dependencies:
+AMBER intentionally has only four direct runtime npm dependencies:
 
 - **diff** — unified diff generation
 - **markdown-it** — safe Markdown rendering
 - **smol-toml** — **settings.toml** parsing
 - **yaml** — skill **SKILL.md** frontmatter parsing
-- **ignore** — gitignore-style matching for `paths:`-gated skills
-- **shell-quote** — skill `$ARGUMENTS` parsing
 
 Build and development dependencies are also small:
 
 - **typescript**
 - **@types/node**
-- **@types/shell-quote**
 - **@yao-pkg/pkg** — standalone binary packaging
 
 The packaged binary includes everything needed to run AMBER; Node.js and npm are not required on the destination machine.
