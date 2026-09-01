@@ -64,6 +64,24 @@ test("rejects an empty compaction response", async () => {
 
 test("estimates context tokens and formats the reduction banner", () => {
   assert.equal(estimateHistoryTokens([{ role: "user", content: "12345678" }]), 6);
+  assert.equal(estimateHistoryTokens([{
+    role: "user",
+    content: [
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } },
+      { type: "text", text: "12345678" },
+    ],
+  }]), Math.ceil((6_400 + 8) / 4) + 4);
+  assert.equal(estimateHistoryTokens([{
+    role: "user",
+    content: [{
+      type: "tool_result",
+      tool_use_id: "call-1",
+      content: [
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } },
+        { type: "text", text: "1234" },
+      ],
+    }],
+  }]), Math.ceil((6_400 + 4) / 4) + 4);
   assert.equal(
     formatCompactionBanner(2_000, 500, 42),
     "Context compacted here · Estimated context: ≈2,000 → ≈500 tokens · Reduction: ≈1,500 tokens (75%) · 42 earlier messages remain visible",

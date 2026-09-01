@@ -1,5 +1,6 @@
 import { BASE_COMPACT_PROMPT } from "./prompts.js";
 import type { LlmProvider, ProviderMessage } from "./types.js";
+import { imageCharacterEstimate } from "./message-images.js";
 
 export async function generateCompactionSummary(
   provider: LlmProvider,
@@ -28,7 +29,12 @@ export function estimateHistoryTokens(history: ProviderMessage[]): number {
       : message.content.reduce((sum, block) => {
           if (block.type === "thinking") return sum + block.thinking.length;
           if (block.type === "text") return sum + block.text.length;
-          if (block.type === "tool_result") return sum + block.content.length;
+          if (block.type === "image") return sum + imageCharacterEstimate;
+          if (block.type === "tool_result") {
+            return sum + (typeof block.content === "string"
+              ? block.content.length
+              : block.content.reduce((partSum, part) => partSum + (part.type === "image" ? imageCharacterEstimate : part.text.length), 0));
+          }
           return sum + JSON.stringify(block.input).length;
         }, 0);
     return total + Math.ceil(characters / 4) + 4;

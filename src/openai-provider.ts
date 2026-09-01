@@ -1,6 +1,7 @@
 import type {
   LlmProvider,
   ProviderContentBlock,
+  ProviderImageBlock,
   ProviderMessage,
   ProviderSystemBlock,
   StreamEvent,
@@ -11,6 +12,7 @@ import type {
 } from "./types.js";
 import { providerApiUrl, type DiscoveredModel, type ProviderDriver } from "./provider-driver.js";
 import { streamChatCompletions } from "./openai-chat-provider.js";
+import { imageDataUrl } from "./message-images.js";
 import { readServerSentEvents } from "./sse.js";
 
 const REASONING_STATE_PREFIX = "openai-reasoning:";
@@ -316,11 +318,26 @@ function toOpenAIInput(messages: ProviderMessage[]): unknown[] {
       input.push({ role: message.role, content: message.content });
       continue;
     }
+    // An image-bearing user message becomes one item mixing input_image and
+    // input_text parts; its tool_result blocks still emit outputs below.
+    const userImageItem = message.role === "user" && message.content.some((block) => block.type === "image");
+    if (userImageItem) {
+      input.push({
+        role: "user",
+        content: [
+          ...message.content.filter(isImageBlock).map((block) => ({
+            type: "input_image",
+            image_url: imageDataUrl({ mediaType: block.source.media_type, data: block.source.data }),
+          })),
+          ...message.content.filter(isTextBlock).map((block) => ({ type: "input_text", text: block.text })),
+        ],
+      });
+    }
     for (const block of message.content) {
       if (block.type === "thinking") {
         if (block.provider === "openai") input.push(...parseReasoningItems(block.signature));
       } else if (block.type === "text") {
-        input.push({ role: message.role, content: block.text });
+        if (!userImageItem) input.push({ role: message.role, content: block.text });
       } else if (block.type === "tool_use") {
         input.push({
           type: "function_call",
@@ -332,7 +349,7 @@ function toOpenAIInput(messages: ProviderMessage[]): unknown[] {
         input.push({
           type: "function_call_output",
           call_id: block.tool_use_id,
-          output: toolResultText(block),
+          output: toolResultOutput(block),
         });
       }
     }
@@ -340,11 +357,32 @@ function toOpenAIInput(messages: ProviderMessage[]): unknown[] {
   return input;
 }
 
-function toolResultText(block: Extract<ProviderContentBlock, { type: "tool_result" }>): string {
-  const content = typeof block.content === "string"
-    ? block.content
-    : block.content.map((part) => part.text).join("\n");
-  return block.is_error ? `Error: ${content}` : content;
+function isTextBlock(block: ProviderContentBlock): block is { type: "text"; text: string } {
+  return block.type === "text";
+}
+
+function isImageBlock(block: ProviderContentBlock): block is ProviderImageBlock {
+  return block.type === "image";
+}
+
+function toolResultOutput(
+  block: Extract<ProviderContentBlock, { type: "tool_result" }>,
+): string | Array<{ type: "input_text"; text: string } | { type: "input_image"; image_url: string }> {
+  if (typeof block.content === "string" || !block.content.some(isImageBlock)) {
+    const content = typeof block.content === "string"
+      ? block.content
+      : block.content.filter(isTextBlock).map((part) => part.text).join("\n");
+    return block.is_error ? `Error: ${content}` : content;
+  }
+  const text = block.content.filter(isTextBlock).map((part) => part.text).join("\n");
+  const annotated = block.is_error && text ? `Error: ${text}` : text;
+  return [
+    ...(annotated ? [{ type: "input_text" as const, text: annotated }] : []),
+    ...block.content.filter(isImageBlock).map((part) => ({
+      type: "input_image" as const,
+      image_url: imageDataUrl({ mediaType: part.source.media_type, data: part.source.data }),
+    })),
+  ];
 }
 
 function toOpenAITool(tool: ToolDefinition): unknown {

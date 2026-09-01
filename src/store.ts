@@ -223,13 +223,16 @@ export class SessionStore {
         const visibleMessages = session.messages.filter((message) =>
           message.kind !== "tool-result" && message.kind !== "skill" && message.kind !== "agent-notification"
         );
+        const last = visibleMessages.at(-1);
         return {
           id: session.id,
           title: session.title,
           createdAt: session.createdAt,
           updatedAt: session.updatedAt,
           messageCount: visibleMessages.length,
-          preview: visibleMessages.at(-1)?.content.slice(0, 120) ?? "No messages yet",
+          preview: last?.content.slice(0, 120)
+            || (last?.images?.length ? "[image message]" : "")
+            || "No messages yet",
         };
       });
   }

@@ -3,6 +3,22 @@ export type MessageStatus = "streaming" | "complete" | "error";
 export type ProviderProtocol = "anthropic" | "openai";
 export type ThinkingLevel = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
+export type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+
+/** Base64-encoded image bytes (no data: URL prefix). */
+export interface MessageImage {
+  mediaType: ImageMediaType;
+  data: string;
+}
+
+export interface ImageSource {
+  type: "base64";
+  media_type: ImageMediaType;
+  data: string;
+}
+
+export type ProviderImageBlock = { type: "image"; source: ImageSource; cache_control?: ProviderCacheControl };
+
 export interface TokenUsage {
   input: number;
   output: number;
@@ -43,6 +59,7 @@ export interface ToolCall {
   agentNotificationDeliveredAt?: string;
   skillModel?: string;
   skillEffort?: string;
+  images?: MessageImage[];
 }
 
 export interface Message {
@@ -62,6 +79,8 @@ export interface Message {
   toolUseId?: string;
   toolError?: boolean;
   contentBlocks?: Array<{ type: "text"; text: string }>;
+  /** User-attached images, and images returned by image Reads (tool-result messages). */
+  images?: MessageImage[];
   /** Skill name for hidden `kind: "skill"` messages. */
   skillName?: string;
 }
@@ -149,7 +168,8 @@ export type ProviderContentBlock =
   | { type: "thinking"; thinking: string; signature: string; provider?: ProviderProtocol }
   | { type: "text"; text: string; cache_control?: ProviderCacheControl }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
-  | { type: "tool_result"; tool_use_id: string; content: string | Array<{ type: "text"; text: string }>; is_error?: boolean; cache_control?: ProviderCacheControl };
+  | { type: "tool_result"; tool_use_id: string; content: string | Array<{ type: "text"; text: string } | ProviderImageBlock>; is_error?: boolean; cache_control?: ProviderCacheControl }
+  | ProviderImageBlock;
 
 export interface ToolDefinition {
   name: string;

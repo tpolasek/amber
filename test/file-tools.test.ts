@@ -328,13 +328,40 @@ test("file tools resolve relative paths from CWD and reject binary and outside p
   assert.equal(relative.filePath, canonicalRelativePath);
   assert.equal(relative.resultText, "     1→relative");
   await assert.rejects(executeFileTool("Read", { file_path: binaryPath }, [directory], current), /only supports text/);
-  await assert.rejects(executeFileTool("Read", { file_path: imagePath }, [directory], current), /images, PDFs, and notebooks/);
-  await assert.rejects(executeFileTool("Write", { file_path: imagePath, content: "text" }, [directory], current), /images, PDFs, and notebooks/);
+  await assert.rejects(executeFileTool("Read", { file_path: imagePath }, [directory], current), /unsupported or corrupt image/);
+  await assert.rejects(executeFileTool("Write", { file_path: imagePath, content: "text" }, [directory], current), /Images can be read but not written/);
   await assert.rejects(
     executeFileTool("Edit", { file_path: imagePath, old_string: "not", new_string: "still not" }, [directory], current),
-    /images, PDFs, and notebooks/,
+    /Images can be read but not written/,
   );
   await assert.rejects(executeFileTool("Read", { file_path: outsidePath }, [directory], current), /outside the project/);
+});
+
+test("Read returns image bytes as an image on the tool result", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-images-"));
+  const pngPath = join(directory, "shot.png");
+  const jpegPath = join(directory, "photo.jpg");
+  const pdfPath = join(directory, "doc.pdf");
+  const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
+  const jpegBytes = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(6)]);
+  await writeFile(pngPath, pngBytes);
+  await writeFile(jpegPath, jpegBytes);
+  await writeFile(pdfPath, "%PDF-1.4", "utf8");
+  const current = session();
+
+  const canonicalPngPath = await realpath(pngPath);
+  const png = await executeFileTool("Read", { file_path: pngPath }, [directory], current);
+  assert.equal(png.filePath, canonicalPngPath);
+  assert.deepEqual(png.image, { mediaType: "image/png", data: pngBytes.toString("base64") });
+  assert.match(png.resultText, /Read .*shot\.png: image\/png image \(.* KiB\) attached to this tool result\./);
+  assert.equal(png.output, png.resultText);
+  assert.equal(png.readRange, undefined);
+  assert.equal(current.fileReadState?.[canonicalPngPath], undefined);
+
+  const jpeg = await executeFileTool("Read", { file_path: jpegPath }, [directory], current);
+  assert.deepEqual(jpeg.image, { mediaType: "image/jpeg", data: jpegBytes.toString("base64") });
+
+  await assert.rejects(executeFileTool("Read", { file_path: pdfPath }, [directory], current), /Read does not support PDFs/);
 });
 
 test("plan mode permits only its plan file through Write and Edit", async () => {

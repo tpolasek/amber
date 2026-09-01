@@ -112,6 +112,80 @@ test("streams OpenAI Responses text, reasoning, tools, and usage", async (contex
   ]);
 });
 
+test("sends user images and image tool results as Responses API parts", async (context) => {
+  let requestBody: Record<string, unknown> = {};
+  const gateway = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    requestBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end('data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n\n');
+  });
+  gateway.listen(0, "127.0.0.1");
+  await once(gateway, "listening");
+  context.after(() => gateway.close());
+  const address = gateway.address();
+  assert(address && typeof address === "object");
+
+  const provider = new OpenAIProvider({
+    apiKey: "key",
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    model: "gpt-test",
+  });
+  const messages: ProviderMessage[] = [
+    {
+      role: "user",
+      content: [
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } },
+        { type: "text", text: "What is in this picture?" },
+      ],
+    },
+    {
+      role: "assistant",
+      content: [{ type: "tool_use", id: "call-old", name: "Read", input: { file_path: "/tmp/pic.png" } }],
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "call-old",
+          content: [
+            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "anRoZQ==" } },
+            { type: "text", text: "Read /tmp/pic.png: image/png image attached to this tool result." },
+          ],
+        },
+        {
+          type: "tool_result",
+          tool_use_id: "call-text",
+          content: "Plain text result",
+        },
+      ],
+    },
+  ];
+  for await (const _event of provider.stream(messages, new AbortController().signal)) { /* consume */ }
+
+  assert.deepEqual(requestBody.input, [
+    {
+      role: "user",
+      content: [
+        { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" },
+        { type: "input_text", text: "What is in this picture?" },
+      ],
+    },
+    { type: "function_call", call_id: "call-old", name: "Read", arguments: '{"file_path":"/tmp/pic.png"}' },
+    {
+      type: "function_call_output",
+      call_id: "call-old",
+      output: [
+        { type: "input_text", text: "Read /tmp/pic.png: image/png image attached to this tool result." },
+        { type: "input_image", image_url: "data:image/jpeg;base64,anRoZQ==" },
+      ],
+    },
+    { type: "function_call_output", call_id: "call-text", output: "Plain text result" },
+  ]);
+});
+
 test("explicitly omits OpenAI instructions", async (context) => {
   let requestBody: Record<string, unknown> = {};
   const gateway = createServer(async (request, response) => {

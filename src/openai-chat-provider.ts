@@ -7,6 +7,7 @@ import type {
   ToolDefinition,
 } from "./types.js";
 import { providerApiUrl } from "./provider-driver.js";
+import { imageDataUrl } from "./message-images.js";
 import { readServerSentEvents } from "./sse.js";
 
 export interface ChatCompletionsOptions {
@@ -111,11 +112,14 @@ function toChatMessages(messages: ProviderMessage[]): Array<Record<string, unkno
       continue;
     }
     const text: string[] = [];
+    const images: Array<Record<string, unknown>> = [];
     const toolCalls: Array<Record<string, unknown>> = [];
     const toolResults: Array<Record<string, unknown>> = [];
     for (const block of message.content) {
       if (block.type === "text") {
         text.push(block.text);
+      } else if (block.type === "image") {
+        images.push({ type: "image_url", image_url: { url: imageDataUrl({ mediaType: block.source.media_type, data: block.source.data }) } });
       } else if (block.type === "tool_use") {
         toolCalls.push({
           id: block.id,
@@ -136,6 +140,14 @@ function toChatMessages(messages: ProviderMessage[]): Array<Record<string, unkno
           ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
         });
       }
+    } else if (images.length > 0) {
+      result.push({
+        role: "user",
+        content: [
+          ...(text.length > 0 ? [{ type: "text", text: text.join("\n") }] : []),
+          ...images,
+        ],
+      });
     } else if (text.length > 0) {
       result.push({ role: "user", content: text.join("\n") });
     }
@@ -157,7 +169,7 @@ function toChatTool(tool: ToolDefinition): unknown {
 function toolResultText(block: Extract<ProviderContentBlock, { type: "tool_result" }>): string {
   const content = typeof block.content === "string"
     ? block.content
-    : block.content.map((part) => part.text).join("\n");
+    : block.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
   return block.is_error ? `Error: ${content}` : content;
 }
 

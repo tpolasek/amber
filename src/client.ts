@@ -37,8 +37,9 @@ interface TokenUsage { input: number; output: number }
 type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
 interface ToolStatusDisplay { text: string; appendElapsed?: boolean }
 interface ToolReadRange { startLine: number; endLine: number; totalLines: number }
-interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string; readRange?: ToolReadRange; statusDisplay?: ToolStatusDisplay; agentSessionId?: string; agentType?: string; agentModel?: string; agentThinkingLevel?: ThinkingLevel; agentNotificationDeliveredAt?: string; skillModel?: string; skillEffort?: string }
-interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; thinkingProvider?: "anthropic" | "openai"; streamingThinking?: boolean; resyncedThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result" | "skill" | "agent-notification"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean; skillName?: string }
+interface MessageImage { mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; data: string }
+interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string; readRange?: ToolReadRange; statusDisplay?: ToolStatusDisplay; agentSessionId?: string; agentType?: string; agentModel?: string; agentThinkingLevel?: ThinkingLevel; agentNotificationDeliveredAt?: string; skillModel?: string; skillEffort?: string; images?: MessageImage[] }
+interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; thinkingProvider?: "anthropic" | "openai"; streamingThinking?: boolean; resyncedThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result" | "skill" | "agent-notification"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean; skillName?: string; images?: MessageImage[] }
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
 type PlanningTaskStatus = "pending" | "in_progress" | "completed";
 interface PlanningTask { id: string; subject: string; description: string; activeForm: string; status: PlanningTaskStatus; owner: string; blocks: string[]; blockedBy: string[]; metadata: Record<string, unknown> }
@@ -134,7 +135,14 @@ let authPollTimer: number | undefined;
 let sessionRunController: AbortController | null = null;
 let sessionRunId: string | null = null;
 let sessionRunReconnectTimer: number | undefined;
-let queuedMessage: { sessionId: string; content: string; kind: "message" | "command"; queuedAt: number } | null = null;
+let queuedMessage: { sessionId: string; content: string; kind: "message" | "command"; queuedAt: number; images?: MessageImage[] } | null = null;
+
+const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
+const MAX_TOTAL_IMAGE_BYTES = 64 * 1024 * 1024;
+const MAX_IMAGES_PER_MESSAGE = 600;
+interface PendingImage { mediaType: MessageImage["mediaType"]; data: string; name: string; bytes: number }
+let pendingImages: PendingImage[] = [];
 
 const ESC_ABORT_WINDOW_MS = 500;
 let lastEscapeForAbortAt = 0;
@@ -168,6 +176,9 @@ const elements = {
   historyQuery: required<HTMLInputElement>("history-query"),
   historyResults: required<HTMLElement>("history-results"),
   prompt: required<HTMLTextAreaElement>("prompt"),
+  attachments: required<HTMLElement>("attachments"),
+  attachButton: required<HTMLButtonElement>("attach-button"),
+  fileInput: required<HTMLInputElement>("file-input"),
   queue: required<HTMLButtonElement>("queue-button"),
   queuedMessage: required<HTMLElement>("queued-message"),
   queuedMessageContent: required<HTMLElement>("queued-message-content"),
@@ -415,6 +426,24 @@ function wireEvents(): void {
     else void sendMessage();
   });
   elements.queue.addEventListener("click", () => void queueCurrentMessage());
+  elements.attachButton.addEventListener("click", () => elements.fileInput.click());
+  elements.fileInput.addEventListener("change", () => {
+    void attachImageFiles([...elements.fileInput.files ?? []]);
+    elements.fileInput.value = "";
+  });
+  elements.prompt.addEventListener("paste", (event) => {
+    const files = [...event.clipboardData?.files ?? []].filter((file) => file.type.startsWith("image/"));
+    if (files.length === 0) return;
+    event.preventDefault();
+    void attachImageFiles(files);
+  });
+  for (const dropTarget of [elements.composerShell, elements.transcript]) {
+    dropTarget.addEventListener("dragover", (event) => event.preventDefault());
+    dropTarget.addEventListener("drop", (event) => {
+      event.preventDefault();
+      void attachImageFiles([...event.dataTransfer?.files ?? []]);
+    });
+  }
   elements.prompt.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "r") {
       event.preventDefault();
@@ -1301,13 +1330,15 @@ function handleModelDialogKeydown(event: KeyboardEvent): boolean {
   return true;
 }
 
-async function sendMessage(queuedContent?: string): Promise<void> {
+async function sendMessage(queuedContent?: string, queuedImages?: MessageImage[]): Promise<void> {
   const session = state.session;
   const content = (queuedContent ?? elements.prompt.value).trim();
-  if (!session || !content || state.streaming) return;
+  const images = queuedImages ?? pendingImages.map(({ mediaType, data }) => ({ mediaType, data }));
+  if (!session || (!content && images.length === 0) || state.streaming) return;
 
+  // An image plus "/compact" is a message for the model, not a command.
   const commandName = content.split(/\s+/, 1)[0]?.toLowerCase();
-  if (commands.some((command) => command.name === commandName) || commandName === "/bashes") {
+  if (images.length === 0 && (commands.some((command) => command.name === commandName) || commandName === "/bashes")) {
     return runCommand(content, queuedContent === undefined);
   }
 
@@ -1320,7 +1351,7 @@ async function sendMessage(queuedContent?: string): Promise<void> {
     const response = await fetch(`/api/sessions/${session.id}/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, ...(images.length ? { images } : {}) }),
       signal: state.controller.signal,
     });
     if (!response.ok) throw new Error(await responseError(response));
@@ -1578,15 +1609,26 @@ async function executePlanHandoff(handoff: { sessionId: string; prompt: string }
 async function queueCurrentMessage(): Promise<void> {
   const session = state.session;
   const content = elements.prompt.value.trim();
-  if (!session || !state.streaming || !content) return;
-  const command = builtInCommand(content);
+  if (!session || !state.streaming) return;
+  if (!content) {
+    if (pendingImages.length > 0) notify("Add text to queue a message with images");
+    return;
+  }
+  const images = pendingImages.map(({ mediaType, data }) => ({ mediaType, data }));
+  const command = images.length > 0 ? undefined : builtInCommand(content);
   if (command?.runsDuringResponse) {
     await runCommand(content);
     return;
   }
   const kind: "command" | "message" = command ? "command" : "message";
   const previousQueued = queuedMessage;
-  const pending = { sessionId: session.id, content, kind, queuedAt: Date.now() };
+  const pending = {
+    sessionId: session.id,
+    content,
+    kind,
+    queuedAt: Date.now(),
+    ...(kind === "message" && images.length ? { images } : {}),
+  };
   queuedMessage = pending;
   renderQueuedMessage();
   let serverRunUnavailable = false;
@@ -1594,7 +1636,7 @@ async function queueCurrentMessage(): Promise<void> {
     const response = await fetch(`/api/sessions/${session.id}/queued-message`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ content, kind }),
+      body: JSON.stringify({ content, kind, ...(kind === "message" && images.length ? { images } : {}) }),
     });
     // Keep the input queued locally when the interruptible server run has
     // already ended (or has not registered yet). The stream-finalizer will
@@ -1633,7 +1675,7 @@ function sendQueuedMessage(sessionId: string): void {
     && Date.parse(message.createdAt) + 1_000 >= queued.queuedAt);
   queuedMessage = null;
   renderQueuedMessage();
-  if (!alreadyDelivered) void sendMessage(queued.content);
+  if (!alreadyDelivered) void sendMessage(queued.content, queued.images);
 }
 
 /** Stops tracking a queued message the server injected mid-run. */
@@ -1655,14 +1697,96 @@ function consumeQueuedManualCompaction(sessionId: string): void {
 function renderQueuedMessage(): void {
   const queued = queuedMessage?.sessionId === state.session?.id ? queuedMessage : null;
   elements.queuedMessage.hidden = queued === null;
-  elements.queuedMessageContent.textContent = queued?.content ?? "";
+  elements.queuedMessageContent.textContent = queued
+    ? (queued.images?.length
+      ? `${queued.content} · ${queued.images.length} ${queued.images.length === 1 ? "image" : "images"}`
+      : queued.content)
+    : "";
 }
 
 function clearPrompt(): void {
   elements.prompt.value = "";
+  clearAttachments();
   hideCommandMenu();
   resetPromptHistory();
   resizePrompt();
+}
+
+async function attachImageFiles(files: File[]): Promise<void> {
+  const supported = files.filter((file) => SUPPORTED_IMAGE_TYPES.has(file.type));
+  if (supported.length < files.length) notify("Only JPEG, PNG, GIF, and WebP images can be attached");
+  const room = MAX_IMAGES_PER_MESSAGE - pendingImages.length;
+  if (room <= 0) return notify(`A message accepts at most ${MAX_IMAGES_PER_MESSAGE} images`);
+  if (supported.length > room) notify(`A message accepts at most ${MAX_IMAGES_PER_MESSAGE} images`);
+  let totalBytes = pendingImages.reduce((total, image) => total + image.bytes, 0);
+  for (const file of supported.slice(0, room)) {
+    if (file.size > MAX_IMAGE_BYTES) {
+      notify(`${file.name} exceeds the 32 MiB per-image limit`);
+      continue;
+    }
+    if (totalBytes + file.size > MAX_TOTAL_IMAGE_BYTES) {
+      notify("Images must total at most 64 MiB per message");
+      break;
+    }
+    try {
+      const image = await readPendingImage(file);
+      pendingImages.push(image);
+      totalBytes += image.bytes;
+    } catch {
+      notify(`Could not read ${file.name}`);
+    }
+  }
+  renderAttachmentChips();
+}
+
+function readPendingImage(file: File): Promise<PendingImage> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read file"));
+    reader.onload = () => {
+      const result = String(reader.result ?? "");
+      const marker = ";base64,";
+      const markerIndex = result.indexOf(marker);
+      if (!result.startsWith("data:") || markerIndex === -1) {
+        reject(new Error("Could not read file"));
+        return;
+      }
+      resolve({ mediaType: file.type as MessageImage["mediaType"], data: result.slice(markerIndex + marker.length), name: file.name, bytes: file.size });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderAttachmentChips(): void {
+  elements.attachments.replaceChildren();
+  elements.attachments.hidden = pendingImages.length === 0;
+  pendingImages.forEach((image, index) => {
+    const chip = document.createElement("div");
+    chip.className = "attachment-chip";
+    const thumbnail = document.createElement("img");
+    thumbnail.src = `data:${image.mediaType};base64,${image.data}`;
+    thumbnail.alt = "";
+    const name = document.createElement("span");
+    name.className = "attachment-name";
+    name.textContent = image.name;
+    name.title = image.name;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "attachment-remove";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `Remove ${image.name}`);
+    remove.addEventListener("click", () => {
+      pendingImages.splice(index, 1);
+      renderAttachmentChips();
+    });
+    chip.append(thumbnail, name, remove);
+    elements.attachments.append(chip);
+  });
+}
+
+function clearAttachments(): void {
+  pendingImages = [];
+  renderAttachmentChips();
 }
 
 function handleEscapeAbort(): void {
@@ -2954,6 +3078,7 @@ function appendMessage(message: Message, before: HTMLElement | null = null): HTM
     <div class="message-main">
       <header><span class="message-time"></span><span class="message-usage"></span></header>
       <details class="message-thinking"><summary><span>Thinking</span><span class="thinking-status"></span></summary><div class="thinking-content"></div></details>
+      <div class="message-images"></div>
       <div class="message-content"></div>
       <div class="message-tools"></div>
     </div>`;
@@ -2978,6 +3103,7 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
   const thinkingLabel = requiredWithin(thinking, "summary span:first-child");
   const thinkingStatus = requiredWithin(thinking, ".thinking-status");
   renderToolCalls(requiredWithin(element, ".message-tools"), message.toolCalls ?? []);
+  renderMessageImages(requiredWithin(element, ".message-images"), message.images ?? []);
   const hasThinking = Boolean(message.thinking);
   thinking.hidden = !hasThinking;
   if (hasThinking) {
@@ -3088,6 +3214,19 @@ function toolStatusText(call: ToolCall): string {
   return tokens > 0 ? `${tokens.toLocaleString()}/toks · ${label}` : label;
 }
 
+function renderMessageImages(container: HTMLElement, images: MessageImage[]): void {
+  container.replaceChildren();
+  container.hidden = images.length === 0;
+  for (const image of images) {
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.src = `data:${image.mediaType};base64,${image.data}`;
+    img.alt = "Attached image";
+    img.addEventListener("click", () => img.classList.toggle("expanded"));
+    container.append(img);
+  }
+}
+
 function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
   const previousOutputStates = new Map(
     [...container.querySelectorAll<HTMLDetailsElement>(".tool-output-details")]
@@ -3144,6 +3283,18 @@ function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
       meta.className = "tool-call-meta";
       meta.textContent = metadata;
       card.append(meta);
+    }
+    if (call.images?.length) {
+      const callImages = document.createElement("div");
+      callImages.className = "tool-call-images";
+      for (const image of call.images) {
+        const img = document.createElement("img");
+        img.loading = "lazy";
+        img.src = `data:${image.mediaType};base64,${image.data}`;
+        img.alt = "Tool result image";
+        callImages.append(img);
+      }
+      card.append(callImages);
     }
     if (shouldRenderToolOutput(call)) {
       const details = document.createElement("details");

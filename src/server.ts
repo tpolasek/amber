@@ -83,7 +83,8 @@ import {
   readPlanSnapshot,
 } from "./plan-mode.js";
 import type { LlmProvider, ThinkingLevel, ToolDefinition } from "./types.js";
-import type { Message, Session, SessionInvokedSkill, TokenUsage, ToolCall } from "./types.js";
+import type { Message, MessageImage, Session, SessionInvokedSkill, TokenUsage, ToolCall } from "./types.js";
+import { MAX_MESSAGE_BODY_BYTES, parseMessageImages } from "./message-images.js";
 import { parseThinkingLevel } from "./thinking-level.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
@@ -404,11 +405,14 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     const session = await store.get(queuedMessageMatch[1]);
     if (!session) return json(response, 404, { error: "Session not found" });
     if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
-    const body = await readJson(request);
+    const body = await readJson(request, MAX_MESSAGE_BODY_BYTES);
     const content = typeof body.content === "string" ? body.content.trim() : "";
     const kind = body.kind === "command" ? "command" : body.kind === "message" ? "message" : undefined;
-    if (!content || content.length > 32_000) {
-      return json(response, 400, { error: "Message must contain 1–32,000 characters" });
+    const parsedImages = parseMessageImages(body.images);
+    if ("error" in parsedImages) return json(response, 400, { error: parsedImages.error });
+    const images = parsedImages.images;
+    if ((!content && images.length === 0) || content.length > 32_000) {
+      return json(response, 400, { error: "Message must contain text or images; text is limited to 32,000 characters" });
     }
     if (!kind) return json(response, 400, { error: "Queued input kind must be message or command" });
     if (kind === "command" && !builtInCommand(content)) {
@@ -417,7 +421,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     if (!interruptibleSessions.has(queuedMessageMatch[1])) {
       return json(response, 409, { error: "The session is not streaming" });
     }
-    queuedSessionMessages.enqueueUser(queuedMessageMatch[1], { content, kind });
+    queuedSessionMessages.enqueueUser(queuedMessageMatch[1], { content, kind, ...(images.length ? { images } : {}) });
     return json(response, 202, { queued: true });
   }
 
@@ -645,9 +649,14 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   }
   const approvalCapable = request.headers["x-amber-agent-token"] !== agentRunToken;
 
-  const body = await readJson(request);
+  const body = await readJson(request, MAX_MESSAGE_BODY_BYTES);
   const content = typeof body.content === "string" ? body.content.trim() : "";
-  if (!content || content.length > 32_000) return json(response, 400, { error: "Message must contain 1–32,000 characters" });
+  const parsedImages = parseMessageImages(body.images);
+  if ("error" in parsedImages) return json(response, 400, { error: parsedImages.error });
+  const images = parsedImages.images;
+  if ((!content && images.length === 0) || content.length > 32_000) {
+    return json(response, 400, { error: "Message must contain text or images; text is limited to 32,000 characters" });
+  }
   automaticNameRuns.get(sessionId)?.sessions.add(session);
   const shouldAutoName = shouldAutoNameSession(session);
 
@@ -656,7 +665,14 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   // /api/sessions/:id/events. Only an explicit abort (or shutdown) stops it.
   const controller = new AbortController();
   const now = new Date().toISOString();
-  const userMessage: Message = { id: randomUUID(), role: "user", content, createdAt: now, status: "complete" };
+  const userMessage: Message = {
+    id: randomUUID(),
+    role: "user",
+    content,
+    createdAt: now,
+    status: "complete",
+    ...(images.length ? { images } : {}),
+  };
   let assistantMessage = createAssistantMessage(now);
   session.messages.push(userMessage, assistantMessage);
   await store.save(session);
@@ -824,6 +840,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         allowedDirectories = sessionDirectories(session);
         let resultText = call.output;
         let resultBlocks: Array<{ type: "text"; text: string }> | undefined;
+        let resultImages: MessageImage[] | undefined;
         let abortAfterResult: Error | undefined;
         let endTurnAfterResult = false;
         if (call.status !== "error") {
@@ -1122,6 +1139,10 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               call.output = result.output;
               if (result.readRange) call.readRange = result.readRange;
               resultText = result.resultText;
+              if (result.image) {
+                resultImages = [result.image];
+                call.images = [result.image];
+              }
               await recordTouchedPath(session, result.filePath);
             } catch (error) {
               call.status = "error";
@@ -1243,6 +1264,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           toolUseId: call.id,
           toolError: call.status !== "complete",
           ...(resultBlocks ? { contentBlocks: resultBlocks } : {}),
+          ...(resultImages?.length ? { images: resultImages } : {}),
         });
         session.messages.push(...pendingSkillMessages.splice(0));
         await store.save(session);
@@ -1284,6 +1306,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           content: interruption.content,
           createdAt: new Date().toISOString(),
           status: "complete",
+          ...(interruption.images?.length ? { images: interruption.images } : {}),
         };
         session.messages.push(queuedUserMessage);
         // The interruption starts a fresh user turn: skill model/effort
@@ -2044,13 +2067,13 @@ async function resolveAddedDirectory(path: string): Promise<string> {
   return directory;
 }
 
-async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(request: IncomingMessage, maxBytes = 1_000_000): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.length;
-    if (size > 1_000_000) throw new Error("Request body too large");
+    if (size > maxBytes) throw new Error("Request body too large");
     chunks.push(buffer);
   }
   try {

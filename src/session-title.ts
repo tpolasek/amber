@@ -1,5 +1,6 @@
 import { buildProviderHistory, isModelMessage } from "./history.js";
 import { SESSION_TITLE_PROMPT } from "./prompts.js";
+import { stripProviderImages } from "./message-images.js";
 import type { LlmProvider, Message, Session, SessionCompaction } from "./types.js";
 
 export function shouldAutoNameSession(session: Pick<Session, "id" | "title" | "messages">): boolean {
@@ -13,7 +14,7 @@ export async function generateSessionTitle(
   signal: AbortSignal,
   compaction?: SessionCompaction,
 ): Promise<string> {
-  const history = buildProviderHistory(messages, undefined, compaction);
+  const history = stripProviderImages(buildProviderHistory(messages, undefined, compaction));
   history.push({ role: "user", content: SESSION_TITLE_PROMPT });
 
   let output = "";

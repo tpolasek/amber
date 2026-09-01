@@ -96,10 +96,21 @@ export function injectClaudeCodeUserContext(messages: ProviderMessage[], skillRe
     ? [{ type: "text", text: skillReminder }]
     : structuredClone(compatibility.userPrefix) as Array<{ type: "text"; text: string }>;
   return messages.map((message, index) => {
-    if (injected || message.role !== "user" || typeof message.content !== "string") return message;
+    if (injected || message.role !== "user") return message;
+    const isLast = index === messages.length - 1;
     injected = true;
+    if (Array.isArray(message.content)) {
+      return {
+        ...message,
+        content: [
+          ...prefix,
+          currentDateReminder(),
+          ...markTrailingBlock(message.content, isLast),
+        ],
+      };
+    }
     const promptBlock: ProviderContentBlock = { type: "text", text: message.content };
-    if (index === messages.length - 1) promptBlock.cache_control = { type: "ephemeral" };
+    if (isLast) promptBlock.cache_control = { type: "ephemeral" };
     return {
       ...message,
       content: [
@@ -109,6 +120,14 @@ export function injectClaudeCodeUserContext(messages: ProviderMessage[], skillRe
       ],
     };
   });
+}
+
+function markTrailingBlock(blocks: ProviderContentBlock[], isLast: boolean): ProviderContentBlock[] {
+  const trailing = blocks.at(-1);
+  if (!isLast || !trailing || !(trailing.type === "text" || trailing.type === "tool_result" || trailing.type === "image")) {
+    return blocks;
+  }
+  return [...blocks.slice(0, -1), { ...trailing, cache_control: { type: "ephemeral" } }];
 }
 
 function currentDateReminder(): ProviderContentBlock {
@@ -122,14 +141,18 @@ function currentDateReminder(): ProviderContentBlock {
 export function structureClaudeCodeUserMessages(messages: ProviderMessage[], skillReminder?: string): ProviderMessage[] {
   let injected = false;
   return messages.map((message, index) => {
-    if (message.role !== "user" || typeof message.content !== "string") return message;
-    const promptBlock: ProviderContentBlock = { type: "text", text: message.content };
-    if (index === messages.length - 1) promptBlock.cache_control = { type: "ephemeral" };
+    if (message.role !== "user") return message;
+    const isLast = index === messages.length - 1;
     const reminder: ProviderContentBlock[] = injected ? [] : [
       ...(skillReminder !== undefined ? [{ type: "text", text: skillReminder } as const] : []),
       currentDateReminder(),
     ];
     injected = true;
+    if (Array.isArray(message.content)) {
+      return { ...message, content: [...reminder, ...markTrailingBlock(message.content, isLast)] };
+    }
+    const promptBlock: ProviderContentBlock = { type: "text", text: message.content };
+    if (isLast) promptBlock.cache_control = { type: "ephemeral" };
     return { ...message, content: [...reminder, promptBlock] };
   });
 }

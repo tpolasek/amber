@@ -1,3 +1,5 @@
+import type { MessageImage } from "./types.js";
+
 /**
  * Inputs queued while a response is streaming. At the next tool boundary,
  * the server-inserted /compact runs first, then user messages are handed to
@@ -9,12 +11,13 @@ export interface QueuedSessionInput {
   content: string;
   kind: "message" | "command";
   priority: 0 | 2; // 0 = server-inserted /compact, 2 = user input
+  images?: MessageImage[];
 }
 
 export class SessionInputPriorityQueue {
   readonly #queued = new Map<string, QueuedSessionInput[]>();
 
-  enqueueUser(sessionId: string, input: Pick<QueuedSessionInput, "content" | "kind">): void {
+  enqueueUser(sessionId: string, input: Pick<QueuedSessionInput, "content" | "kind"> & Partial<Pick<QueuedSessionInput, "images">>): void {
     const queue = this.#queued.get(sessionId) ?? [];
     const preserved = queue.filter((entry) => entry.priority === 0);
     preserved.push({ ...input, priority: 2 });

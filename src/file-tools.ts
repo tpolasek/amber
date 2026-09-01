@@ -4,22 +4,25 @@ import { chmod, mkdir, readFile, realpath, rename, stat, unlink, writeFile } fro
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { createTwoFilesPatch, FILE_HEADERS_ONLY } from "diff";
-import type { FileReadState, Session, ToolDefinition, ToolReadRange } from "./types.js";
+import { sniffImageMediaType } from "./message-images.js";
+import type { FileReadState, MessageImage, Session, ToolDefinition, ToolReadRange } from "./types.js";
 
 const MAX_LINES_TO_READ = 2_000;
 const MAX_READ_BYTES = 256 * 1024;
 const MAX_READ_CHARACTERS = 100_000;
 const MAX_EDIT_BYTES = 1024 * 1024 * 1024;
+const MAX_IMAGE_READ_BYTES = 32 * 1024 * 1024;
 const BLOCKED_DEVICE_PATHS = new Set([
   "/dev/zero", "/dev/random", "/dev/urandom", "/dev/full", "/dev/stdin", "/dev/tty", "/dev/console",
   "/dev/stdout", "/dev/stderr", "/dev/fd/0", "/dev/fd/1", "/dev/fd/2",
 ]);
-const UNSUPPORTED_READ_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".ipynb"]);
+const IMAGE_READ_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+const UNSUPPORTED_READ_EXTENSIONS = new Set([".pdf", ".ipynb"]);
 const STATIC_READ_DIRECTORIES = [join(homedir(), ".amber", "plans")];
 
 export const READ_TOOL: ToolDefinition = {
   name: "Read",
-  description: `Read a text file from the local filesystem. Relative file_path values resolve from the session current working directory; absolute and ~/ paths are also accepted. By default this reads up to ${MAX_LINES_TO_READ} lines from line 1. Results use cat -n style line numbers. Use offset and limit for large files. Read files, not directories. Previously returned ranges remain in conversation context; do not reread them. A redundant Read returns only a short cache reminder. Only plain text files are supported; images, PDFs, and notebooks are rejected.`,
+  description: `Read a file from the local filesystem. Relative file_path values resolve from the session current working directory; absolute and ~/ paths are also accepted. By default this reads up to ${MAX_LINES_TO_READ} lines from line 1. Results use cat -n style line numbers. Use offset and limit for large files. Read files, not directories. Previously returned ranges remain in conversation context; do not reread them. A redundant Read returns only a short cache reminder. JPEG, PNG, GIF, and WebP images are returned as image content attached to the tool result. PDFs and notebooks are not supported.`,
   input_schema: {
     type: "object",
     properties: {
@@ -69,6 +72,7 @@ export interface FileToolResult {
   output: string;
   resultText: string;
   readRange?: ToolReadRange;
+  image?: MessageImage;
 }
 
 export interface FileToolPolicy {
@@ -139,7 +143,10 @@ async function readTextFile(
   signal?: AbortSignal,
 ): Promise<FileToolResult> {
   const requestedPath = resolvedFilePath(input.file_path, currentDirectory);
-  assertSupportedTextPath(requestedPath);
+  if (IMAGE_READ_EXTENSIONS.has(extname(requestedPath).toLowerCase())) {
+    return readImageFile(requestedPath, allowedDirectories, signal);
+  }
+  assertSupportedTextPath(requestedPath, "read");
   if (isBlockedDevice(requestedPath)) throw new Error(`Cannot read '${requestedPath}': this device file would block or produce infinite output.`);
   const filePath = await resolveExistingPath(requestedPath, [...new Set([...allowedDirectories, ...STATIC_READ_DIRECTORIES])]);
   throwIfAborted(signal);
@@ -189,6 +196,34 @@ async function readTextFile(
   };
 }
 
+/** Reads an image file and returns its bytes as a real image on the tool result. */
+async function readImageFile(
+  requestedPath: string,
+  allowedDirectories: string[],
+  signal?: AbortSignal,
+): Promise<FileToolResult> {
+  if (isBlockedDevice(requestedPath)) throw new Error(`Cannot read '${requestedPath}': this device file would block or produce infinite output.`);
+  const filePath = await resolveExistingPath(requestedPath, [...new Set([...allowedDirectories, ...STATIC_READ_DIRECTORIES])]);
+  throwIfAborted(signal);
+  const metadata = await stat(filePath);
+  if (!metadata.isFile()) throw new Error(`Read only supports files, not directories: ${filePath}`);
+  if (metadata.size > MAX_IMAGE_READ_BYTES) {
+    throw new Error(`Image is too large to read (${metadata.size.toLocaleString()} bytes; the limit is ${MAX_IMAGE_READ_BYTES.toLocaleString()}).`);
+  }
+  const buffer = await readFile(filePath, { signal });
+  throwIfAborted(signal);
+  const mediaType = sniffImageMediaType(buffer);
+  if (!mediaType) throw new Error(`Read encountered an unsupported or corrupt image file: ${filePath}`);
+  const note = `Read ${filePath}: ${mediaType} image (${formatKibibytes(buffer.length)}) attached to this tool result.`;
+  return { filePath, output: note, resultText: note, image: { mediaType, data: buffer.toString("base64") } };
+}
+
+function formatKibibytes(bytes: number): string {
+  return bytes >= 1024 * 1024
+    ? `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
+    : `${Math.max(1, Math.round(bytes / 1024))} KiB`;
+}
+
 async function writeTextFile(
   input: Record<string, unknown>,
   allowedDirectories: string[],
@@ -196,7 +231,7 @@ async function writeTextFile(
   session: Session,
 ): Promise<FileToolResult> {
   const requestedPath = resolvedFilePath(input.file_path, currentDirectory);
-  assertSupportedTextPath(requestedPath);
+  assertSupportedTextPath(requestedPath, "write");
   if (typeof input.content !== "string") throw new Error("Write requires string content");
   const { filePath, existing } = await resolveWritePath(requestedPath, allowedDirectories);
   if (existing) {
@@ -222,7 +257,7 @@ async function editTextFile(
   session: Session,
 ): Promise<FileToolResult> {
   const requestedPath = resolvedFilePath(input.file_path, currentDirectory);
-  assertSupportedTextPath(requestedPath);
+  assertSupportedTextPath(requestedPath, "write");
   if (typeof input.old_string !== "string" || typeof input.new_string !== "string") {
     throw new Error("Edit requires string old_string and new_string values");
   }
@@ -434,9 +469,14 @@ function resolvedFilePath(value: unknown, currentDirectory: string): string {
   return isAbsolute(expanded) ? expanded : resolve(currentDirectory, expanded);
 }
 
-function assertSupportedTextPath(filePath: string): void {
+function assertSupportedTextPath(filePath: string, operation: "read" | "write"): void {
   if (UNSUPPORTED_READ_EXTENSIONS.has(extname(filePath).toLowerCase())) {
-    throw new Error("File tools only support plain text files; images, PDFs, and notebooks are not supported");
+    throw new Error(operation === "read"
+      ? "Read does not support PDFs or Jupyter notebooks"
+      : "Write and Edit do not support PDFs or Jupyter notebooks");
+  }
+  if (IMAGE_READ_EXTENSIONS.has(extname(filePath).toLowerCase())) {
+    throw new Error("Images can be read but not written or edited");
   }
 }
 

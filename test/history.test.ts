@@ -284,6 +284,71 @@ test("provider history includes a hidden background-agent notification with the 
   }]);
 });
 
+test("provider history emits user images before the text block", () => {
+  const now = new Date().toISOString();
+  const image = { mediaType: "image/png" as const, data: "aGVsbG8=" };
+  const messages: Message[] = [
+    { id: "user", role: "user", content: "What is in this picture?", createdAt: now, status: "complete", images: [image] },
+  ];
+
+  assert.deepEqual(buildProviderHistory(messages), [{
+    role: "user",
+    content: [
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } },
+      { type: "text", text: "What is in this picture?", cache_control: { type: "ephemeral" } },
+    ],
+  }]);
+
+  const imageOnly: Message[] = [
+    { id: "user", role: "user", content: "", createdAt: now, status: "complete", images: [image] },
+  ];
+  assert.deepEqual(buildProviderHistory(imageOnly), [{
+    role: "user",
+    content: [
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" }, cache_control: { type: "ephemeral" } },
+    ],
+  }]);
+});
+
+test("provider history attaches image reads to tool results", () => {
+  const now = new Date().toISOString();
+  const image = { mediaType: "image/png" as const, data: "aGVsbG8=" };
+  const messages: Message[] = [
+    {
+      id: "assistant",
+      role: "assistant",
+      content: "",
+      createdAt: now,
+      status: "complete",
+      toolCalls: [{ id: "read-1", name: "Read", input: { file_path: "/tmp/pic.png" }, status: "complete", output: "" }],
+    },
+    {
+      id: "result",
+      role: "user",
+      content: "Read /tmp/pic.png: image/png image attached to this tool result.",
+      createdAt: now,
+      status: "complete",
+      kind: "tool-result",
+      toolUseId: "read-1",
+      images: [image],
+    },
+  ];
+
+  assert.deepEqual(buildProviderHistory(messages)[1], {
+    role: "user",
+    content: [{
+      type: "tool_result",
+      tool_use_id: "read-1",
+      content: [
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } },
+        { type: "text", text: "Read /tmp/pic.png: image/png image attached to this tool result." },
+      ],
+      is_error: false,
+      cache_control: { type: "ephemeral" },
+    }],
+  });
+});
+
 test("provider history reinjects compacted skill instructions without duplicating active ones", () => {
   const now = new Date().toISOString();
   const base = { createdAt: now, status: "complete" as const };

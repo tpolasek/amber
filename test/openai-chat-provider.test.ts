@@ -172,6 +172,70 @@ test("converts provider messages and tools to the chat completions shape", async
   ]);
 });
 
+test("sends user images as image_url parts and keeps image tool results textual", async (context) => {
+  const gateway = await startGateway((_request, response) => {
+    writeChunks(response, ['{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}']);
+  });
+  context.after(() => gateway.close());
+
+  const messages: ProviderMessage[] = [
+    {
+      role: "user",
+      content: [
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } },
+        { type: "text", text: "What is in this picture?" },
+      ],
+    },
+    {
+      role: "assistant",
+      content: [{ type: "tool_use", id: "call-old", name: "Read", input: { file_path: "/tmp/pic.png" } }],
+    },
+    {
+      role: "user",
+      content: [{
+        type: "tool_result",
+        tool_use_id: "call-old",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } },
+          { type: "text", text: "Read /tmp/pic.png: image/png image attached to this tool result." },
+        ],
+      }],
+    },
+  ];
+  for await (const _event of streamChatCompletions({
+    apiKey: "local-key",
+    baseUrl: gateway.url,
+    model: "local-model",
+    messages,
+    system: null,
+    signal: new AbortController().signal,
+  })) { /* consume */ }
+
+  assert.deepEqual(gateway.requests[0]?.body.messages, [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "What is in this picture?" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8=" } },
+      ],
+    },
+    {
+      role: "assistant",
+      content: "",
+      tool_calls: [{
+        id: "call-old",
+        type: "function",
+        function: { name: "Read", arguments: '{"file_path":"/tmp/pic.png"}' },
+      }],
+    },
+    {
+      role: "tool",
+      tool_call_id: "call-old",
+      content: "Read /tmp/pic.png: image/png image attached to this tool result.",
+    },
+  ]);
+});
+
 test("explicitly omits the chat-completions system message", async (context) => {
   const gateway = await startGateway((_request, response) => {
     writeChunks(response, ['{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}']);

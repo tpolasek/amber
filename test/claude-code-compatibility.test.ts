@@ -120,6 +120,38 @@ test("structures an agent prompt with the date reminder and uses the shared chil
   ]);
 });
 
+test("injects the reminders into array-content user messages such as image turns", () => {
+  const injected = injectClaudeCodeUserContext([
+    {
+      role: "user",
+      content: [
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } },
+        { type: "text", text: "What is this?" },
+      ],
+    },
+  ]);
+  const content = injected[0]?.content;
+  assert.ok(Array.isArray(content));
+  assert.equal(content.length, 4);
+  assert.match(content[0]?.type === "text" ? content[0].text : "", /The following skills are available/);
+  assert.match(content[1]?.type === "text" ? content[1].text : "", /# currentDate/);
+  assert.deepEqual(content[2], { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } });
+  assert.deepEqual(content[3], { type: "text", text: "What is this?", cache_control: { type: "ephemeral" } });
+
+  const structured = structureClaudeCodeUserMessages([
+    {
+      role: "user",
+      content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } }],
+    },
+    { role: "assistant", content: "A PNG file." },
+  ]);
+  const structuredContent = structured[0]?.content;
+  assert.ok(Array.isArray(structuredContent));
+  assert.equal(structuredContent.length, 2);
+  assert.match(structuredContent[0]?.type === "text" ? structuredContent[0].text : "", /# currentDate/);
+  assert.deepEqual(structuredContent[1], { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } });
+});
+
 test("keeps Skill available to read-only and planning agents", () => {
   assert.deepEqual(toolsForAgentMode(true).map((tool) => tool.name), [
     "Bash",

@@ -1,5 +1,6 @@
 import type { Message, ProviderMessage, SessionCompaction, SessionInvokedSkill } from "./types.js";
 import { compactedSkillInstructions } from "./skill-tool.js";
+import { imageBlock } from "./message-images.js";
 
 const SUMMARY_PREFIX = "The following is a generated summary of the earlier conversation. Use it as user-provided context when continuing the session.\n\n";
 
@@ -37,7 +38,14 @@ export function buildProviderHistory(
         ? [{
             type: "tool_result",
             tool_use_id: message.toolUseId,
-            content: message.contentBlocks ?? message.content,
+            ...(message.images?.length
+              ? {
+                  content: [
+                    ...message.images.map(imageBlock),
+                    ...(message.contentBlocks ?? [{ type: "text" as const, text: message.content }]),
+                  ],
+                }
+              : { content: message.contentBlocks ?? message.content }),
             ...(message.contentBlocks && !message.toolError ? {} : { is_error: message.toolError === true }),
           }]
         : message.role === "assistant" && (message.thinking || message.toolCalls?.length)
@@ -58,7 +66,12 @@ export function buildProviderHistory(
                 input: call.input,
               })),
             ]
-          : message.content,
+          : message.images?.length
+            ? [
+                ...message.images.map(imageBlock),
+                ...(message.content ? [{ type: "text" as const, text: message.content }] : []),
+              ]
+            : message.content,
     };
     const previous = history.at(-1);
     if (
@@ -107,7 +120,7 @@ function markTrailingCacheControl(history: ProviderMessage[]): void {
   const last = history.at(-1);
   if (last?.role !== "user" || !Array.isArray(last.content)) return;
   const block = last.content.at(-1);
-  if (block && (block.type === "text" || block.type === "tool_result")) {
+  if (block && (block.type === "text" || block.type === "tool_result" || block.type === "image")) {
     block.cache_control = { type: "ephemeral" };
   }
 }
