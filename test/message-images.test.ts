@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import {
   imageDataUrl,
   imageMediaTypeForPath,
+  MAX_IMAGE_BYTES,
   MAX_IMAGES_PER_MESSAGE,
   MAX_TOTAL_IMAGE_BYTES,
   parseMessageImages,
+  providerImageLimitError,
   sniffImageMediaType,
   stripProviderImages,
 } from "../src/message-images.js";
@@ -57,19 +59,45 @@ test("rejects malformed image input", () => {
 });
 
 test("enforces per-image, total, and count limits", () => {
-  const oversized = "A".repeat(Math.ceil((MAX_TOTAL_IMAGE_BYTES + 1) * 4 / 3));
-  assert.match(errorOf(parseMessageImages([{ mediaType: "image/png", data: oversized }])), /at most 32 MiB/);
+  const oversized = "A".repeat(Math.ceil((MAX_IMAGE_BYTES + 1) / 3) * 4);
+  assert.match(errorOf(parseMessageImages([{ mediaType: "image/png", data: oversized }])), /at most 7 MiB/);
 
-  const perImage = "A".repeat(Math.ceil((MAX_TOTAL_IMAGE_BYTES / 2) * 4 / 3));
+  const perImage = "A".repeat(6 * 1024 * 1024 * 4 / 3);
   const over = parseMessageImages([
     { mediaType: "image/png", data: perImage },
     { mediaType: "image/png", data: perImage },
     { mediaType: "image/png", data: perImage },
   ]);
-  assert.match(errorOf(over), /total at most 64 MiB/);
+  assert.match(errorOf(over), /total at most 16 MiB/);
 
   const tooMany = Array.from({ length: MAX_IMAGES_PER_MESSAGE + 1 }, () => ({ mediaType: "image/png", data: "aGVsbG8=" }));
-  assert.match(errorOf(parseMessageImages(tooMany)), /600 images/);
+  assert.match(errorOf(parseMessageImages(tooMany)), /100 images/);
+});
+
+test("enforces image limits across the complete provider history", () => {
+  const image = { type: "image" as const, source: { type: "base64" as const, media_type: "image/png" as const, data: "aGVsbG8=" } };
+  const tooMany: ProviderMessage[] = [{
+    role: "user",
+    content: Array.from({ length: MAX_IMAGES_PER_MESSAGE + 1 }, () => structuredClone(image)),
+  }];
+  assert.match(providerImageLimitError(tooMany) ?? "", /at most 100 images/);
+
+  const sixMiB = "A".repeat(6 * 1024 * 1024 * 4 / 3);
+  const tooLarge: ProviderMessage[] = [{
+    role: "user",
+    content: [
+      { type: "image", source: { type: "base64", media_type: "image/png", data: sixMiB } },
+      {
+        type: "tool_result",
+        tool_use_id: "read-1",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/png", data: sixMiB } },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: sixMiB } },
+        ],
+      },
+    ],
+  }];
+  assert.match(providerImageLimitError(tooLarge) ?? "", /total at most 16 MiB/);
 });
 
 test("strips image blocks from provider history, including tool results", () => {

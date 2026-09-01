@@ -40,7 +40,7 @@ import {
   type SkillDefinition,
   type SkillDiscoveryContext,
 } from "./skill-tool.js";
-import { executeFileTool, FILE_TOOLS } from "./file-tools.js";
+import { clearImageReadCache, executeFileTool, FILE_TOOLS } from "./file-tools.js";
 import { executeGrep, GREP_TOOL, parseGrepInput } from "./grep-tool.js";
 import { executeGlob, GLOB_TOOL, parseGlobInput } from "./glob-tool.js";
 import { completeDirectories, completeDirectoryRoots, completeFiles } from "./directory-completion.js";
@@ -84,7 +84,7 @@ import {
 } from "./plan-mode.js";
 import type { LlmProvider, ThinkingLevel, ToolDefinition } from "./types.js";
 import type { Message, MessageImage, Session, SessionInvokedSkill, TokenUsage, ToolCall } from "./types.js";
-import { MAX_MESSAGE_BODY_BYTES, parseMessageImages } from "./message-images.js";
+import { MAX_MESSAGE_BODY_BYTES, parseMessageImages, providerImageLimitError } from "./message-images.js";
 import { parseThinkingLevel } from "./thinking-level.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
@@ -415,8 +415,18 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       return json(response, 400, { error: "Message must contain text or images; text is limited to 32,000 characters" });
     }
     if (!kind) return json(response, 400, { error: "Queued input kind must be message or command" });
+    if (kind === "command" && images.length > 0) {
+      return json(response, 400, { error: "Queued commands cannot include images" });
+    }
     if (kind === "command" && !builtInCommand(content)) {
       return json(response, 400, { error: "Queued command is not a built-in command" });
+    }
+    if (kind === "message") {
+      const limitError = sessionImageLimitError(session, {
+        id: randomUUID(), role: "user", content, createdAt: new Date().toISOString(), status: "complete",
+        ...(images.length ? { images } : {}),
+      });
+      if (limitError) return json(response, 400, { error: limitError });
     }
     if (!interruptibleSessions.has(queuedMessageMatch[1])) {
       return json(response, 409, { error: "The session is not streaming" });
@@ -657,9 +667,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   if ((!content && images.length === 0) || content.length > 32_000) {
     return json(response, 400, { error: "Message must contain text or images; text is limited to 32,000 characters" });
   }
-  automaticNameRuns.get(sessionId)?.sessions.add(session);
-  const shouldAutoName = shouldAutoNameSession(session);
-
   // The run is decoupled from this connection: a refresh or closed window
   // leaves it streaming server-side, and clients re-attach through
   // /api/sessions/:id/events. Only an explicit abort (or shutdown) stops it.
@@ -673,6 +680,10 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     status: "complete",
     ...(images.length ? { images } : {}),
   };
+  const limitError = sessionImageLimitError(session, userMessage);
+  if (limitError) return json(response, 400, { error: limitError });
+  automaticNameRuns.get(sessionId)?.sessions.add(session);
+  const shouldAutoName = shouldAutoNameSession(session);
   let assistantMessage = createAssistantMessage(now);
   session.messages.push(userMessage, assistantMessage);
   await store.save(session);
@@ -723,6 +734,8 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       const activeProvider = turnModel ? providerCatalog.provider(turnModel) : providerForSession(session);
       const thinkingLevel = turnEffort ?? session.thinkingLevel;
       const baseHistory = buildProviderHistory(session.messages, assistantMessage.id, session.compaction, session.invokedSkills);
+      const historyLimitError = providerImageLimitError(baseHistory);
+      if (historyLimitError) throw new Error(historyLimitError);
       const reminder = renderSkillReminder(invocableSkills(skills, session.skillTouchedPaths ?? [], currentDirectory), session.contextTokens);
       const history = session.agentType
         ? structureClaudeCodeUserMessages(baseHistory, reminder)
@@ -1140,8 +1153,22 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               if (result.readRange) call.readRange = result.readRange;
               resultText = result.resultText;
               if (result.image) {
+                const imageResultMessage: Message = {
+                  id: randomUUID(),
+                  role: "user",
+                  content: result.resultText,
+                  createdAt: new Date().toISOString(),
+                  status: "complete",
+                  kind: "tool-result",
+                  toolUseId: call.id,
+                  images: [result.image],
+                };
+                const imageLimitError = sessionImageLimitError(session, imageResultMessage);
+                if (imageLimitError) {
+                  if (session.fileReadState) delete session.fileReadState[result.filePath];
+                  throw new Error(imageLimitError);
+                }
                 resultImages = [result.image];
-                call.images = [result.image];
               }
               await recordTouchedPath(session, result.filePath);
             } catch (error) {
@@ -1253,7 +1280,10 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             call.output = `Unknown tool: ${call.name}`;
           }
         }
-        emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
+        emit("tool_update", {
+          messageId: assistantMessage.id,
+          toolCall: resultImages?.length ? { ...call, images: resultImages } : call,
+        });
         session.messages.push({
           id: randomUUID(),
           role: "user",
@@ -1795,6 +1825,15 @@ function shouldAutoCompactSession(session: Session): boolean {
   return shouldAutoCompact(compactTokens, sessionContextTokens(session), history);
 }
 
+function sessionImageLimitError(session: Session, appendedMessage?: Message): string | undefined {
+  return providerImageLimitError(buildProviderHistory(
+    appendedMessage ? [...session.messages, appendedMessage] : session.messages,
+    undefined,
+    session.compaction,
+    session.invokedSkills,
+  ));
+}
+
 function compactionTarget(session: Session): Message | undefined {
   const previousBoundary = session.compaction
     ? session.messages.findIndex((message) => message.id === session.compaction?.throughMessageId)
@@ -1840,6 +1879,7 @@ async function compactSession(
     buildProviderHistory(session.messages, undefined, compaction, session.invokedSkills),
   );
   session.compaction = compaction;
+  clearImageReadCache(session);
   session.contextTokens = afterTokens;
   session.messages.push({
     id: randomUUID(),

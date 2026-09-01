@@ -4,14 +4,13 @@ import { chmod, mkdir, readFile, realpath, rename, stat, unlink, writeFile } fro
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { createTwoFilesPatch, FILE_HEADERS_ONLY } from "diff";
-import { sniffImageMediaType } from "./message-images.js";
+import { MAX_IMAGE_BYTES, sniffImageMediaType } from "./message-images.js";
 import type { FileReadState, MessageImage, Session, ToolDefinition, ToolReadRange } from "./types.js";
 
 const MAX_LINES_TO_READ = 2_000;
 const MAX_READ_BYTES = 256 * 1024;
 const MAX_READ_CHARACTERS = 100_000;
 const MAX_EDIT_BYTES = 1024 * 1024 * 1024;
-const MAX_IMAGE_READ_BYTES = 32 * 1024 * 1024;
 const BLOCKED_DEVICE_PATHS = new Set([
   "/dev/zero", "/dev/random", "/dev/urandom", "/dev/full", "/dev/stdin", "/dev/tty", "/dev/console",
   "/dev/stdout", "/dev/stderr", "/dev/fd/0", "/dev/fd/1", "/dev/fd/2",
@@ -79,6 +78,13 @@ export interface FileToolPolicy {
   onlyMutationPath?: string;
 }
 
+export function clearImageReadCache(session: Session): void {
+  if (!session.fileReadState) return;
+  for (const [filePath, state] of Object.entries(session.fileReadState)) {
+    if (state.hasRead && state.totalLines === undefined) delete session.fileReadState[filePath];
+  }
+}
+
 export async function executeFileTool(
   name: string,
   input: Record<string, unknown>,
@@ -144,7 +150,7 @@ async function readTextFile(
 ): Promise<FileToolResult> {
   const requestedPath = resolvedFilePath(input.file_path, currentDirectory);
   if (IMAGE_READ_EXTENSIONS.has(extname(requestedPath).toLowerCase())) {
-    return readImageFile(requestedPath, allowedDirectories, signal);
+    return readImageFile(requestedPath, allowedDirectories, session, signal);
   }
   assertSupportedTextPath(requestedPath, "read");
   if (isBlockedDevice(requestedPath)) throw new Error(`Cannot read '${requestedPath}': this device file would block or produce infinite output.`);
@@ -200,6 +206,7 @@ async function readTextFile(
 async function readImageFile(
   requestedPath: string,
   allowedDirectories: string[],
+  session: Session,
   signal?: AbortSignal,
 ): Promise<FileToolResult> {
   if (isBlockedDevice(requestedPath)) throw new Error(`Cannot read '${requestedPath}': this device file would block or produce infinite output.`);
@@ -207,15 +214,33 @@ async function readImageFile(
   throwIfAborted(signal);
   const metadata = await stat(filePath);
   if (!metadata.isFile()) throw new Error(`Read only supports files, not directories: ${filePath}`);
-  if (metadata.size > MAX_IMAGE_READ_BYTES) {
-    throw new Error(`Image is too large to read (${metadata.size.toLocaleString()} bytes; the limit is ${MAX_IMAGE_READ_BYTES.toLocaleString()}).`);
+  const prior = session.fileReadState?.[filePath];
+  const priorImage = prior?.full && prior.hasRead && prior.totalLines === undefined ? prior : undefined;
+  if (priorImage && priorImage.mtimeMs === metadata.mtimeMs && priorImage.size === metadata.size) {
+    return cachedImageRead(filePath);
+  }
+  if (metadata.size > MAX_IMAGE_BYTES) {
+    throw new Error(`Image is too large to read (${metadata.size.toLocaleString()} bytes; the limit is ${MAX_IMAGE_BYTES.toLocaleString()}).`);
   }
   const buffer = await readFile(filePath, { signal });
   throwIfAborted(signal);
+  if (priorImage?.hash === hash(buffer)) {
+    (session.fileReadState ??= {})[filePath] = { ...readState(buffer, metadata.mtimeMs, true), hasRead: true };
+    return cachedImageRead(filePath);
+  }
   const mediaType = sniffImageMediaType(buffer);
   if (!mediaType) throw new Error(`Read encountered an unsupported or corrupt image file: ${filePath}`);
+  (session.fileReadState ??= {})[filePath] = { ...readState(buffer, metadata.mtimeMs, true), hasRead: true };
   const note = `Read ${filePath}: ${mediaType} image (${formatKibibytes(buffer.length)}) attached to this tool result.`;
   return { filePath, output: note, resultText: note, image: { mediaType, data: buffer.toString("base64") } };
+}
+
+function cachedImageRead(filePath: string): FileToolResult {
+  return {
+    filePath,
+    output: "Cached Read · reused earlier context",
+    resultText: `<system-reminder>The image ${filePath} was already returned by an earlier Read and remains available in the active conversation context. Reuse that image. Do not call Read again unless the file changes.</system-reminder>`,
+  };
 }
 
 function formatKibibytes(bytes: number): string {

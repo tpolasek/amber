@@ -113,6 +113,7 @@ function toChatMessages(messages: ProviderMessage[]): Array<Record<string, unkno
     }
     const text: string[] = [];
     const images: Array<Record<string, unknown>> = [];
+    const toolResultImages: Array<{ toolUseId: string; images: Array<Record<string, unknown>> }> = [];
     const toolCalls: Array<Record<string, unknown>> = [];
     const toolResults: Array<Record<string, unknown>> = [];
     for (const block of message.content) {
@@ -128,10 +129,28 @@ function toChatMessages(messages: ProviderMessage[]): Array<Record<string, unkno
         });
       } else if (block.type === "tool_result") {
         toolResults.push({ role: "tool", tool_call_id: block.tool_use_id, content: toolResultText(block) });
+        if (Array.isArray(block.content)) {
+          const resultImages = block.content
+            .filter((part) => part.type === "image")
+            .map((part) => ({
+              type: "image_url",
+              image_url: { url: imageDataUrl({ mediaType: part.source.media_type, data: part.source.data }) },
+            }));
+          if (resultImages.length > 0) toolResultImages.push({ toolUseId: block.tool_use_id, images: resultImages });
+        }
       }
       // Thinking blocks have no Chat Completions replay format and are dropped.
     }
     result.push(...toolResults);
+    for (const imageResult of toolResultImages) {
+      result.push({
+        role: "user",
+        content: [
+          { type: "text", text: `Image returned by tool call ${imageResult.toolUseId}:` },
+          ...imageResult.images,
+        ],
+      });
+    }
     if (message.role === "assistant") {
       if (text.length > 0 || toolCalls.length > 0) {
         result.push({

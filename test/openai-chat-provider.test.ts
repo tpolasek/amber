@@ -172,7 +172,7 @@ test("converts provider messages and tools to the chat completions shape", async
   ]);
 });
 
-test("sends user images as image_url parts and keeps image tool results textual", async (context) => {
+test("sends user images and replays image tool results as user image parts", async (context) => {
   const gateway = await startGateway((_request, response) => {
     writeChunks(response, ['{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}']);
   });
@@ -232,6 +232,13 @@ test("sends user images as image_url parts and keeps image tool results textual"
       role: "tool",
       tool_call_id: "call-old",
       content: "Read /tmp/pic.png: image/png image attached to this tool result.",
+    },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Image returned by tool call call-old:" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8=" } },
+      ],
     },
   ]);
 });

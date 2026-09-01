@@ -138,9 +138,9 @@ let sessionRunReconnectTimer: number | undefined;
 let queuedMessage: { sessionId: string; content: string; kind: "message" | "command"; queuedAt: number; images?: MessageImage[] } | null = null;
 
 const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
-const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
-const MAX_TOTAL_IMAGE_BYTES = 64 * 1024 * 1024;
-const MAX_IMAGES_PER_MESSAGE = 600;
+const MAX_IMAGE_BYTES = 7 * 1024 * 1024;
+const MAX_TOTAL_IMAGE_BYTES = 16 * 1024 * 1024;
+const MAX_IMAGES_PER_MESSAGE = 100;
 interface PendingImage { mediaType: MessageImage["mediaType"]; data: string; name: string; bytes: number }
 let pendingImages: PendingImage[] = [];
 
@@ -1721,11 +1721,11 @@ async function attachImageFiles(files: File[]): Promise<void> {
   let totalBytes = pendingImages.reduce((total, image) => total + image.bytes, 0);
   for (const file of supported.slice(0, room)) {
     if (file.size > MAX_IMAGE_BYTES) {
-      notify(`${file.name} exceeds the 32 MiB per-image limit`);
+      notify(`${file.name} exceeds the 7 MiB per-image limit`);
       continue;
     }
     if (totalBytes + file.size > MAX_TOTAL_IMAGE_BYTES) {
-      notify("Images must total at most 64 MiB per message");
+      notify("Images must total at most 16 MiB per message");
       break;
     }
     try {
@@ -3284,10 +3284,11 @@ function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
       meta.textContent = metadata;
       card.append(meta);
     }
-    if (call.images?.length) {
+    const images = call.images?.length ? call.images : persistedToolResultImages(call.id);
+    if (images.length) {
       const callImages = document.createElement("div");
       callImages.className = "tool-call-images";
-      for (const image of call.images) {
+      for (const image of images) {
         const img = document.createElement("img");
         img.loading = "lazy";
         img.src = `data:${image.mediaType};base64,${image.data}`;
@@ -3329,6 +3330,11 @@ function renderToolCalls(container: HTMLElement, calls: ToolCall[]): void {
     }
     container.append(card);
   }
+}
+
+function persistedToolResultImages(toolUseId: string): MessageImage[] {
+  return state.session?.messages.find((message) =>
+    message.kind === "tool-result" && message.toolUseId === toolUseId)?.images ?? [];
 }
 
 function renderDiff(container: HTMLElement, diff: string): void {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeFileTool, FILE_TOOLS } from "../src/file-tools.js";
+import { clearImageReadCache, executeFileTool, FILE_TOOLS } from "../src/file-tools.js";
 import type { Session } from "../src/types.js";
 
 function session(): Session {
@@ -356,12 +356,38 @@ test("Read returns image bytes as an image on the tool result", async () => {
   assert.match(png.resultText, /Read .*shot\.png: image\/png image \(.* KiB\) attached to this tool result\./);
   assert.equal(png.output, png.resultText);
   assert.equal(png.readRange, undefined);
-  assert.equal(current.fileReadState?.[canonicalPngPath], undefined);
+  assert.equal(current.fileReadState?.[canonicalPngPath]?.full, true);
+
+  const cached = await executeFileTool("Read", { file_path: pngPath }, [directory], current);
+  assert.equal(cached.output, "Cached Read · reused earlier context");
+  assert.equal(cached.image, undefined);
+  assert.match(cached.resultText, /already returned by an earlier Read/);
+
+  const changedBytes = Buffer.concat([pngBytes, Buffer.from([0x01])]);
+  await writeFile(pngPath, changedBytes);
+  const changed = await executeFileTool("Read", { file_path: pngPath }, [directory], current);
+  assert.deepEqual(changed.image, { mediaType: "image/png", data: changedBytes.toString("base64") });
 
   const jpeg = await executeFileTool("Read", { file_path: jpegPath }, [directory], current);
   assert.deepEqual(jpeg.image, { mediaType: "image/jpeg", data: jpegBytes.toString("base64") });
 
   await assert.rejects(executeFileTool("Read", { file_path: pdfPath }, [directory], current), /Read does not support PDFs/);
+});
+
+test("compaction invalidates image Read cache without discarding text coverage", () => {
+  const current = session();
+  current.fileReadState = {
+    "/tmp/pic.png": { mtimeMs: 1, size: 10, hash: "image", full: true, hasRead: true },
+    "/tmp/code.ts": {
+      mtimeMs: 1, size: 10, hash: "text", full: true, hasRead: true, totalLines: 1,
+      ranges: [{ startLine: 1, endLine: 1 }],
+    },
+  };
+
+  clearImageReadCache(current);
+
+  assert.equal(current.fileReadState["/tmp/pic.png"], undefined);
+  assert.equal(current.fileReadState["/tmp/code.ts"]?.full, true);
 });
 
 test("plan mode permits only its plan file through Write and Edit", async () => {

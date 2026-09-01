@@ -59,7 +59,6 @@ export interface ToolCall {
   agentNotificationDeliveredAt?: string;
   skillModel?: string;
   skillEffort?: string;
-  images?: MessageImage[];
 }
 
 export interface Message {

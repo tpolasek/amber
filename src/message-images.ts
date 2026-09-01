@@ -1,11 +1,13 @@
 import type { ImageMediaType, MessageImage, ProviderImageBlock, ProviderMessage } from "./types.js";
 
 export const IMAGE_MEDIA_TYPES: readonly ImageMediaType[] = ["image/jpeg", "image/png", "image/gif", "image/webp"];
-export const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
-export const MAX_TOTAL_IMAGE_BYTES = 64 * 1024 * 1024;
-export const MAX_IMAGES_PER_MESSAGE = 600;
-/** Transport cap for message endpoints: 64 MiB raw is roughly 86 MB base64. */
-export const MAX_MESSAGE_BODY_BYTES = 100 * 1024 * 1024;
+/** Seven raw MiB stays below Anthropic's 10 MB base64-encoded image limit. */
+export const MAX_IMAGE_BYTES = 7 * 1024 * 1024;
+/** Leaves ample room beneath the 32 MB provider request cap after base64 expansion. */
+export const MAX_TOTAL_IMAGE_BYTES = 16 * 1024 * 1024;
+/** Conservative limit for models whose 200k context permits 100 images per request. */
+export const MAX_IMAGES_PER_MESSAGE = 100;
+export const MAX_MESSAGE_BODY_BYTES = 24 * 1024 * 1024;
 /** Rough per-image character cost (≈1,600 tokens) used by the compaction estimate. */
 export const imageCharacterEstimate = 6_400;
 
@@ -63,10 +65,10 @@ export function parseMessageImages(input: unknown): { images: MessageImage[] } |
     if (typeof candidate.mediaType !== "string" || !IMAGE_MEDIA_TYPES.includes(candidate.mediaType as ImageMediaType)) {
       return { error: `Image media type must be one of ${IMAGE_MEDIA_TYPES.join(", ")}` };
     }
-    if (typeof candidate.data !== "string" || !BASE64_PATTERN.test(candidate.data)) {
+    if (typeof candidate.data !== "string" || candidate.data.length % 4 !== 0 || !BASE64_PATTERN.test(candidate.data)) {
       return { error: "Image data must be a base64 string" };
     }
-    const bytes = Math.floor((candidate.data.length * 3) / 4);
+    const bytes = decodedBase64Bytes(candidate.data);
     if (bytes > MAX_IMAGE_BYTES) {
       return { error: `Each image must be at most ${formatBytes(MAX_IMAGE_BYTES)}` };
     }
@@ -77,6 +79,40 @@ export function parseMessageImages(input: unknown): { images: MessageImage[] } |
     images.push({ mediaType: candidate.mediaType as ImageMediaType, data: candidate.data });
   }
   return { images };
+}
+
+/** Validates all images that will be resent in one provider request. */
+export function providerImageLimitError(history: ProviderMessage[]): string | undefined {
+  let count = 0;
+  let totalBytes = 0;
+  let oversized = false;
+  for (const message of history) {
+    if (typeof message.content === "string") continue;
+    for (const block of message.content) {
+      if (block.type === "image") {
+        count += 1;
+        const bytes = decodedBase64Bytes(block.source.data);
+        totalBytes += bytes;
+        oversized ||= bytes > MAX_IMAGE_BYTES;
+      } else if (block.type === "tool_result" && Array.isArray(block.content)) {
+        for (const part of block.content) {
+          if (part.type !== "image") continue;
+          count += 1;
+          const bytes = decodedBase64Bytes(part.source.data);
+          totalBytes += bytes;
+          oversized ||= bytes > MAX_IMAGE_BYTES;
+        }
+      }
+    }
+  }
+  if (oversized) return `Each image must be at most ${formatBytes(MAX_IMAGE_BYTES)}`;
+  if (count > MAX_IMAGES_PER_MESSAGE) {
+    return `Active conversation context may contain at most ${MAX_IMAGES_PER_MESSAGE} images`;
+  }
+  if (totalBytes > MAX_TOTAL_IMAGE_BYTES) {
+    return `Active conversation images may total at most ${formatBytes(MAX_TOTAL_IMAGE_BYTES)}`;
+  }
+  return undefined;
 }
 
 /** Replaces image blocks with a short placeholder so side channels (titles) never carry base64. */
@@ -103,4 +139,9 @@ export function stripProviderImages(history: ProviderMessage[]): ProviderMessage
 
 function formatBytes(bytes: number): string {
   return `${Math.round(bytes / (1024 * 1024))} MiB`;
+}
+
+function decodedBase64Bytes(data: string): number {
+  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+  return data.length / 4 * 3 - padding;
 }
