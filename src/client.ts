@@ -20,6 +20,7 @@ import {
 } from "./client-formatters.js";
 import { BUILT_IN_COMMANDS, builtInCommand, type BuiltInCommand } from "./built-in-commands.js";
 import { nextThinkingLevel, type ThinkingLevel } from "./thinking-level.js";
+import { PlanHandoffDispatcher } from "./plan-handoff.js";
 import {
   diffLineClass,
   diffSummary,
@@ -134,7 +135,6 @@ let sessionRunController: AbortController | null = null;
 let sessionRunId: string | null = null;
 let sessionRunReconnectTimer: number | undefined;
 let queuedMessage: { sessionId: string; content: string; kind: "message" | "command"; queuedAt: number } | null = null;
-let pendingPlanHandoff: { sessionId: string; prompt: string } | null = null;
 
 const ESC_ABORT_WINDOW_MS = 500;
 let lastEscapeForAbortAt = 0;
@@ -146,6 +146,13 @@ const state: { session: Session | null; config: Config | null; streaming: boolea
   aborting: false,
   controller: null,
 };
+
+// Deferred until the current response finishes (or immediately when it already
+// has): the decision response and the end of the run's event stream race.
+const planHandoffs = new PlanHandoffDispatcher(
+  (handoff) => void executePlanHandoff(handoff),
+  () => state.streaming,
+);
 
 const elements = {
   app: required<HTMLElement>("app"),
@@ -1329,13 +1336,8 @@ async function sendMessage(queuedContent?: string): Promise<void> {
     if (!detachedActive) {
       closeQuestionDialog();
       closePlanModeDialog();
-      if (pendingPlanHandoff) {
-        const handoff = pendingPlanHandoff;
-        pendingPlanHandoff = null;
-        void executePlanHandoff(handoff);
-      } else {
-        sendQueuedMessage(session.id);
-      }
+      if (planHandoffs.pending) planHandoffs.deliver();
+      else sendQueuedMessage(session.id);
     }
     syncSessionRunUpdates();
     await loadSessionList();
@@ -1539,7 +1541,12 @@ function applySessionEvent(context: SessionStreamContext, event: string, data: u
     if (!session.parentSessionId && state.controller === null) setStreaming(false);
     updateRenderedSession(session);
     setStreamAssistant(context, null);
-    if (!session.parentSessionId && state.controller === null) sendQueuedMessage(session.id);
+    if (!session.parentSessionId && state.controller === null) {
+      // Covers the re-attached observer stream: a detached client's finally
+      // never runs, so the settled stream delivers the handoff here.
+      if (planHandoffs.pending) planHandoffs.deliver();
+      else sendQueuedMessage(session.id);
+    }
   } else if (event === "error") {
     const payload = data as { error: string; message?: Message; session?: Session };
     if (payload.session) {
@@ -2201,10 +2208,14 @@ async function submitPlanModeNewSessionDecision(): Promise<void> {
       renderPlanMode();
     }
     if (result.decision.newSessionId) {
-      pendingPlanHandoff = {
+      // The run ends the moment this decision settles, so the event stream may
+      // already be closed by the time this response arrives: offer() dispatches
+      // immediately when nothing is streaming and defers to the stream's
+      // finally otherwise.
+      planHandoffs.offer({
         sessionId: result.decision.newSessionId,
         prompt: `Execute the plan: ${request.planFilePath}`,
-      };
+      });
     }
     closePlanModeDialog();
   } catch (error) {

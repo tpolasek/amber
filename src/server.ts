@@ -98,6 +98,7 @@ const builtInCommandsScript = join(sourceDirectory, "built-in-commands.js");
 const streamingThinkingScript = join(sourceDirectory, "streaming-thinking.js");
 const toolDisplayScript = join(sourceDirectory, "tool-display.js");
 const thinkingLevelScript = join(sourceDirectory, "thinking-level.js");
+const planHandoffScript = join(sourceDirectory, "plan-handoff.js");
 const markdownScript = join(projectRoot, "node_modules", "markdown-it", "dist", "browser", "markdown-it.umd.min.js");
 const amberDirectory = join(homedir(), ".amber");
 const defaultDataDirectory = join(amberDirectory, "data", "sessions");
@@ -565,6 +566,9 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   }
   if (method === "GET" && url.pathname === "/thinking-level.js") {
     return serveFile(response, thinkingLevelScript, "text/javascript; charset=utf-8", "no-cache");
+  }
+  if (method === "GET" && url.pathname === "/plan-handoff.js") {
+    return serveFile(response, planHandoffScript, "text/javascript; charset=utf-8", "no-cache");
   }
   if (method === "GET" && url.pathname === "/vendor/markdown-it.js") {
     return serveFile(response, markdownScript, "text/javascript; charset=utf-8", "public, max-age=31536000, immutable");

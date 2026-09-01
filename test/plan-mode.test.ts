@@ -20,6 +20,7 @@ import {
   planModeSystemBlock,
   readPlanSnapshot,
 } from "../src/plan-mode.js";
+import { PlanHandoffDispatcher } from "../src/plan-handoff.js";
 
 test("defines strict Claude-compatible plan mode tool contracts", () => {
   assert.equal(ENTER_PLAN_MODE_TOOL.name, "EnterPlanMode");
@@ -125,6 +126,56 @@ test("holds one matching approval request per session and retains rejection feed
     /new linked session \(calm\.meadow\.lake\)/,
   );
   assert.match(formatExitPlanModeNewSessionResult("calm.meadow.lake"), /Do not implement the plan in this session/);
+});
+
+test("plan handoff defers while streaming and dispatches once the stream settles", () => {
+  const delivered: { sessionId: string; prompt: string }[] = [];
+  let streaming = true;
+  const dispatcher = new PlanHandoffDispatcher(
+    (handoff) => delivered.push(handoff),
+    () => streaming,
+  );
+  const handoff = { sessionId: "calm.meadow.lake", prompt: "Execute the plan: /tmp/plan.md" };
+
+  // The decision arrives while the run's event stream is still open.
+  dispatcher.offer(handoff);
+  assert.deepEqual(delivered, []);
+  assert.equal(dispatcher.pending, true);
+
+  // The stream settles and its finalizer delivers the handoff exactly once.
+  streaming = false;
+  dispatcher.deliver();
+  dispatcher.deliver();
+  assert.deepEqual(delivered, [handoff]);
+  assert.equal(dispatcher.pending, false);
+});
+
+test("plan handoff dispatches immediately when the run already ended", () => {
+  const delivered: { sessionId: string; prompt: string }[] = [];
+  const dispatcher = new PlanHandoffDispatcher(
+    (handoff) => delivered.push(handoff),
+    () => false,
+  );
+  const handoff = { sessionId: "calm.meadow.lake", prompt: "Execute the plan: /tmp/plan.md" };
+
+  // Regression: the decision response can arrive after the event stream has
+  // already closed (the run ends the moment the decision settles), so offer()
+  // must dispatch instead of waiting for a finalizer that never runs.
+  dispatcher.offer(handoff);
+  assert.deepEqual(delivered, [handoff]);
+  assert.equal(dispatcher.pending, false);
+});
+
+test("plan handoff deliver is a no-op without a pending handoff or while streaming", () => {
+  const delivered: { sessionId: string; prompt: string }[] = [];
+  const dispatcher = new PlanHandoffDispatcher(
+    (handoff) => delivered.push(handoff),
+    () => true,
+  );
+
+  dispatcher.deliver();
+  assert.deepEqual(delivered, []);
+  assert.equal(dispatcher.pending, false);
 });
 
 test("cleans up pending plan approvals when a run aborts or the manager stops", async () => {
