@@ -20,6 +20,8 @@ test("creates a settings template on first load", async () => {
   assert.match(source, /^# default_agent_provider = ""$/m);
   assert.match(source, /^# default_agent_model = ""$/m);
   assert.match(source, /# model = "<INSERT_AGENT_PROVIDER_SLASH_MODEL_HERE>"/);
+  assert.match(source, /^compact = false # Set to true to enable auto-compaction of the agent's context\.$/m);
+  assert.equal(source.match(/^compact = false$/gm)?.length, 1);
   assert.doesNotMatch(source, /INSERT_AGENT_AUTH/);
   assert.equal((await stat(settingsPath)).mode & 0o777, 0o600);
 });
@@ -190,6 +192,51 @@ test("reports invalid settings fields", async () => {
   }), "utf8");
 
   await assert.rejects(loadSettings(homeDirectory), /compact_tokens must be a positive integer/);
+});
+
+test("loads an optional compaction flag for each agent", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const settingsDirectory = join(homeDirectory, ".amber");
+  await mkdir(settingsDirectory);
+  await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+    providers: {
+      zai: { auth_key: "saved-key", auth_url: "https://example.test", models: {} },
+    },
+    agents: [
+      { type: "compacting", whenToUse: "Search.", systemPrompt: "Search it.", readOnly: false, compact: true },
+      { type: "plain", whenToUse: "Review.", systemPrompt: "Review it.", readOnly: true },
+    ],
+  }), "utf8");
+
+  const agents = (await loadSettings(homeDirectory)).agents;
+  assert.deepEqual(agents[0], {
+    type: "compacting",
+    whenToUse: "Search.",
+    systemPrompt: "Search it.",
+    readOnly: false,
+    compact: true,
+  });
+  assert.equal("compact" in agents[1]!, false);
+});
+
+test("rejects a non-boolean agent compaction flag", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const settingsDirectory = join(homeDirectory, ".amber");
+  await mkdir(settingsDirectory);
+  await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+    providers: {
+      zai: { auth_key: "key", auth_url: "https://example.test", models: {} },
+    },
+    agents: [{
+      type: "compacting",
+      whenToUse: "Search.",
+      systemPrompt: "Search it.",
+      readOnly: false,
+      compact: "yes",
+    }],
+  }), "utf8");
+
+  await assert.rejects(loadSettings(homeDirectory), /agents\[0\]\.compact must be a boolean/);
 });
 
 test("validates configured agent definitions", async () => {

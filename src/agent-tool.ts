@@ -13,6 +13,8 @@ export interface AgentDefinition {
   whenToUse: string;
   systemPrompt: string;
   readOnly: boolean;
+  /** Enables auto-compaction of the agent's context; disabled by default. */
+  compact?: boolean;
   model?: string;
 }
 

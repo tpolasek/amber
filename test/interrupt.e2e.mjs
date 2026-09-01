@@ -161,6 +161,31 @@ function planResponse(payload) {
         }
       : { text: "parent continued without waiting" };
   }
+  if (firstText.includes("AGENT COMPACTION SCENARIO") || firstText.includes("COMPACTING AGENT SCENARIO")) {
+    const compacting = firstText.includes("COMPACTING AGENT SCENARIO");
+    const agentUses = messages
+      .filter((message) => message.role === "assistant" && Array.isArray(message.content))
+      .flatMap((message) => message.content.filter((block) => block.type === "tool_use" && block.name === "Agent"));
+    return agentUses.length === 0
+      ? {
+          tools: [{
+            id: compacting ? "compacting-agent" : "non-compacting-agent",
+            name: "Agent",
+            input: {
+              description: "Compaction behavior child",
+              prompt: compacting ? "AGENT CHILD COMPACT" : "AGENT CHILD NO COMPACT",
+              subagent_type: compacting ? "compacting" : "general-purpose",
+            },
+          }],
+        }
+      : { text: "parent received agent result" };
+  }
+  // Child agent sessions: distinct, verbose bash calls cross the compact
+  // threshold while keeping the parent's own history below it.
+  if (firstText.includes("AGENT CHILD")) {
+    if (bashUses.length >= 10) return { text: "agent child finished" };
+    return { tools: [{ id: `child-bash-${bashUses.length + 1}`, command: `echo ${"x".repeat(300)} ${bashUses.length + 1}` }] };
+  }
   if (firstText.includes("PLAN DECLINE")) {
     return { tools: [{ id: "enter-plan", name: "EnterPlanMode", input: {} }] };
   }
@@ -736,6 +761,49 @@ async function runBackgroundAgentScenario(mock, amber) {
       === "parent received background result");
 }
 
+async function runAgentCompactionScenario(mock, amber) {
+  console.log("\n== agent compaction opt-in");
+  const runAgent = async (parentPrompt) => {
+    mock.reset();
+    const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
+      name: parentPrompt,
+      path: tmpdir(),
+    });
+    const sessionId = body.session.id;
+    const response = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: parentPrompt }),
+    });
+    await readStream(response, () => undefined);
+    const snapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+    const agentCall = snapshot.session.messages
+      .flatMap((message) => message.toolCalls ?? [])
+      .find((call) => call.name === "Agent");
+    const childId = agentCall?.agentSessionId;
+    const child = childId
+      ? await (await fetch(amberUrl(amber.port, `/api/sessions/${childId}`))).json()
+      : undefined;
+    return { child, requests: mock.requests() };
+  };
+
+  const disabled = await runAgent("AGENT COMPACTION SCENARIO");
+  check("agent without compact never auto-compacts",
+    disabled.child?.session?.compaction === undefined
+      && disabled.requests.every((request) => request.tools),
+    JSON.stringify(disabled.child?.session?.compaction ?? null));
+  check("the compact-disabled agent finished its tool loop",
+    disabled.child?.session?.messages
+      .filter((message) => message.role === "assistant").at(-1)?.content === "agent child finished",
+    JSON.stringify(disabled.child?.session?.messages?.at(-1)?.content));
+
+  const enabled = await runAgent("COMPACTING AGENT SCENARIO");
+  check("agent with compact = true auto-compacts its own context",
+    enabled.child?.session?.compaction?.summary === "Summary:\ncompacted context"
+      && enabled.requests.some((request) => !request.tools),
+    JSON.stringify(enabled.child?.session?.compaction?.summary ?? null));
+}
+
 async function runTerminalToolCompactionScenario(mock, amber) {
   console.log("\n== automatic compaction after terminal tool result");
   mock.reset();
@@ -855,6 +923,13 @@ await writeFile(join(runDirectory, "home", ".amber", "settings.toml"), [
   'systemPrompt = "Complete the assigned e2e task."',
   "readOnly = false",
   "",
+  "[[agents]]",
+  'type = "compacting"',
+  'whenToUse = "Run e2e agent scenarios with compaction enabled."',
+  'systemPrompt = "Complete the assigned e2e task."',
+  "readOnly = false",
+  "compact = true",
+  "",
 ].join("\n"));
 
 const mock = createMockProvider();
@@ -877,6 +952,7 @@ try {
 
   await runQueuedCommandScenario(mock, amber);
   await runBackgroundAgentScenario(mock, amber);
+  await runAgentCompactionScenario(mock, amber);
   await runAutomaticCompactionScenario(mock, amber);
   await runFailedCompactionDetachedObserverScenario(mock, amber);
   await runDeleteDuringCompactionScenario(mock, amber);

@@ -1820,6 +1820,8 @@ async function listDirectoryCompletions(response: ServerResponse, sessionId: str
 
 function shouldAutoCompactSession(session: Session): boolean {
   if (!compactionTarget(session)) return false;
+  // Agent sub-sessions only compact when the agent opts in; disabled by default.
+  if (session.agentType && !agentDefinitions.find((agent) => agent.type === session.agentType)?.compact) return false;
   const compactTokens = providerCatalog.model(session.model).compactTokens;
   const history = buildProviderHistory(session.messages, undefined, session.compaction);
   return shouldAutoCompact(compactTokens, sessionContextTokens(session), history);

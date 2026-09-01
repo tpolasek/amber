@@ -270,6 +270,9 @@ function parseAgentDefinitions(value: unknown, settingsPath: string): AgentDefin
     if (typeof agent.readOnly !== "boolean") {
       throw new Error(`${settingsPath}: agents[${index}].readOnly must be a boolean`);
     }
+    if (agent.compact !== undefined && typeof agent.compact !== "boolean") {
+      throw new Error(`${settingsPath}: agents[${index}].compact must be a boolean`);
+    }
     if (agent.auth_key !== undefined || agent.auth_url !== undefined) {
       throw new Error(`${settingsPath}: agents[${index}] must use model = "provider/model" instead of auth_key or auth_url`);
     }
@@ -282,6 +285,7 @@ function parseAgentDefinitions(value: unknown, settingsPath: string): AgentDefin
       whenToUse: (agent.whenToUse as string).trim(),
       systemPrompt: agent.systemPrompt as string,
       readOnly: agent.readOnly,
+      ...(typeof agent.compact === "boolean" ? { compact: agent.compact } : {}),
       ...(typeof agent.model === "string" ? { model: agent.model.trim() } : {}),
     };
   });

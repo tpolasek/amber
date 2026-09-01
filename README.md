@@ -101,12 +101,13 @@ type = "explore"
 whenToUse = "Search and inspect a codebase."
 systemPrompt = "Inspect the requested code and return concise findings."
 readOnly = true
+compact = false          # Optional; enables auto-compaction of the agent's context (disabled by default).
 model = "zai/glm-5.3" # Optional; overrides the global agent defaults.
 ```
 
 The theme is applied when Amber starts. Change **theme** and restart Amber to switch palettes.
 
-Provider credentials belong under **[providers.\<name>]**, never under an agent. API-key provider configuration comes from **settings.toml**; no environment variables are used. **api** selects the provider's protocol: **"anthropic"** (the default) or **"openai"**. OpenAI-protocol providers accept slashed model ids such as **xiaomi/mimo-v2-pro**, so OpenRouter-style backends work. Models in `[[agents]]` are referenced as **provider/model**. Agent model precedence is the per-agent `model`, then `default_agent_model` within `default_agent_provider`, then that provider's default model; without agent defaults, agents inherit the session model. Select a session's model from the model name in the browser's top-right corner.
+Provider credentials belong under **[providers.\<name>]**, never under an agent. API-key provider configuration comes from **settings.toml**; no environment variables are used. **api** selects the provider's protocol: **"anthropic"** (the default) or **"openai"**. OpenAI-protocol providers accept slashed model ids such as **xiaomi/mimo-v2-pro**, so OpenRouter-style backends work. Models in `[[agents]]` are referenced as **provider/model**. Agent model precedence is the per-agent `model`, then `default_agent_model` within `default_agent_provider`, then that provider's default model; without agent defaults, agents inherit the session model. Select a session's model from the model name in the browser's top-right corner. Set an agent's **compact** to **true** to auto-compact its context at the model's **compact_tokens** threshold; agents never auto-compact otherwise.
 
 ### ChatGPT Plus/Pro OAuth for OpenAI Codex
 

@@ -37,6 +37,7 @@ export const SETTINGS_TEMPLATE = {
 
 ${SHARED_AGENT_GUIDELINES}`,
       readOnly: false,
+      compact: false,
     },
     {
       type: "code-review",
@@ -55,6 +56,7 @@ Rules:
 - If there are no logic bugs or errors, say exactly: No logic bugs or errors found.
 - Return only the findings (or the no-findings sentence), with no praise, summary, or preamble.`,
       readOnly: true,
+      compact: false,
     },
   ],
 } as const;
@@ -63,7 +65,8 @@ export const SETTINGS_TEMPLATE_SOURCE = `${stringify(SETTINGS_TEMPLATE).trimEnd(
   .replace('theme = "dark"', 'theme = "dark" # dark (current Amber), light (Solarized Light), light+ (VS Code Light+), or hacker (terminal green)')
   .replace('default_provider = "default"', `default_provider = "default"
 # default_agent_provider = ""
-# default_agent_model = ""`)}
+# default_agent_model = ""`)
+  .replace('compact = false', `compact = false # Set to true to enable auto-compaction of the agent's context.`)}
 # model = "<INSERT_AGENT_PROVIDER_SLASH_MODEL_HERE>"
 
 # The provider above uses the Anthropic Messages API (api = "anthropic", the default).
