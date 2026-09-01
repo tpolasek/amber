@@ -2297,7 +2297,7 @@ async function serveFile(
     "content-type": contentType,
     "cache-control": cacheControl,
     "x-content-type-options": "nosniff",
-    "content-security-policy": "default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'",
+    "content-security-policy": "default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:",
   });
   response.end(content);
 }
