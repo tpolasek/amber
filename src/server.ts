@@ -738,6 +738,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     snapshotSave = snapshotSave.then(() => store.save(snapshot));
     return snapshotSave;
   };
+  let stopReason = "";
   try {
     let allowedDirectories = sessionDirectories(session);
     const currentDirectory = sessionWorkingDirectory(session);
@@ -746,6 +747,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     let turnModel: string | undefined;
     let turnEffort: ThinkingLevel | undefined;
     for (;;) {
+      stopReason = "";
       const agentNotifications = await completedBackgroundAgentNotifications(session);
       if (agentNotifications.length > 0) {
         const assistantIndex = session.messages.findIndex((message) => message.id === assistantMessage.id);
@@ -799,6 +801,8 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           if (draft) draft.inputJson += event.partialJson;
         } else if (event.type === "usage") {
           usage = { ...usage, ...event.usage };
+        } else if (event.type === "done" && event.stopReason !== undefined) {
+          stopReason = event.stopReason;
         }
       }
 
@@ -1403,7 +1407,9 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     await snapshotSave;
     if (assistantMessage.status === "streaming") {
       assistantMessage.status = "error";
-      if (!assistantMessage.content) assistantMessage.content = "Response interrupted.";
+      if (!assistantMessage.content) {
+        assistantMessage.content = `Response interrupted${stopReason ? `: ${interruptionStopReason(stopReason) ?? stopReason}` : ""}.`;
+      }
     }
     if (session.parentSessionId) session.agentStatus = "error";
     await store.save(session);
@@ -1801,7 +1807,10 @@ async function runSessionPrompt(sessionId: string, prompt: string, signal: Abort
         if (!data) continue;
         const payload = JSON.parse(data) as { error?: string; message?: Message };
         if (event === "done") result = payload.message?.content ?? "";
-        if (event === "error") throw new Error(payload.error ?? "Session failed");
+        if (event === "error") {
+          const content = payload.message?.content?.trim() ?? "";
+          throw new Error(content.startsWith("Response interrupted") ? content : payload.error ?? "Session failed");
+        }
       }
       if (done) break;
     }
@@ -2354,6 +2363,19 @@ async function resolveBuildVersion(): Promise<string> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown provider error";
+}
+
+function interruptionStopReason(stopReason: string | undefined): string | undefined {
+  switch (stopReason) {
+    case "max_tokens":
+    case "length":
+    case "max_output_tokens":
+      return "Ran out of tokens";
+    case "content_filter":
+      return "Blocked by content filter";
+    default:
+      return undefined;
+  }
 }
 
 function throwIfSessionAborted(signal: AbortSignal): void {
