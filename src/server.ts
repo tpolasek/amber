@@ -1424,7 +1424,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     }
     if (session.parentSessionId) session.agentStatus = "error";
     await store.save(session);
-    const message = error instanceof Error && error.name === "AbortError" ? "Generation stopped" : errorMessage(error);
+    const message = error instanceof Error && error.name === "AbortError" ? "Session aborted" : errorMessage(error);
     if (!response.writableEnded) emit("error", { error: message, message: assistantMessage, session });
   } finally {
     automaticNameRuns.get(sessionId)?.listeners.delete(onAutomaticName);

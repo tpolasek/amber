@@ -695,7 +695,7 @@ async function runDisconnectedClientScenario(mock, amber) {
   const finalSnapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${abortSessionId}`))).json();
   check("the aborted run is no longer active", finalSnapshot.active === false);
   check("the aborted run reported the stop to observers",
-    abortEvents.some((event) => event.event === "error" && event.error === "Generation stopped"),
+    abortEvents.some((event) => event.event === "error" && event.error === "Session aborted"),
     JSON.stringify(abortEvents.filter((event) => event.event === "error")));
   await abortObserverRead.catch(() => undefined);
 }
