@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { browserUrl, openBrowser } from "./browser-launch.js";
+import { listenErrorMessage, parseCliCommand, usageText } from "./cli.js";
 import { builtInCommand } from "./built-in-commands.js";
 import { SessionStore } from "./store.js";
 import { ProviderCatalog } from "./provider-catalog.js";
@@ -93,6 +94,22 @@ const isPackaged = Boolean((process as NodeJS.Process & { pkg?: unknown }).pkg);
 const workspaceRoot = await realpath(isPackaged ? process.cwd() : projectRoot);
 const publicDirectory = join(projectRoot, "public");
 const buildVersion = await resolveBuildVersion();
+
+const cliCommand = parseCliCommand(process.argv.slice(2));
+if (cliCommand.kind === "help") {
+  console.log(usageText());
+  process.exit(0);
+}
+if (cliCommand.kind === "version") {
+  console.log(buildVersion);
+  process.exit(0);
+}
+if (cliCommand.kind === "unknown") {
+  console.error(`amber: unrecognised argument '${cliCommand.argument}'\n`);
+  console.error(usageText());
+  process.exit(2);
+}
+
 const clientScript = join(sourceDirectory, "client.js");
 const clientFormattersScript = join(sourceDirectory, "client-formatters.js");
 const builtInCommandsScript = join(sourceDirectory, "built-in-commands.js");
@@ -147,6 +164,15 @@ const server = createServer(async (request, response) => {
     if (!response.headersSent) json(response, 500, { error: "Internal server error" });
     else response.end();
   }
+});
+
+server.on("error", (error: NodeJS.ErrnoException) => {
+  const message = listenErrorMessage(error, host, port)
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n");
+  console.error(`\n${message}\n`);
+  process.exit(1);
 });
 
 server.listen(port, host, () => {
