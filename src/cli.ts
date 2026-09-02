@@ -55,3 +55,19 @@ export function listenErrorMessage(error: unknown, host: string, port: number): 
   const detail = error instanceof Error ? error.message : String(error);
   return `AMBER cannot start: failed to listen on ${address}. ${detail}`;
 }
+
+export function startupErrorMessage(error: unknown, settingsPath: string): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  const prefix = `${settingsPath}: `;
+  if (detail.startsWith(prefix)) {
+    return [
+      `AMBER cannot start: ${settingsPath} is not valid.`,
+      detail.slice(prefix.length),
+      `Edit ${settingsPath} and run amber again.`,
+    ].join("\n");
+  }
+  return [
+    `AMBER cannot start: ${detail}`,
+    `Check ${settingsPath} and run amber again.`,
+  ].join("\n");
+}

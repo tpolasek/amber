@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { listenErrorMessage, parseCliCommand, usageText } from "../src/cli.js";
+import { listenErrorMessage, parseCliCommand, startupErrorMessage, usageText } from "../src/cli.js";
 
 test("no arguments starts the server", () => {
   assert.deepEqual(parseCliCommand([]), { kind: "start" });
@@ -54,4 +54,29 @@ test("any other listen failure still reports the underlying error", () => {
   const message = listenErrorMessage(error, "10.0.0.1", 3000);
   assert.match(message, /10\.0\.0\.1:3000/);
   assert.match(message, /EADDRNOTAVAIL/);
+});
+
+test("an invalid settings file is reported without a stack trace", () => {
+  const settingsPath = "/home/user/.amber/settings.toml";
+  const error = new Error(`${settingsPath}: providers.openai-codex: openai-codex auth requires default_model or at least one explicit model`);
+  const message = startupErrorMessage(error, settingsPath);
+  assert.match(message, /AMBER cannot start/);
+  assert.match(message, /settings\.toml is not valid/);
+  assert.match(message, /openai-codex auth requires default_model/);
+  assert.match(message, /Edit \/home\/user\/\.amber\/settings\.toml and run amber again\./);
+  assert.doesNotMatch(message, new RegExp(`${settingsPath}: providers`));
+});
+
+test("a startup failure outside the settings file keeps its own wording", () => {
+  const settingsPath = "/home/user/.amber/settings.toml";
+  const error = new Error("Could not discover models for provider 'openai': fetch failed");
+  const message = startupErrorMessage(error, settingsPath);
+  assert.match(message, /AMBER cannot start: Could not discover models for provider 'openai': fetch failed/);
+  assert.match(message, /\/home\/user\/\.amber\/settings\.toml/);
+  assert.doesNotMatch(message, /is not valid/);
+});
+
+test("a non-error startup failure is still reported readably", () => {
+  const message = startupErrorMessage("boom", "/home/user/.amber/settings.toml");
+  assert.match(message, /AMBER cannot start: boom/);
 });

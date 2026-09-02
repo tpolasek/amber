@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { browserUrl, openBrowser } from "./browser-launch.js";
-import { listenErrorMessage, parseCliCommand, usageText } from "./cli.js";
+import { listenErrorMessage, parseCliCommand, startupErrorMessage, usageText } from "./cli.js";
 import { builtInCommand } from "./built-in-commands.js";
 import { SessionStore } from "./store.js";
 import { ProviderCatalog } from "./provider-catalog.js";
@@ -128,11 +128,12 @@ const store = new SessionStore(dataDirectory, planDirectory);
 const authStorage = new AuthStorage(join(amberDirectory, "auth.json"));
 const openAICodexAuth = new OpenAICodexAuth({ storage: authStorage });
 const authActionToken = randomUUID();
-const settings = await loadSettings();
+const settingsPath = join(amberDirectory, "settings.toml");
+const settings = await startupStep(() => loadSettings());
 const agentDefinitions = settings.agents;
-let providerCatalog = await loadProviderCatalog();
-let provider = providerCatalog.provider(undefined);
-validateAgentModels(providerCatalog);
+let providerCatalog = await startupStep(() => loadProviderCatalog());
+let provider = await startupStep(() => providerCatalog.provider(undefined));
+await startupStep(() => validateAgentModels(providerCatalog));
 const loginCatalogActivations = new Map<string, Promise<void>>();
 const claudeCodeTools = createClaudeCodeTools(agentDefinitions);
 const activeSessions = new ActiveSessionRuns();
@@ -167,12 +168,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.on("error", (error: NodeJS.ErrnoException) => {
-  const message = listenErrorMessage(error, host, port)
-    .split("\n")
-    .map((line) => `  ${line}`)
-    .join("\n");
-  console.error(`\n${message}\n`);
-  process.exit(1);
+  exitWithMessage(listenErrorMessage(error, host, port));
 });
 
 server.listen(port, host, () => {
@@ -2154,6 +2150,22 @@ async function readJson(request: IncomingMessage, maxBytes = 1_000_000): Promise
 function json(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   response.end(JSON.stringify(body));
+}
+
+// Startup runs at module scope, so a configuration error would otherwise escape as
+// an unhandled rejection and print a stack trace instead of something actionable.
+async function startupStep<T>(work: () => Promise<T> | T): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    exitWithMessage(startupErrorMessage(error, settingsPath));
+  }
+}
+
+function exitWithMessage(message: string): never {
+  const indented = message.split("\n").map((line) => `  ${line}`).join("\n");
+  console.error(`\n${indented}\n`);
+  process.exit(1);
 }
 
 async function loadProviderCatalog(): Promise<ProviderCatalog> {
