@@ -282,7 +282,7 @@ function wireEvents(): void {
     if (handleGitDialogKeydown(event)) return;
     if (handleSessionDialogKeydown(event)) return;
     if (handleModelDialogKeydown(event)) return;
-    if (event.key === "Escape" && state.streaming && !state.session?.parentSessionId) {
+    if (event.key === "Escape" && (state.streaming || isAgentSessionRunning())) {
       event.preventDefault();
       handleEscapeAbort();
       return;
@@ -422,7 +422,7 @@ function wireEvents(): void {
   elements.prompt.addEventListener("focus", stickScrollToBottom);
   elements.composer.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (state.streaming) abortCurrentSession();
+    if (state.streaming || isAgentSessionRunning()) abortCurrentSession();
     else void sendMessage();
   });
   elements.queue.addEventListener("click", () => void queueCurrentMessage());
@@ -1800,9 +1800,15 @@ function handleEscapeAbort(): void {
   abortCurrentSession();
 }
 
+function isAgentSessionRunning(): boolean {
+  const session = state.session;
+  return Boolean(session?.parentSessionId) && (session!.agentStatus === "running"
+    || session!.messages.some((message) => message.status === "streaming"));
+}
+
 function abortCurrentSession(): void {
   const session = state.session;
-  if (!session || session.parentSessionId || state.aborting) return;
+  if (!session || state.aborting) return;
   const wasStreaming = state.streaming;
   state.aborting = true;
   void fetch(`/api/sessions/${session.id}/abort`, { method: "POST" })
@@ -2776,7 +2782,6 @@ function renderSession(): void {
     renderedTranscriptSessionId = session.id;
     transcriptScrollPin.reset();
   }
-  elements.composerShell.hidden = Boolean(session.parentSessionId);
   elements.emptyState.hidden = session.messages.length > 0;
   for (const message of session.messages) {
     if (message.kind !== "tool-result" && message.kind !== "skill" && message.kind !== "agent-notification") {
@@ -2786,6 +2791,7 @@ function renderSession(): void {
   resetPromptHistory();
   closeHistorySearch(false);
   renderHeader();
+  renderComposer();
   renderPlanMode();
   renderPlanningTasks();
   renderContextMeter();
@@ -2835,9 +2841,9 @@ function updateRenderedSession(session: Session): void {
     }
   }
 
-  elements.composerShell.hidden = Boolean(session.parentSessionId);
   elements.emptyState.hidden = session.messages.length > 0;
   renderHeader();
+  renderComposer();
   renderPlanMode();
   renderPlanningTasks();
   renderContextMeter();
@@ -3385,6 +3391,28 @@ function setStreaming(streaming: boolean): void {
   elements.prompt.disabled = false;
   renderModelStatus();
   renderPlanMode();
+}
+
+/**
+ * Agent sub-sessions are read-only: the prompt is disabled and the composer is
+ * hidden except while the agent runs, where the stop button is shown so the
+ * user can abort just that agent.
+ */
+function renderComposer(): void {
+  const session = state.session!;
+  if (!session.parentSessionId) {
+    elements.composerShell.hidden = false;
+    elements.attachButton.hidden = false;
+    return;
+  }
+  const running = session.agentStatus === "running"
+    || session.messages.some((message) => message.status === "streaming");
+  elements.composerShell.hidden = !running;
+  elements.attachButton.hidden = true;
+  elements.queue.hidden = true;
+  elements.prompt.disabled = true;
+  elements.submit.classList.toggle("stop", running);
+  elements.submit.querySelector("span")!.textContent = running ? "STOP" : "SEND";
 }
 
 function setBusy(busy: boolean): void {

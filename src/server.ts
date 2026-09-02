@@ -139,6 +139,7 @@ const claudeCodeTools = createClaudeCodeTools(agentDefinitions);
 const activeSessions = new ActiveSessionRuns();
 const queuedSessionMessages = new SessionInputPriorityQueue();
 const interruptibleSessions = new Set<string>();
+const manuallyAbortedSessions = new Set<string>();
 const backgroundTasks = new BackgroundTaskManager();
 const askUserQuestions = new AskUserQuestionManager();
 const planModeApprovals = new PlanModeApprovalManager();
@@ -378,7 +379,10 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   if (method === "POST" && abortMatch?.[1]) {
     const session = await store.get(abortMatch[1]);
     if (!session) return json(response, 404, { error: "Session not found" });
-    if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
+    // A manually aborted agent records "User manually stopped the agent" as its
+    // failure reason; only mark sub-sessions so the main session keeps its
+    // generic interruption text.
+    if (session.parentSessionId) manuallyAbortedSessions.add(session.id);
     const { sessionIds, backgroundTaskIds } = await abortSessionOperations(
       session.id,
       activeSessions,
@@ -386,6 +390,10 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       () => store.family(session.id),
       (sessionId) => compactionRuns.get(sessionId)?.controller.abort(),
     );
+    // If there was no active run to stop, drop the mark so it cannot linger.
+    if (session.parentSessionId && !sessionIds.includes(session.id)) {
+      manuallyAbortedSessions.delete(session.id);
+    }
     return json(response, 200, {
       aborted: sessionIds.length > 0 || backgroundTaskIds.length > 0,
       sessionIds,
@@ -1408,7 +1416,10 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     if (assistantMessage.status === "streaming") {
       assistantMessage.status = "error";
       if (!assistantMessage.content) {
-        assistantMessage.content = `Response interrupted${stopReason ? `: ${interruptionStopReason(stopReason) ?? stopReason}` : ""}.`;
+        const manualReason = manuallyAbortedSessions.delete(sessionId)
+          ? "User manually stopped the agent"
+          : stopReason ? interruptionStopReason(stopReason) ?? stopReason : "";
+        assistantMessage.content = `Response interrupted${manualReason ? `: ${manualReason}` : ""}.`;
       }
     }
     if (session.parentSessionId) session.agentStatus = "error";
@@ -1421,6 +1432,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     // this run has finished.
     queuedSessionMessages.clear(sessionId);
     interruptibleSessions.delete(sessionId);
+    manuallyAbortedSessions.delete(sessionId);
     activeSessions.unregister(sessionId, controller);
     response.end();
   }
