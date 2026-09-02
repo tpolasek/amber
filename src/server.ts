@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { browserUrl, openBrowser } from "./browser-launch.js";
+import { listenErrorMessage, parseCliCommand, startupErrorMessage, usageText } from "./cli.js";
 import { builtInCommand } from "./built-in-commands.js";
 import { SessionStore } from "./store.js";
 import { ProviderCatalog } from "./provider-catalog.js";
@@ -93,6 +94,22 @@ const isPackaged = Boolean((process as NodeJS.Process & { pkg?: unknown }).pkg);
 const workspaceRoot = await realpath(isPackaged ? process.cwd() : projectRoot);
 const publicDirectory = join(projectRoot, "public");
 const buildVersion = await resolveBuildVersion();
+
+const cliCommand = parseCliCommand(process.argv.slice(2));
+if (cliCommand.kind === "help") {
+  console.log(usageText());
+  process.exit(0);
+}
+if (cliCommand.kind === "version") {
+  console.log(buildVersion);
+  process.exit(0);
+}
+if (cliCommand.kind === "unknown") {
+  console.error(`amber: unrecognised argument '${cliCommand.argument}'\n`);
+  console.error(usageText());
+  process.exit(2);
+}
+
 const clientScript = join(sourceDirectory, "client.js");
 const clientFormattersScript = join(sourceDirectory, "client-formatters.js");
 const builtInCommandsScript = join(sourceDirectory, "built-in-commands.js");
@@ -111,11 +128,12 @@ const store = new SessionStore(dataDirectory, planDirectory);
 const authStorage = new AuthStorage(join(amberDirectory, "auth.json"));
 const openAICodexAuth = new OpenAICodexAuth({ storage: authStorage });
 const authActionToken = randomUUID();
-const settings = await loadSettings();
+const settingsPath = join(amberDirectory, "settings.toml");
+const settings = await startupStep(() => loadSettings());
 const agentDefinitions = settings.agents;
-let providerCatalog = await loadProviderCatalog();
-let provider = providerCatalog.provider(undefined);
-validateAgentModels(providerCatalog);
+let providerCatalog = await startupStep(() => loadProviderCatalog());
+let provider = await startupStep(() => providerCatalog.provider(undefined));
+await startupStep(() => validateAgentModels(providerCatalog));
 const loginCatalogActivations = new Map<string, Promise<void>>();
 const claudeCodeTools = createClaudeCodeTools(agentDefinitions);
 const activeSessions = new ActiveSessionRuns();
@@ -147,6 +165,10 @@ const server = createServer(async (request, response) => {
     if (!response.headersSent) json(response, 500, { error: "Internal server error" });
     else response.end();
   }
+});
+
+server.on("error", (error: NodeJS.ErrnoException) => {
+  exitWithMessage(listenErrorMessage(error, host, port));
 });
 
 server.listen(port, host, () => {
@@ -2128,6 +2150,22 @@ async function readJson(request: IncomingMessage, maxBytes = 1_000_000): Promise
 function json(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   response.end(JSON.stringify(body));
+}
+
+// Startup runs at module scope, so a configuration error would otherwise escape as
+// an unhandled rejection and print a stack trace instead of something actionable.
+async function startupStep<T>(work: () => Promise<T> | T): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    exitWithMessage(startupErrorMessage(error, settingsPath));
+  }
+}
+
+function exitWithMessage(message: string): never {
+  const indented = message.split("\n").map((line) => `  ${line}`).join("\n");
+  console.error(`\n${indented}\n`);
+  process.exit(1);
 }
 
 async function loadProviderCatalog(): Promise<ProviderCatalog> {
