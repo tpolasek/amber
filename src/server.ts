@@ -380,9 +380,10 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     const session = await store.get(abortMatch[1]);
     if (!session) return json(response, 404, { error: "Session not found" });
     // A manually aborted agent records "User manually stopped the agent" as its
-    // failure reason; only mark sub-sessions so the main session keeps its
-    // generic interruption text.
-    if (session.parentSessionId) manuallyAbortedSessions.add(session.id);
+    // failure reason. Mark only sub-sessions with an active run: the run's own
+    // catch/finally consumes the mark, so it can neither leak to a later run
+    // nor be dropped by a racing second abort request.
+    if (session.parentSessionId && activeSessions.has(session.id)) manuallyAbortedSessions.add(session.id);
     const { sessionIds, backgroundTaskIds } = await abortSessionOperations(
       session.id,
       activeSessions,
@@ -390,10 +391,6 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       () => store.family(session.id),
       (sessionId) => compactionRuns.get(sessionId)?.controller.abort(),
     );
-    // If there was no active run to stop, drop the mark so it cannot linger.
-    if (session.parentSessionId && !sessionIds.includes(session.id)) {
-      manuallyAbortedSessions.delete(session.id);
-    }
     return json(response, 200, {
       aborted: sessionIds.length > 0 || backgroundTaskIds.length > 0,
       sessionIds,
@@ -828,6 +825,14 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           draft.call.status = "error";
           draft.call.output = `Invalid tool input: ${errorMessage(error)}`;
         }
+      }
+      // A response that hit a token limit or content filter still completes
+      // its stream normally; surface the truncation on the message itself.
+      const cutOffReason = toolDrafts.size === 0 ? interruptionStopReason(stopReason) : undefined;
+      if (cutOffReason) {
+        assistantMessage.content = assistantMessage.content
+          ? `${assistantMessage.content}\n\n${interruptionText(cutOffReason)}`
+          : interruptionText(cutOffReason);
       }
       await store.save(session);
       emit("assistant_complete", { message: assistantMessage });
@@ -1417,10 +1422,9 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     if (assistantMessage.status === "streaming") {
       assistantMessage.status = "error";
       if (!assistantMessage.content) {
-        const manualReason = manuallyStopped
-          ? "User manually stopped the agent"
-          : stopReason ? interruptionStopReason(stopReason) ?? stopReason : "";
-        assistantMessage.content = `Response interrupted${manualReason ? `: ${manualReason}` : ""}.`;
+        assistantMessage.content = interruptionText(
+          manuallyStopped ? MANUAL_AGENT_STOP_TEXT : interruptionStopReason(stopReason),
+        );
       }
     }
     if (session.parentSessionId) session.agentStatus = manuallyStopped ? "stopped" : "error";
@@ -1825,7 +1829,7 @@ async function runSessionPrompt(sessionId: string, prompt: string, signal: Abort
         if (event === "done") result = payload.message?.content ?? "";
         if (event === "error") {
           const content = payload.message?.content?.trim() ?? "";
-          throw new Error(content.startsWith("Response interrupted") ? content : payload.error ?? "Session failed");
+          throw new Error(content.startsWith(RESPONSE_INTERRUPTED_TEXT) ? content : payload.error ?? "Session failed");
         }
       }
       if (done) break;
@@ -2381,10 +2385,24 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown provider error";
 }
 
-function isManualAgentStop(error: unknown): boolean {
-  return errorMessage(error).startsWith("Response interrupted: User manually stopped the agent");
+/** Prefix of every synthetic "the response did not finish" message content. */
+const RESPONSE_INTERRUPTED_TEXT = "Response interrupted";
+/** Interruption reason recorded when the user stops an agent sub-session. */
+const MANUAL_AGENT_STOP_TEXT = "User manually stopped the agent";
+
+function interruptionText(reason: string | undefined): string {
+  return `${RESPONSE_INTERRUPTED_TEXT}${reason ? `: ${reason}` : ""}.`;
 }
 
+function isManualAgentStop(error: unknown): boolean {
+  return errorMessage(error).startsWith(`${RESPONSE_INTERRUPTED_TEXT}: ${MANUAL_AGENT_STOP_TEXT}`);
+}
+
+/**
+ * Maps a provider stop reason to a user-facing reason the response was cut
+ * short. Unmapped reasons are normal completions (end_turn, tool_use) and must
+ * not leak into message content.
+ */
 function interruptionStopReason(stopReason: string | undefined): string | undefined {
   switch (stopReason) {
     case "max_tokens":

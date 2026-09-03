@@ -96,7 +96,7 @@ function createMockProvider() {
         }
         frame({
           type: "message_delta",
-          delta: { stop_reason: (plan.tools?.length ?? 0) > 0 ? "tool_use" : "end_turn" },
+          delta: { stop_reason: plan.stopReason ?? ((plan.tools?.length ?? 0) > 0 ? "tool_use" : "end_turn") },
           usage: { input_tokens: 10, output_tokens: 2 },
         });
         response.end();
@@ -141,6 +141,9 @@ function planResponse(payload) {
     : Array.isArray(firstUser?.content) ? firstUser.content.map((block) => block.text ?? "").join(" ") : "";
   if (firstText.includes("BACKGROUND CHILD DELAY")) {
     return { text: "background child complete", delayMs: 1_500 };
+  }
+  if (firstText.includes("MAX TOKENS SCENARIO")) {
+    return { text: "partial response before the limit", stopReason: "max_tokens" };
   }
   if (firstText.includes("STOPPED CHILD DELAY")) {
     return { text: "background child complete", delayMs: 3_000 };
@@ -837,6 +840,29 @@ async function runStoppedBackgroundAgentScenario(mock, amber) {
       && notification.content.includes("User manually stopped the agent"), notification?.content);
 }
 
+async function runTruncatedResponseScenario(mock, amber) {
+  console.log("\n== token-limited provider response");
+  mock.reset();
+  const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
+    name: "token-limited provider response",
+    path: tmpdir(),
+  });
+  const sessionId = body.session.id;
+  const response = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content: "MAX TOKENS SCENARIO" }),
+  });
+  await readStream(response, () => undefined);
+  const snapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+  const last = snapshot.session.messages.filter((message) => message.role === "assistant").at(-1);
+  check("a token-limited response records why it was cut off",
+    last?.content === "partial response before the limit\n\nResponse interrupted: Ran out of tokens.",
+    JSON.stringify(last?.content));
+  check("a token-limited response still ends its turn normally",
+    snapshot.active === false, JSON.stringify(snapshot.active));
+}
+
 async function runAgentCompactionScenario(mock, amber) {
   console.log("\n== agent compaction opt-in");
   const runAgent = async (parentPrompt) => {
@@ -1029,6 +1055,7 @@ try {
   await runQueuedCommandScenario(mock, amber);
   await runBackgroundAgentScenario(mock, amber);
   await runStoppedBackgroundAgentScenario(mock, amber);
+  await runTruncatedResponseScenario(mock, amber);
   await runAgentCompactionScenario(mock, amber);
   await runAutomaticCompactionScenario(mock, amber);
   await runFailedCompactionDetachedObserverScenario(mock, amber);
