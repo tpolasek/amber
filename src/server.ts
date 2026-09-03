@@ -48,7 +48,7 @@ import { completeDirectories, completeDirectoryRoots, completeFiles } from "./di
 import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
 import { AGENT_TOOL_NAME, getAgentDefinition, parseAgentInput, resolveAgentModel, startAgentRuns } from "./agent-tool.js";
 import { ActiveSessionRuns, abortSessionOperations } from "./session-aborts.js";
-import { SessionInputPriorityQueue } from "./session-queue.js";
+import { SessionInputPriorityQueue, type QueuedSessionInput } from "./session-queue.js";
 import {
   ASK_USER_QUESTION_TOOL_NAME,
   AskUserQuestionManager,
@@ -851,9 +851,10 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         }
       }
       const pendingSkillMessages: Message[] = [];
-      // Read the interruption before starting same-turn Agent calls: agents are
-      // eager promises and may have side effects as soon as they are created.
-      const interruptions = queuedSessionMessages.takeReady(sessionId);
+      // Queued input is deliberately NOT read here: input that arrived while
+      // the model was streaming may not kill the call that stream produced.
+      // It is drained after the batch's first tool result below.
+      const interruptions: QueuedSessionInput[] = [];
       const takeReadyInputs = (): void => {
         interruptions.push(...queuedSessionMessages.takeReady(sessionId));
         interruptions.sort((left, right) => left.priority - right.priority);
@@ -868,7 +869,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         return pending;
       };
       const agentRuns = startAgentRuns(
-        orderedCalls.filter((call) => interruptions.length === 0 && call.name === AGENT_TOOL_NAME && call.status !== "error"),
+        orderedCalls.filter((call) => call.name === AGENT_TOOL_NAME && call.status !== "error"),
         (call) => executeAgentCall(
           session,
           call,
@@ -882,8 +883,11 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       );
 
       // Queued input interrupts the run at a tool boundary: the call in flight
-      // finishes and everything not started yet is skipped. A message then
-      // continues the model turn; a command returns control to the client.
+      // finishes and everything not started yet is skipped. Input queued while
+      // the model streamed this response counts the batch's first call as the
+      // one in flight, so a just-streamed write executes before the interrupt
+      // is honored. A message then continues the model turn; a command returns
+      // control to the client.
       let endTurnAfterToolResult = false;
       for (const call of orderedCalls) {
         throwIfSessionAborted(controller.signal);

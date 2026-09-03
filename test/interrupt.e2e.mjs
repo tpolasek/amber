@@ -94,12 +94,18 @@ function createMockProvider() {
           frame({ type: "content_block_stop", index });
           index += 1;
         }
-        frame({
-          type: "message_delta",
-          delta: { stop_reason: plan.stopReason ?? ((plan.tools?.length ?? 0) > 0 ? "tool_use" : "end_turn") },
-          usage: { input_tokens: 10, output_tokens: 2 },
-        });
-        response.end();
+        const finish = () => {
+          frame({
+            type: "message_delta",
+            delta: { stop_reason: plan.stopReason ?? ((plan.tools?.length ?? 0) > 0 ? "tool_use" : "end_turn") },
+            usage: { input_tokens: 10, output_tokens: 2 },
+          });
+          response.end();
+        };
+        // holdOpenMs keeps the response streaming after its tool calls are
+        // complete, modeling a slow model that spent effort on the request.
+        if (plan.holdOpenMs) setTimeout(finish, plan.holdOpenMs);
+        else finish();
       };
       if (plan.delayMs) setTimeout(respond, plan.delayMs);
       else respond();
@@ -144,6 +150,9 @@ function planResponse(payload) {
   }
   if (firstText.includes("MAX TOKENS SCENARIO")) {
     return { text: "partial response before the limit", stopReason: "max_tokens" };
+  }
+  if (firstText.includes("STREAM HOLD")) {
+    return { tools: [{ id: "stream-hold-bash", command: "echo held" }], holdOpenMs: 1_500 };
   }
   if (firstText.includes("STOPPED CHILD DELAY")) {
     return { text: "background child complete", delayMs: 3_000 };
@@ -400,6 +409,60 @@ async function runScenario(mock, amber, label, prompt, waitMode) {
     afterInterrupt.messages.some((message) => message.role === "user" && message.content === INTERRUPT_TEXT));
 
   return { skipped, sessionId };
+}
+
+/**
+ * The reported case: the model streams a tool call (spending real effort on
+ * the request) while the response is still open, and the user queues a message
+ * in that window. The streamed call must execute; the interrupt lands right
+ * after it finishes instead of killing the write with "NOT RUN".
+ */
+async function runStreamingHoldInterruptScenario(mock, amber) {
+  console.log("\n== queued message while the tool call is still streaming");
+  mock.reset();
+  const events = [];
+  const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
+    name: "streaming hold interrupt",
+    path: tmpdir(),
+  });
+  const sessionId = body.session.id;
+  const streamResponse = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content: "STREAM HOLD run one bash command." }),
+  });
+  if (!streamResponse.ok) throw new Error(`message stream failed: ${await streamResponse.text()}`);
+  const finished = readStream(streamResponse, (event, data) => events.push({ event, ...data }));
+
+  // The tool call is fully streamed but the response has not ended, so the
+  // call is generated yet not executing — exactly when a user would queue.
+  await waitFor(
+    () => events.some((event) => event.toolCall?.name === "Bash" && event.toolCall.status === "queued"),
+    30_000,
+    "the streamed tool call to appear while the response is held open",
+  );
+  const queued = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/queued-message`), {
+    content: INTERRUPT_TEXT,
+    kind: "message",
+  });
+  check("queue endpoint accepts the message mid-stream", queued.status === 202, JSON.stringify(queued));
+  await finished;
+
+  const snapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+  const bashes = snapshot.session.messages
+    .flatMap((message) => message.toolCalls ?? [])
+    .filter((call) => call.name === "Bash");
+  check("the streamed tool call executed instead of being killed",
+    bashes.length === 1 && bashes[0].status === "complete" && bashes[0].output.includes("held"),
+    JSON.stringify(bashes.map((call) => [call.status, call.statusDisplay?.text])));
+  const completionIndex = events.findIndex((event) =>
+    event.toolCall?.name === "Bash" && event.toolCall.status === "complete");
+  const injectionIndex = events.findIndex((event) => event.event === "user_message");
+  check("the queued message was injected after the call finished",
+    completionIndex >= 0 && injectionIndex > completionIndex, `${completionIndex} -> ${injectionIndex}`);
+  const finalText = snapshot.session.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
+  check("the model answered the queued message",
+    finalText === "ACK interrupt after 1 bash calls", finalText);
 }
 
 async function runQueuedCommandScenario(mock, amber) {
@@ -1051,6 +1114,9 @@ try {
   check("remaining tool calls of the batch were skipped",
     multi.skipped.length === 3 && multi.skipped.every((call) => call.statusDisplay?.text === "NOT RUN"),
     JSON.stringify(multi.skipped.map((call) => [call.status, call.statusDisplay])));
+
+  // Scenario 3: queue while the response holding the streamed call is open.
+  await runStreamingHoldInterruptScenario(mock, amber);
 
   await runQueuedCommandScenario(mock, amber);
   await runBackgroundAgentScenario(mock, amber);
