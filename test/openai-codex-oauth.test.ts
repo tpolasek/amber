@@ -250,11 +250,12 @@ test("completes a rotating refresh even when the caller aborts mid-refresh", asy
   controller.abort();
   await assert.rejects(pending, /aborted/i);
 
-  assert.equal((await storage.read("openai-codex"))?.refresh, "refresh-rotated");
+  // Resolve first: it joins the in-flight refresh, so the rotated token has been stored by then.
   assert.equal(
     (await auth.resolveAuth()).accessToken,
     jwt("account-rotated"),
   );
+  assert.equal((await storage.read("openai-codex"))?.refresh, "refresh-rotated");
 });
 
 test("preserves the stored credential when refresh fails", async () => {

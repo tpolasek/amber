@@ -74,7 +74,11 @@ test("does not leak Node watch dependency reporting into Bash descendants", asyn
   process.env.WATCH_REPORT_DEPENDENCIES = "1";
   try {
     const result = await new BashExecutor().run(
-      { command: "node -e 'process.stdout.write(process.env.WATCH_REPORT_DEPENDENCIES ?? \"unset\")'", timeoutMs: 2_000 },
+      // The login shell bash -lc starts may not have node on its PATH, so spawn this interpreter.
+      {
+        command: `${process.execPath} -e 'process.stdout.write(process.env.WATCH_REPORT_DEPENDENCIES ?? "unset")'`,
+        timeoutMs: 2_000,
+      },
       [directory],
       new AbortController().signal,
       { onRunning: () => undefined, onOutput: () => undefined },
