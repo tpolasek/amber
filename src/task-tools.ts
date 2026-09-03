@@ -60,7 +60,7 @@ export interface TaskOutputInput {
   timeoutMs: number;
 }
 
-export type BackgroundAgentStatus = "running" | "complete" | "error";
+export type BackgroundAgentStatus = "running" | "complete" | "error" | "stopped";
 
 export interface BackgroundAgentTask {
   id: string;
@@ -204,7 +204,7 @@ function formatTaskOutputResult(retrievalStatus: "success" | "timeout" | "not_re
 }
 
 function agentStatusText(status: BackgroundAgentStatus): string {
-  return status === "complete" ? "completed" : status === "error" ? "failed" : "running";
+  return status === "complete" ? "completed" : status === "error" ? "failed" : status === "stopped" ? "stopped" : "running";
 }
 
 function formatAgentVisibleOutput(task: BackgroundAgentTask): string {

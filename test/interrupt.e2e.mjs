@@ -142,6 +142,28 @@ function planResponse(payload) {
   if (firstText.includes("BACKGROUND CHILD DELAY")) {
     return { text: "background child complete", delayMs: 1_500 };
   }
+  if (firstText.includes("STOPPED CHILD DELAY")) {
+    return { text: "background child complete", delayMs: 3_000 };
+  }
+  if (firstText.includes("STOPPED AGENT SCENARIO")) {
+    const agentUses = messages
+      .filter((message) => message.role === "assistant" && Array.isArray(message.content))
+      .flatMap((message) => message.content.filter((block) => block.type === "tool_use" && block.name === "Agent"));
+    return agentUses.length === 0
+      ? {
+          tools: [{
+            id: "stopped-background-agent",
+            name: "Agent",
+            input: {
+              description: "Delayed background child",
+              prompt: "STOPPED CHILD DELAY",
+              subagent_type: "general-purpose",
+              run_in_background: true,
+            },
+          }],
+        }
+      : { text: "parent continued without waiting" };
+  }
   if (firstText.includes("BACKGROUND AGENT SCENARIO")) {
     const agentUses = messages
       .filter((message) => message.role === "assistant" && Array.isArray(message.content))
@@ -761,6 +783,60 @@ async function runBackgroundAgentScenario(mock, amber) {
       === "parent received background result");
 }
 
+async function runStoppedBackgroundAgentScenario(mock, amber) {
+  console.log("\n== manually stopped background agent");
+  mock.reset();
+  const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
+    name: "manually stopped background agent",
+    path: tmpdir(),
+  });
+  const sessionId = body.session.id;
+  const response = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content: "STOPPED AGENT SCENARIO" }),
+  });
+  await readStream(response, () => undefined);
+  const snapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+  const agentCall = snapshot.session.messages
+    .flatMap((message) => message.toolCalls ?? [])
+    .find((call) => call.name === "Agent");
+  const childId = agentCall?.agentSessionId;
+  if (!childId) {
+    check("the stopped-agent scenario launches a background agent", false, JSON.stringify(agentCall));
+    return;
+  }
+  const initialChild = await (await fetch(amberUrl(amber.port, `/api/sessions/${childId}`))).json();
+  check("the background child is running before the stop",
+    initialChild.session?.agentStatus === "running", initialChild.session?.agentStatus);
+
+  const aborted = await postJson(amberUrl(amber.port, `/api/sessions/${childId}/abort`), {});
+  check("the manual stop aborts the child run",
+    aborted.body.aborted === true && aborted.body.sessionIds.includes(childId), JSON.stringify(aborted));
+  await waitFor(async () => {
+    const child = await (await fetch(amberUrl(amber.port, `/api/sessions/${childId}`))).json();
+    return child.session?.agentStatus === "stopped";
+  }, 5_000, "the stopped agent to record status 'stopped'");
+  const stoppedChild = await (await fetch(amberUrl(amber.port, `/api/sessions/${childId}`))).json();
+  check("the stopped agent records the manual stop as its last message",
+    stoppedChild.session.messages.filter((message) => message.role === "assistant").at(-1)?.content
+      === "Response interrupted: User manually stopped the agent.",
+    JSON.stringify(stoppedChild.session.messages?.at(-1)?.content));
+
+  const notificationResponse = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content: "Use any completed background results." }),
+  });
+  await readStream(notificationResponse, () => undefined);
+  const notifiedParent = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+  const notification = notifiedParent.session.messages.find((message) => message.kind === "agent-notification");
+  check("a stopped agent notifies with a distinct stopped status",
+    notification?.content.includes(`<task-id>${childId}</task-id>`)
+      && notification.content.includes("<status>stopped</status>")
+      && notification.content.includes("User manually stopped the agent"), notification?.content);
+}
+
 async function runAgentCompactionScenario(mock, amber) {
   console.log("\n== agent compaction opt-in");
   const runAgent = async (parentPrompt) => {
@@ -952,6 +1028,7 @@ try {
 
   await runQueuedCommandScenario(mock, amber);
   await runBackgroundAgentScenario(mock, amber);
+  await runStoppedBackgroundAgentScenario(mock, amber);
   await runAgentCompactionScenario(mock, amber);
   await runAutomaticCompactionScenario(mock, amber);
   await runFailedCompactionDetachedObserverScenario(mock, amber);

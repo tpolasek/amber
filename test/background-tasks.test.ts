@@ -216,6 +216,17 @@ test("TaskOutput resolves a failed background agent", async () => {
   assert.match(result.resultText, /<output>\nAgent failed without a final response\.\n<\/output>/);
 });
 
+test("TaskOutput resolves a stopped background agent", async () => {
+  const manager = new BackgroundTaskManager();
+  const agent = runningAgent({ status: "stopped", result: "Agent stopped by the user." });
+  const result = await executeTaskOutput(manager, agentSource("session-one", agent), "session-one", {
+    taskId: agent.id, block: true, timeoutMs: 0,
+  });
+  assert.match(result.output, /status: stopped/);
+  assert.match(result.resultText, /<status>stopped<\/status>/);
+  assert.match(result.resultText, /<output>\nAgent stopped by the user\.\n<\/output>/);
+});
+
 test("TaskOutput waits for a running background agent to finish", async () => {
   const manager = new BackgroundTaskManager();
   const agent = runningAgent();

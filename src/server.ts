@@ -1413,16 +1413,17 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   } catch (error) {
     // A tool-output checkpoint may still be queued when an abort arrives.
     await snapshotSave;
+    const manuallyStopped = manuallyAbortedSessions.delete(sessionId);
     if (assistantMessage.status === "streaming") {
       assistantMessage.status = "error";
       if (!assistantMessage.content) {
-        const manualReason = manuallyAbortedSessions.delete(sessionId)
+        const manualReason = manuallyStopped
           ? "User manually stopped the agent"
           : stopReason ? interruptionStopReason(stopReason) ?? stopReason : "";
         assistantMessage.content = `Response interrupted${manualReason ? `: ${manualReason}` : ""}.`;
       }
     }
-    if (session.parentSessionId) session.agentStatus = "error";
+    if (session.parentSessionId) session.agentStatus = manuallyStopped ? "stopped" : "error";
     await store.save(session);
     const message = error instanceof Error && error.name === "AbortError" ? "Session aborted" : errorMessage(error);
     if (!response.writableEnded) emit("error", { error: message, message: assistantMessage, session });
@@ -1656,7 +1657,7 @@ async function executeAgentCall(
         try {
           const persistedChild = await store.get(childId);
           if (persistedChild?.agentStatus === "running") {
-            persistedChild.agentStatus = "error";
+            persistedChild.agentStatus = isManualAgentStop(error) ? "stopped" : "error";
             await store.save(persistedChild);
             broadcastSessionEvent(persistedChild.id, "error", {
               error: errorMessage(error),
@@ -1700,7 +1701,7 @@ async function executeAgentCall(
     resultText = call.output;
     if (error instanceof Error && error.name === "AbortError") abortAfterResult = error;
     if (child) {
-      child.agentStatus = "error";
+      child.agentStatus = isManualAgentStop(error) ? "stopped" : "error";
       try {
         await store.save(child);
         broadcastSessionEvent(child.id, "error", { error: call.output, session: child });
@@ -1742,8 +1743,11 @@ async function completedBackgroundAgentNotifications(session: Session): Promise<
       || !call.agentSessionId
       || call.agentNotificationDeliveredAt) continue;
     const child = await store.get(call.agentSessionId);
-    if (!child || (child.agentStatus !== "complete" && child.agentStatus !== "error")) continue;
+    if (!child || (child.agentStatus !== "complete" && child.agentStatus !== "error" && child.agentStatus !== "stopped")) continue;
     const result = agentFinalMessage(child);
+    const fallback = child.agentStatus === "stopped"
+      ? "Agent stopped by the user."
+      : child.agentStatus === "error" ? "Agent failed without a final response." : "Agent completed without a text response.";
     const deliveredAt = new Date().toISOString();
     call.agentNotificationDeliveredAt = deliveredAt;
     notifications.push({
@@ -1754,7 +1758,7 @@ async function completedBackgroundAgentNotifications(session: Session): Promise<
         `<task-id>${child.id}</task-id>`,
         `<status>${child.agentStatus}</status>`,
         `<summary>${child.agentDescription ?? child.title}</summary>`,
-        `<result>${result || (child.agentStatus === "error" ? "Agent failed without a final response." : "Agent completed without a text response.")}</result>`,
+        `<result>${result || fallback}</result>`,
         "</task-notification>",
       ].join("\n"),
       createdAt: deliveredAt,
@@ -2375,6 +2379,10 @@ async function resolveBuildVersion(): Promise<string> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown provider error";
+}
+
+function isManualAgentStop(error: unknown): boolean {
+  return errorMessage(error).startsWith("Response interrupted: User manually stopped the agent");
 }
 
 function interruptionStopReason(stopReason: string | undefined): string | undefined {

@@ -108,7 +108,7 @@ export interface Session {
   parentSessionId?: string;
   agentType?: string;
   agentDescription?: string;
-  agentStatus?: "running" | "complete" | "error";
+  agentStatus?: "running" | "complete" | "error" | "stopped";
   planningTasks?: import("./planning-task-tools.js").PlanningTask[];
   planningTaskHighWaterMark?: number;
   planningTaskArchiveHighWaterMark?: number;
