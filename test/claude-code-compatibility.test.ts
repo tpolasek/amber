@@ -26,6 +26,22 @@ test("builds the verified three-block Claude Code system prompt", () => {
   assert.match(system[2]?.text ?? "", /You are powered by the model mimo-v2\.5\./);
 });
 
+test("appends user instructions as a delimited final system block", () => {
+  const system = buildClaudeCodeSystemPrompt("/tmp/amber-not-a-repository", "mimo-v2.5", "Prefer plain dashes.");
+  assert.equal(system.length, 4);
+  const instructions = system[3]?.text ?? "";
+  assert.match(instructions, /# User instructions/);
+  assert.match(instructions, /~\/\.amber\/AGENTS\.md/);
+  assert.match(instructions, /<user-instructions>\nPrefer plain dashes\.\n<\/user-instructions>/);
+  assert.equal(system[2]?.text.includes("Prefer plain dashes."), false);
+  assert.deepEqual(system[3]?.cache_control, { type: "ephemeral" });
+});
+
+test("omits the user instructions block when there are none", () => {
+  assert.equal(buildClaudeCodeSystemPrompt("/tmp/amber-not-a-repository", "mimo-v2.5").length, 3);
+  assert.equal(buildClaudeCodeSystemPrompt("/tmp/amber-not-a-repository", "mimo-v2.5", "").length, 3);
+});
+
 test("injects the verified reminders before only the first user prompt", () => {
   const messages = injectClaudeCodeUserContext([
     { role: "user", content: "4 + 4" },

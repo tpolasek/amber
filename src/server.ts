@@ -10,6 +10,7 @@ import { builtInCommand } from "./built-in-commands.js";
 import { SessionStore } from "./store.js";
 import { ProviderCatalog } from "./provider-catalog.js";
 import { loadSettings } from "./settings.js";
+import { loadUserInstructions } from "./user-instructions.js";
 import { AuthStorage } from "./auth-storage.js";
 import { OpenAICodexAuth } from "./openai-codex-oauth.js";
 import { buildProviderHistory, isModelMessage, isProviderMessage } from "./history.js";
@@ -155,6 +156,9 @@ interface AutomaticNameRun {
 }
 
 const automaticNameRuns = new Map<string, AutomaticNameRun>();
+
+/** Instruction-file problems already printed, so each one is reported once per run. */
+const reportedUserInstructionProblems = new Set<string>();
 
 await store.initialize();
 
@@ -760,6 +764,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         await store.save(session);
       }
       const skills = await sessionSkills(session);
+      const userInstructions = await sessionUserInstructions(session);
       const activeProvider = turnModel ? providerCatalog.provider(turnModel) : providerForSession(session);
       const thinkingLevel = turnEffort ?? session.thinkingLevel;
       const baseHistory = buildProviderHistory(session.messages, assistantMessage.id, session.compaction, session.invokedSkills);
@@ -773,7 +778,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       let usage: Partial<TokenUsage> = {};
       for await (const event of activeProvider.stream(history, controller.signal, {
         tools: sessionTools(session, approvalCapable),
-        system: sessionSystemPrompt(session, currentDirectory, activeProvider.model),
+        system: sessionSystemPrompt(session, currentDirectory, activeProvider.model, userInstructions),
         ...(session.agentType ? { temperature: 1 } : {}),
         ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
       })) {
@@ -1522,6 +1527,17 @@ async function sessionSkills(session: Session): Promise<SkillDefinition[]> {
   return discoverSkills(context);
 }
 
+/** Standing user guidance, re-read each turn so edits take effect without a restart. */
+async function sessionUserInstructions(session: Session): Promise<string | undefined> {
+  if (session.agentType) return undefined;
+  const { text, problem } = await loadUserInstructions();
+  if (problem && !reportedUserInstructionProblems.has(problem)) {
+    reportedUserInstructionProblems.add(problem);
+    console.error(`amber: ${problem}`);
+  }
+  return text;
+}
+
 /** Records a file touched by Read/Write/Edit to activate path-gated and nested skills. */
 async function recordTouchedPath(session: Session, filePath: string | undefined): Promise<void> {
   if (!filePath) return;
@@ -1594,9 +1610,10 @@ function sessionSystemPrompt(
   session: Session,
   currentDirectory: string,
   model: string,
+  userInstructions?: string,
 ): string | import("./types.js").ProviderSystemBlock[] {
   const system = !session.agentType
-    ? buildClaudeCodeSystemPrompt(currentDirectory, model)
+    ? buildClaudeCodeSystemPrompt(currentDirectory, model, userInstructions)
     : buildClaudeCodeAgentSystemPrompt(
         currentDirectory,
         model,

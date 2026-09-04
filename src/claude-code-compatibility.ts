@@ -64,7 +64,11 @@ export function toolsForAgentMode(restricted: boolean): ToolDefinition[] {
   );
 }
 
-export function buildClaudeCodeSystemPrompt(currentDirectory: string, model: string): ProviderSystemBlock[] {
+export function buildClaudeCodeSystemPrompt(
+  currentDirectory: string,
+  model: string,
+  userInstructions?: string,
+): ProviderSystemBlock[] {
   const shell = basename(process.env.SHELL ?? "unknown");
   const environment = [
     "# Session-specific guidance",
@@ -87,7 +91,27 @@ export function buildClaudeCodeSystemPrompt(currentDirectory: string, model: str
   return [
     ...(structuredClone(compatibility.systemPrefix) as ProviderSystemBlock[]),
     { type: "text", text: environment },
+    ...(userInstructions?.trim()
+      ? [{
+          type: "text" as const,
+          text: userInstructionsBlock(userInstructions.trim()),
+          cache_control: { type: "ephemeral" as const },
+        }]
+      : []),
   ];
+}
+
+/** Wraps the user's own standing guidance so the model can tell it from the built-in prompt. */
+function userInstructionsBlock(instructions: string): string {
+  return [
+    "# User instructions",
+    "",
+    "The user wrote the instructions below in ~/.amber/AGENTS.md. They apply to every session in addition to the guidance above, and they take precedence over it wherever the two conflict. They do not override safety rules or the need to confirm risky actions.",
+    "",
+    "<user-instructions>",
+    instructions,
+    "</user-instructions>",
+  ].join("\n");
 }
 
 export function injectClaudeCodeUserContext(messages: ProviderMessage[], skillReminder?: string): ProviderMessage[] {

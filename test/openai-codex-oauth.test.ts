@@ -227,8 +227,15 @@ test("refreshes through the real provider request chain before sending Codex aut
 
 test("completes a rotating refresh even when the caller aborts mid-refresh", async () => {
   const now = 4_000_000;
+  let markRefreshStarted!: () => void;
+  let releaseRefresh!: () => void;
+  const refreshStarted = new Promise<void>((resolve) => { markRefreshStarted = resolve; });
+  const refreshReleased = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+  let refreshRequests = 0;
   const { auth, storage } = await authHarness(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    refreshRequests++;
+    markRefreshStarted();
+    await refreshReleased;
     return Response.json({
       access_token: jwt("account-rotated"),
       refresh_token: "refresh-rotated",
@@ -246,8 +253,9 @@ test("completes a rotating refresh even when the caller aborts mid-refresh", asy
 
   const controller = new AbortController();
   const pending = auth.resolveAuth(controller.signal);
-  await new Promise((resolve) => setTimeout(resolve, 5));
+  await refreshStarted;
   controller.abort();
+  releaseRefresh();
   await assert.rejects(pending, /aborted/i);
 
   assert.equal((await storage.read("openai-codex"))?.refresh, "refresh-rotated");
@@ -255,6 +263,7 @@ test("completes a rotating refresh even when the caller aborts mid-refresh", asy
     (await auth.resolveAuth()).accessToken,
     jwt("account-rotated"),
   );
+  assert.equal(refreshRequests, 1);
 });
 
 test("preserves the stored credential when refresh fails", async () => {
