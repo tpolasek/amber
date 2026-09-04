@@ -54,7 +54,26 @@ interface AgentSessionSummary { id: string; description: string; status: NonNull
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface AvailableModel { key: string; provider: string; api: "anthropic" | "openai"; model: string; displayName: string; thinkingLevel: ThinkingLevel; compactTokens?: number }
 interface Config { configured: boolean; authenticationRequired: boolean; configurationError?: string; provider: string; model: string; defaultModel: string; models: AvailableModel[]; mode: "live"; homeDirectory: string; workspaceRoot: string; authActionToken: string; theme: "dark" | "light" | "light+" | "hacker" }
-interface SettingsDocument { source: string; path: string; error?: string }
+type AmberTheme = Config["theme"];
+interface EditableModelSettings { thinking_level?: ThinkingLevel; compact_tokens?: number }
+interface EditableProviderSettings extends EditableModelSettings {
+  api: "anthropic" | "openai";
+  auth?: "openai-codex";
+  auth_key?: string;
+  auth_url?: string;
+  default_model?: string;
+  models: Record<string, EditableModelSettings>;
+}
+interface EditableAgentSettings { type: string; whenToUse: string; systemPrompt: string; readOnly: boolean; compact?: boolean; model?: string }
+interface EditableSettings {
+  theme: AmberTheme;
+  default_provider?: string;
+  default_agent_provider?: string;
+  default_agent_model?: string;
+  providers: Record<string, EditableProviderSettings>;
+  agents: EditableAgentSettings[];
+}
+interface SettingsDocument { settings: EditableSettings; path: string; error?: string }
 interface SavedSettings extends SettingsDocument { config: Config }
 interface AuthProviderStatus { id: "openai-codex"; name: string; authName: string; configured: boolean; providerConfigured: boolean }
 type AuthLoginStatus = { status: "pending" } | { status: "complete" } | { status: "failed"; error: string } | { status: "cancelled" };
@@ -141,6 +160,7 @@ let activeAuthLogin: ActiveAuthLogin | null = null;
 let authBusy = false;
 let authPollTimer: number | undefined;
 let settingsBusy = false;
+let settingsDraft: EditableSettings | null = null;
 let sessionRunController: AbortController | null = null;
 let sessionRunId: string | null = null;
 let sessionRunReconnectTimer: number | undefined;
@@ -235,7 +255,14 @@ const elements = {
   settingsButton: required<HTMLButtonElement>("settings-button"),
   settingsDialog: required<HTMLElement>("settings-dialog"),
   settingsClose: required<HTMLButtonElement>("settings-close"),
-  settingsSource: required<HTMLTextAreaElement>("settings-source"),
+  settingsForm: required<HTMLElement>("settings-form"),
+  settingsThemeOptions: required<HTMLElement>("settings-theme-options"),
+  settingsDefaults: required<HTMLElement>("settings-defaults"),
+  settingsAddProvider: required<HTMLButtonElement>("settings-add-provider"),
+  settingsLoginCodex: required<HTMLButtonElement>("settings-login-codex"),
+  settingsProviderList: required<HTMLElement>("settings-provider-list"),
+  settingsAddAgent: required<HTMLButtonElement>("settings-add-agent"),
+  settingsAgentList: required<HTMLElement>("settings-agent-list"),
   settingsPath: required<HTMLElement>("settings-path"),
   settingsError: required<HTMLElement>("settings-error"),
   settingsStatus: required<HTMLElement>("settings-status"),
@@ -386,10 +413,9 @@ function wireEvents(): void {
   elements.settingsButton.addEventListener("click", () => void openSettingsDialog());
   elements.settingsClose.addEventListener("click", () => void closeSettingsDialog());
   elements.settingsSave.addEventListener("click", () => void saveSettings());
-  elements.settingsSource.addEventListener("input", () => {
-    showSettingsError();
-    elements.settingsStatus.textContent = "Unsaved changes";
-  });
+  elements.settingsAddProvider.addEventListener("click", addApiProvider);
+  elements.settingsLoginCodex.addEventListener("click", () => void setupAndLoginWithCodex());
+  elements.settingsAddAgent.addEventListener("click", addAgent);
   elements.settingsDialog.addEventListener("click", (event) => {
     if (event.target === elements.settingsDialog) void closeSettingsDialog();
   });
@@ -933,18 +959,20 @@ async function openSettingsDialog(): Promise<void> {
       api<SettingsDocument>("/api/settings"),
       loadAuthProviders(),
     ]);
-    elements.settingsSource.value = document.source;
+    settingsDraft = document.settings;
     elements.settingsPath.textContent = document.path;
     elements.settingsStatus.textContent = document.error
       ? "Configuration needs attention"
       : "Changes are validated before the active configuration is updated.";
     showSettingsError(document.error);
+    renderSettingsForm();
   } catch (error) {
     showSettingsError(messageFrom(error));
   } finally {
     settingsBusy = false;
     renderSettingsBusyState();
-    if (!elements.settingsDialog.hidden) elements.settingsSource.focus();
+    renderAuthProviders();
+    if (!elements.settingsDialog.hidden) elements.settingsForm.querySelector<HTMLElement>("button, input, select")?.focus();
   }
 }
 
@@ -954,7 +982,9 @@ async function closeSettingsDialog(): Promise<void> {
     renderSettingsBusyState();
     return;
   }
+  if (state.config) document.documentElement.dataset.theme = state.config.theme;
   elements.settingsDialog.hidden = true;
+  settingsDraft = null;
   stopAuthPolling();
   if (activeAuthLogin?.status.status === "pending") {
     const loginId = activeAuthLogin.start.id;
@@ -982,8 +1012,8 @@ function handleSettingsDialogKeydown(event: KeyboardEvent): boolean {
   return true;
 }
 
-async function saveSettings(): Promise<void> {
-  if (settingsBusy) return;
+async function saveSettings(showNotification = true): Promise<boolean> {
+  if (settingsBusy || !settingsDraft) return false;
   settingsBusy = true;
   showSettingsError();
   elements.settingsStatus.textContent = "Validating providers and discovering models…";
@@ -991,27 +1021,630 @@ async function saveSettings(): Promise<void> {
   try {
     const result = await settingsMutation<SavedSettings>("/api/settings", {
       method: "PUT",
-      body: JSON.stringify({ source: elements.settingsSource.value }),
+      body: JSON.stringify({ settings: settingsDraft }),
     });
     state.config = result.config;
     document.documentElement.dataset.theme = result.config.theme;
-    elements.settingsSource.value = result.source;
+    settingsDraft = result.settings;
     elements.settingsPath.textContent = result.path;
     showSettingsError(result.error);
     elements.settingsStatus.textContent = result.config.configured
       ? "Saved · Amber reloaded the active configuration."
       : "Saved · configuration needs attention before Amber can run a session.";
+    renderSettingsForm();
     renderConfig();
     await loadAuthProviders();
-    notify(result.config.configured ? "Settings saved and reloaded" : "Settings saved · configuration needs attention");
+    if (showNotification) {
+      notify(result.config.configured ? "Settings saved and reloaded" : "Settings saved · configuration needs attention");
+    }
+    return true;
   } catch (error) {
     const message = messageFrom(error);
     showSettingsError(message);
     elements.settingsStatus.textContent = "Not saved · fix the configuration error and try again.";
+    return false;
   } finally {
     settingsBusy = false;
     renderSettingsBusyState();
+    renderAuthProviders();
   }
+}
+
+function renderSettingsForm(): void {
+  renderThemeOptions();
+  renderSettingsDefaults();
+  renderProviderSettings();
+  renderAgentSettings();
+  renderSettingsBusyState();
+}
+
+function renderThemeOptions(): void {
+  elements.settingsThemeOptions.replaceChildren();
+  if (!settingsDraft) return;
+  const themes: Array<{ id: AmberTheme; label: string }> = [
+    { id: "light+", label: "LIGHT+" },
+    { id: "light", label: "SOLARIZED LIGHT" },
+    { id: "dark", label: "DARK" },
+    { id: "hacker", label: "HACKER" },
+  ];
+  for (const theme of themes) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `settings-theme-button${settingsDraft.theme === theme.id ? " selected" : ""}`;
+    button.setAttribute("aria-pressed", String(settingsDraft.theme === theme.id));
+    const swatch = document.createElement("span");
+    swatch.className = `settings-theme-swatch theme-${theme.id.replace("+", "-plus")}`;
+    const label = document.createElement("span");
+    label.textContent = theme.label;
+    button.append(swatch, label);
+    button.addEventListener("click", () => {
+      if (!settingsDraft) return;
+      settingsDraft.theme = theme.id;
+      document.documentElement.dataset.theme = theme.id;
+      markSettingsDirty();
+      renderThemeOptions();
+      renderSettingsBusyState();
+    });
+    elements.settingsThemeOptions.append(button);
+  }
+}
+
+function renderSettingsDefaults(): void {
+  elements.settingsDefaults.replaceChildren();
+  if (!settingsDraft) return;
+  const providerNames = Object.keys(settingsDraft.providers);
+  elements.settingsDefaults.append(
+    settingsSelectField("DEFAULT PROVIDER", settingsDraft.default_provider ?? "", [
+      { value: "", label: "First configured provider" },
+      ...providerNames.map((name) => ({ value: name, label: name })),
+    ], (value) => {
+      if (!settingsDraft) return;
+      setOptionalString(settingsDraft, "default_provider", value);
+      markSettingsDirty();
+    }),
+    settingsSelectField("DEFAULT AGENT PROVIDER", settingsDraft.default_agent_provider ?? "", [
+      { value: "", label: "Inherit session provider" },
+      ...providerNames.map((name) => ({ value: name, label: name })),
+    ], (value) => {
+      if (!settingsDraft) return;
+      setOptionalString(settingsDraft, "default_agent_provider", value);
+      if (!value) delete settingsDraft.default_agent_model;
+      markSettingsDirty();
+      renderSettingsDefaults();
+      renderSettingsBusyState();
+    }),
+    settingsTextField("DEFAULT AGENT MODEL", settingsDraft.default_agent_model ?? "", "Model id (optional)", (value) => {
+      if (!settingsDraft) return;
+      setOptionalString(settingsDraft, "default_agent_model", value);
+      markSettingsDirty();
+    }, { disabled: !settingsDraft.default_agent_provider }),
+  );
+}
+
+function renderProviderSettings(): void {
+  elements.settingsProviderList.replaceChildren();
+  if (!settingsDraft) return;
+  const entries = Object.entries(settingsDraft.providers);
+  if (entries.length === 0) {
+    elements.settingsProviderList.append(settingsEmptyState("No providers configured. Add an API provider or log in with Codex."));
+    return;
+  }
+  for (const [name, provider] of entries) elements.settingsProviderList.append(providerSettingsCard(name, provider));
+}
+
+function providerSettingsCard(name: string, provider: EditableProviderSettings): HTMLElement {
+  const card = document.createElement("article");
+  card.className = "settings-card";
+  const heading = document.createElement("div");
+  heading.className = "settings-card-heading";
+  const identity = document.createElement("div");
+  identity.className = "settings-card-identity";
+  const nameInput = document.createElement("input");
+  nameInput.value = name;
+  nameInput.autocomplete = "off";
+  nameInput.spellcheck = false;
+  nameInput.setAttribute("aria-label", "Provider name");
+  nameInput.addEventListener("change", () => renameProvider(name, nameInput.value));
+  const badge = document.createElement("span");
+  badge.className = "settings-badge";
+  badge.textContent = provider.auth === "openai-codex" ? "CODEX OAUTH" : "API KEY";
+  identity.append(nameInput, badge);
+  heading.append(identity, settingsRemoveButton("Remove provider", () => removeProvider(name)));
+
+  const fields = document.createElement("div");
+  fields.className = "settings-field-grid";
+  if (provider.auth === "openai-codex") {
+    fields.append(settingsReadOnlyField("PROVIDER API", "OpenAI Responses"));
+  } else {
+    fields.append(settingsSelectField("PROVIDER API", provider.api, [
+      { value: "anthropic", label: "Anthropic Messages" },
+      { value: "openai", label: "OpenAI Responses" },
+    ], (value) => {
+      provider.api = value as EditableProviderSettings["api"];
+      markSettingsDirty();
+    }));
+    fields.append(settingsTextField("API KEY", provider.auth_key ?? "", "Required", (value) => {
+      setOptionalString(provider, "auth_key", value);
+      markSettingsDirty();
+    }, { type: "password" }));
+  }
+  fields.append(
+    settingsTextField("API URL", provider.auth_url ?? "", provider.auth === "openai-codex"
+      ? "https://chatgpt.com/backend-api (default)"
+      : "Required API base URL", (value) => {
+      setOptionalString(provider, "auth_url", value);
+      markSettingsDirty();
+    }),
+    settingsTextField("DEFAULT MODEL", provider.default_model ?? "", "First discovered model", (value) => {
+      setOptionalString(provider, "default_model", value);
+      markSettingsDirty();
+    }),
+    settingsThinkingField("THINKING LEVEL", provider.thinking_level, (value) => {
+      setOptionalThinking(provider, value);
+      markSettingsDirty();
+    }),
+    settingsNumberField("COMPACT TOKENS", provider.compact_tokens, "200000", (value) => {
+      setOptionalNumber(provider, "compact_tokens", value);
+      markSettingsDirty();
+    }),
+  );
+
+  const models = document.createElement("details");
+  models.className = "settings-models";
+  if (Object.keys(provider.models).length > 0) models.open = true;
+  const summary = document.createElement("summary");
+  summary.textContent = `MODEL OVERRIDES (${Object.keys(provider.models).length})`;
+  const list = document.createElement("div");
+  list.className = "settings-model-list";
+  for (const [modelName, model] of Object.entries(provider.models)) {
+    list.append(modelSettingsRow(name, provider, modelName, model));
+  }
+  if (Object.keys(provider.models).length === 0) list.append(settingsEmptyState("No model-specific overrides."));
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "settings-action-button";
+  add.textContent = "ADD MODEL OVERRIDE";
+  add.addEventListener("click", () => addModelOverride(name));
+  models.append(summary, list, add);
+  card.append(heading, fields, models);
+  return card;
+}
+
+function modelSettingsRow(
+  providerName: string,
+  provider: EditableProviderSettings,
+  modelName: string,
+  model: EditableModelSettings,
+): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "settings-model-row";
+  const name = settingsTextField(
+    "MODEL ID",
+    modelName,
+    "Model id",
+    (value) => renameModel(providerName, modelName, value),
+    { onChangeOnly: true },
+  );
+  row.append(
+    name,
+    settingsThinkingField("THINKING LEVEL", model.thinking_level, (value) => {
+      setOptionalThinking(model, value);
+      markSettingsDirty();
+    }),
+    settingsNumberField("COMPACT TOKENS", model.compact_tokens, "Provider default", (value) => {
+      setOptionalNumber(model, "compact_tokens", value);
+      markSettingsDirty();
+    }),
+    settingsRemoveButton("Remove model override", () => {
+      delete provider.models[modelName];
+      markSettingsDirty();
+      renderProviderSettings();
+      renderSettingsBusyState();
+    }),
+  );
+  return row;
+}
+
+function renderAgentSettings(): void {
+  elements.settingsAgentList.replaceChildren();
+  if (!settingsDraft) return;
+  if (settingsDraft.agents.length === 0) {
+    elements.settingsAgentList.append(settingsEmptyState("No agents configured. Amber's Agent tool will be unavailable."));
+    return;
+  }
+  settingsDraft.agents.forEach((agent, index) => elements.settingsAgentList.append(agentSettingsCard(agent, index)));
+}
+
+function agentSettingsCard(agent: EditableAgentSettings, index: number): HTMLElement {
+  const card = document.createElement("article");
+  card.className = "settings-card";
+  const heading = document.createElement("div");
+  heading.className = "settings-card-heading";
+  const title = document.createElement("strong");
+  title.textContent = agent.type || `Agent ${index + 1}`;
+  heading.append(title, settingsRemoveButton("Remove agent", () => {
+    settingsDraft?.agents.splice(index, 1);
+    markSettingsDirty();
+    renderAgentSettings();
+    renderSettingsBusyState();
+  }));
+  const fields = document.createElement("div");
+  fields.className = "settings-field-grid";
+  fields.append(
+    settingsTextField("TYPE", agent.type, "Unique agent type", (value) => {
+      agent.type = value;
+      title.textContent = value || `Agent ${index + 1}`;
+      markSettingsDirty();
+    }),
+    settingsTextField("MODEL OVERRIDE", agent.model ?? "", "provider/model (optional)", (value) => {
+      setOptionalString(agent, "model", value);
+      markSettingsDirty();
+    }),
+  );
+  const prompts = document.createElement("div");
+  prompts.className = "settings-agent-prompts";
+  prompts.append(
+    settingsTextAreaField("WHEN TO USE", agent.whenToUse, "Describe when Amber should select this agent", (value) => {
+      agent.whenToUse = value;
+      markSettingsDirty();
+    }),
+    settingsTextAreaField("SYSTEM PROMPT", agent.systemPrompt, "Instructions for the agent", (value) => {
+      agent.systemPrompt = value;
+      markSettingsDirty();
+    }),
+  );
+  const toggles = document.createElement("div");
+  toggles.className = "settings-toggle-row";
+  toggles.append(
+    settingsCheckboxField("READ ONLY", agent.readOnly, (checked) => {
+      agent.readOnly = checked;
+      markSettingsDirty();
+    }),
+    settingsCheckboxField("AUTO-COMPACT", agent.compact === true, (checked) => {
+      agent.compact = checked;
+      markSettingsDirty();
+    }),
+  );
+  card.append(heading, fields, prompts, toggles);
+  return card;
+}
+
+function addApiProvider(): void {
+  if (!settingsDraft) return;
+  const name = uniqueSettingsName("provider", Object.keys(settingsDraft.providers));
+  settingsDraft.providers[name] = {
+    api: "anthropic",
+    compact_tokens: 200_000,
+    models: {},
+  };
+  settingsDraft.default_provider ??= name;
+  markSettingsDirty();
+  renderSettingsForm();
+  focusProviderName(name);
+}
+
+async function setupAndLoginWithCodex(method: "browser" | "device_code" = "browser"): Promise<void> {
+  if (!settingsDraft || settingsBusy || authBusy) return;
+  for (const [name, provider] of Object.entries(settingsDraft.providers)) {
+    if (name === "default" && provider.api === "anthropic" && provider.thinking_level === "max"
+      && (provider.compact_tokens === 100_000 || provider.compact_tokens === 200_000)
+      && provider.auth !== "openai-codex"
+      && !provider.auth_key && !provider.auth_url && !provider.default_model
+      && Object.keys(provider.models).length === 0) {
+      removeProviderFromDraft(name);
+    }
+  }
+  const configuredCodex = Object.entries(settingsDraft.providers)
+    .find(([, provider]) => provider.auth === "openai-codex");
+  const exactNameCollision = settingsDraft.providers["openai-codex"];
+  if (!configuredCodex && exactNameCollision) {
+    showSettingsError("The provider name 'openai-codex' is already used by an API-key provider. Rename or remove it first.");
+    return;
+  }
+  const codexName = configuredCodex?.[0] ?? "openai-codex";
+  if (!configuredCodex) {
+    settingsDraft.providers["openai-codex"] = {
+      api: "openai",
+      auth: "openai-codex",
+      default_model: "gpt-5.6-sol",
+      thinking_level: "high",
+      compact_tokens: 250_000,
+      models: {},
+    };
+  }
+  settingsDraft.default_provider = codexName;
+  markSettingsDirty();
+  renderSettingsForm();
+  const popup = method === "browser" ? window.open("about:blank", "_blank") : null;
+  if (!(await saveSettings(false))) {
+    popup?.close();
+    return;
+  }
+  if (authProviders.some((provider) => provider.id === "openai-codex" && provider.configured)) {
+    popup?.close();
+    notify("OpenAI Codex is already connected");
+    return;
+  }
+  await startAuthLogin(method, popup);
+}
+
+function addAgent(): void {
+  if (!settingsDraft) return;
+  const name = uniqueSettingsName("agent", settingsDraft.agents.map((agent) => agent.type));
+  settingsDraft.agents.push({
+    type: name,
+    whenToUse: "Use this agent for focused tasks.",
+    systemPrompt: "Complete the requested task and return concise findings.",
+    readOnly: false,
+    compact: false,
+  });
+  markSettingsDirty();
+  renderSettingsForm();
+  elements.settingsAgentList.lastElementChild?.scrollIntoView({ block: "nearest" });
+}
+
+function removeProvider(name: string): void {
+  if (!settingsDraft) return;
+  removeProviderFromDraft(name);
+  markSettingsDirty();
+  renderSettingsForm();
+}
+
+function removeProviderFromDraft(name: string): void {
+  if (!settingsDraft) return;
+  delete settingsDraft.providers[name];
+  if (settingsDraft.default_provider === name) delete settingsDraft.default_provider;
+  if (settingsDraft.default_agent_provider === name) {
+    delete settingsDraft.default_agent_provider;
+    delete settingsDraft.default_agent_model;
+  }
+  for (const agent of settingsDraft.agents) {
+    if (agent.model?.startsWith(`${name}/`)) delete agent.model;
+  }
+}
+
+function renameProvider(previousName: string, requestedName: string): void {
+  if (!settingsDraft) return;
+  const name = requestedName.trim();
+  if (!name || name.includes("/")) {
+    showSettingsError("Provider names must be non-empty and cannot contain '/'.");
+    return renderProviderSettings();
+  }
+  if (name !== previousName && settingsDraft.providers[name]) {
+    showSettingsError(`Provider '${name}' already exists.`);
+    return renderProviderSettings();
+  }
+  if (name === previousName) return;
+  const provider = settingsDraft.providers[previousName];
+  if (!provider) return;
+  const renamed: Record<string, EditableProviderSettings> = {};
+  for (const [candidate, value] of Object.entries(settingsDraft.providers)) {
+    renamed[candidate === previousName ? name : candidate] = value;
+  }
+  settingsDraft.providers = renamed;
+  if (settingsDraft.default_provider === previousName) settingsDraft.default_provider = name;
+  if (settingsDraft.default_agent_provider === previousName) settingsDraft.default_agent_provider = name;
+  for (const agent of settingsDraft.agents) {
+    if (agent.model?.startsWith(`${previousName}/`)) agent.model = `${name}/${agent.model.slice(previousName.length + 1)}`;
+  }
+  markSettingsDirty();
+  renderSettingsForm();
+  focusProviderName(name);
+}
+
+function addModelOverride(providerName: string): void {
+  const provider = settingsDraft?.providers[providerName];
+  if (!provider) return;
+  const name = uniqueSettingsName("model", Object.keys(provider.models));
+  provider.models[name] = {};
+  markSettingsDirty();
+  renderProviderSettings();
+  renderSettingsBusyState();
+}
+
+function renameModel(providerName: string, previousName: string, requestedName: string): void {
+  const provider = settingsDraft?.providers[providerName];
+  if (!provider) return;
+  const name = requestedName.trim();
+  if (!name || provider.api === "anthropic" && name.includes("/")) {
+    showSettingsError(provider.api === "anthropic"
+      ? "Anthropic model ids must be non-empty and cannot contain '/'."
+      : "Model ids must be non-empty.");
+    return renderProviderSettings();
+  }
+  if (name !== previousName && provider.models[name]) {
+    showSettingsError(`Model override '${name}' already exists for ${providerName}.`);
+    return renderProviderSettings();
+  }
+  if (name === previousName) return;
+  const model = provider.models[previousName];
+  if (!model) return;
+  delete provider.models[previousName];
+  provider.models[name] = model;
+  if (provider.default_model === previousName) provider.default_model = name;
+  if (settingsDraft?.default_agent_provider === providerName
+    && settingsDraft.default_agent_model === previousName) {
+    settingsDraft.default_agent_model = name;
+  }
+  for (const agent of settingsDraft?.agents ?? []) {
+    if (agent.model === `${providerName}/${previousName}`) agent.model = `${providerName}/${name}`;
+  }
+  markSettingsDirty();
+  renderProviderSettings();
+  renderSettingsBusyState();
+}
+
+function settingsTextField(
+  label: string,
+  value: string,
+  placeholder: string,
+  onInput: (value: string) => void,
+  options: { type?: "text" | "password"; disabled?: boolean; onChangeOnly?: boolean } = {},
+): HTMLLabelElement {
+  const field = settingsField(label);
+  const input = document.createElement("input");
+  input.type = options.type ?? "text";
+  input.value = value;
+  input.placeholder = placeholder;
+  input.disabled = options.disabled === true;
+  if (options.disabled) input.dataset.permanentlyDisabled = "true";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.addEventListener(options.onChangeOnly ? "change" : "input", () => onInput(input.value));
+  field.append(input);
+  return field;
+}
+
+function settingsTextAreaField(
+  label: string,
+  value: string,
+  placeholder: string,
+  onInput: (value: string) => void,
+): HTMLLabelElement {
+  const field = settingsField(label);
+  field.classList.add("wide");
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.placeholder = placeholder;
+  textarea.spellcheck = true;
+  textarea.addEventListener("input", () => onInput(textarea.value));
+  field.append(textarea);
+  return field;
+}
+
+function settingsSelectField(
+  label: string,
+  value: string,
+  options: Array<{ value: string; label: string }>,
+  onChange: (value: string) => void,
+): HTMLLabelElement {
+  const field = settingsField(label);
+  const select = document.createElement("select");
+  for (const option of options) {
+    const item = document.createElement("option");
+    item.value = option.value;
+    item.textContent = option.label;
+    item.selected = option.value === value;
+    select.append(item);
+  }
+  select.addEventListener("change", () => onChange(select.value));
+  field.append(select);
+  return field;
+}
+
+function settingsThinkingField(
+  label: string,
+  value: ThinkingLevel | undefined,
+  onChange: (value: string) => void,
+): HTMLLabelElement {
+  return settingsSelectField(label, value ?? "", [
+    { value: "", label: "Provider default" },
+    ...(["none", "low", "medium", "high", "xhigh", "max"] as ThinkingLevel[])
+      .map((level) => ({ value: level, label: level.toUpperCase() })),
+  ], onChange);
+}
+
+function settingsNumberField(
+  label: string,
+  value: number | undefined,
+  placeholder: string,
+  onInput: (value: string) => void,
+): HTMLLabelElement {
+  const field = settingsField(label);
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = "1";
+  input.step = "1";
+  input.value = value === undefined ? "" : String(value);
+  input.placeholder = placeholder;
+  input.addEventListener("input", () => onInput(input.value));
+  field.append(input);
+  return field;
+}
+
+function settingsReadOnlyField(label: string, value: string): HTMLLabelElement {
+  const field = settingsField(label);
+  const output = document.createElement("span");
+  output.className = "settings-readonly-value";
+  output.textContent = value;
+  field.append(output);
+  return field;
+}
+
+function settingsField(label: string): HTMLLabelElement {
+  const field = document.createElement("label");
+  field.className = "settings-field";
+  const title = document.createElement("span");
+  title.textContent = label;
+  field.append(title);
+  return field;
+}
+
+function settingsCheckboxField(label: string, checked: boolean, onChange: (checked: boolean) => void): HTMLLabelElement {
+  const field = document.createElement("label");
+  field.className = "settings-checkbox";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = checked;
+  const text = document.createElement("span");
+  text.textContent = label;
+  input.addEventListener("change", () => onChange(input.checked));
+  field.append(input, text);
+  return field;
+}
+
+function settingsRemoveButton(label: string, onClick: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "settings-remove-button";
+  button.setAttribute("aria-label", label);
+  button.title = label;
+  button.textContent = "×";
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function settingsEmptyState(message: string): HTMLElement {
+  const empty = document.createElement("p");
+  empty.className = "settings-empty";
+  empty.textContent = message;
+  return empty;
+}
+
+function markSettingsDirty(): void {
+  showSettingsError();
+  elements.settingsStatus.textContent = "Unsaved changes";
+}
+
+function setOptionalString<T extends object, K extends keyof T>(target: T, key: K, value: string): void {
+  const trimmed = value.trim();
+  if (trimmed) target[key] = trimmed as T[K];
+  else delete target[key];
+}
+
+function setOptionalThinking(target: EditableModelSettings, value: string): void {
+  if (value) target.thinking_level = value as ThinkingLevel;
+  else delete target.thinking_level;
+}
+
+function setOptionalNumber(target: EditableModelSettings, key: "compact_tokens", value: string): void {
+  if (value) target[key] = Number(value);
+  else delete target[key];
+}
+
+function uniqueSettingsName(base: string, existing: string[]): string {
+  const names = new Set(existing);
+  if (!names.has(base)) return base;
+  let suffix = 2;
+  while (names.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
+}
+
+function focusProviderName(name: string): void {
+  const input = [...elements.settingsProviderList.querySelectorAll<HTMLInputElement>(".settings-card-identity input")]
+    .find((candidate) => candidate.value === name);
+  input?.focus();
+  input?.select();
 }
 
 function showSettingsError(message?: string): void {
@@ -1021,7 +1654,9 @@ function showSettingsError(message?: string): void {
 
 function renderSettingsBusyState(): void {
   const blocking = settingsDialogIsBlocking();
-  elements.settingsSource.disabled = settingsBusy;
+  for (const control of elements.settingsForm.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>(
+    "input, select, textarea, button",
+  )) control.disabled = settingsBusy || control.dataset.permanentlyDisabled === "true";
   elements.settingsSave.disabled = settingsBusy;
   elements.settingsSave.textContent = settingsBusy ? "VALIDATING…" : "SAVE SETTINGS";
   elements.settingsClose.hidden = blocking;
@@ -1075,7 +1710,7 @@ function renderAuthProviders(): void {
   if (!provider.providerConfigured) {
     const note = document.createElement("p");
     note.className = "auth-note";
-    note.textContent = "Add an api=\"openai\", auth=\"openai-codex\" provider above and save settings before connecting ChatGPT.";
+    note.textContent = "Starting either login flow will add the recommended Codex provider and save it automatically.";
     card.append(note);
   }
 
@@ -1087,10 +1722,14 @@ function renderAuthProviders(): void {
     if (provider.configured) {
       actions.append(authButton("DISCONNECT", "danger", () => void logoutOpenAICodex()));
     } else {
-      const browserLogin = authButton("BROWSER LOGIN", "", () => void startAuthLogin("browser"));
-      const deviceLogin = authButton("DEVICE CODE", "secondary", () => void startAuthLogin("device_code"));
-      browserLogin.disabled = !provider.providerConfigured || authBusy;
-      deviceLogin.disabled = !provider.providerConfigured || authBusy;
+      const browserLogin = authButton("BROWSER LOGIN", "", () => void (provider.providerConfigured
+        ? startAuthLogin("browser")
+        : setupAndLoginWithCodex("browser")));
+      const deviceLogin = authButton("DEVICE CODE", "secondary", () => void (provider.providerConfigured
+        ? startAuthLogin("device_code")
+        : setupAndLoginWithCodex("device_code")));
+      browserLogin.disabled = settingsBusy || authBusy;
+      deviceLogin.disabled = settingsBusy || authBusy;
       actions.append(browserLogin, deviceLogin);
     }
     card.append(actions);
@@ -1172,9 +1811,9 @@ function externalLink(url: string, label: string): HTMLAnchorElement {
   return link;
 }
 
-async function startAuthLogin(method: "browser" | "device_code"): Promise<void> {
+async function startAuthLogin(method: "browser" | "device_code", existingPopup: Window | null = null): Promise<void> {
   if (authBusy) return;
-  const popup = method === "browser" ? window.open("about:blank", "_blank") : null;
+  const popup = method === "browser" ? existingPopup ?? window.open("about:blank", "_blank") : null;
   authBusy = true;
   renderAuthProviders();
   try {
@@ -1251,6 +1890,7 @@ async function completeAuthLogin(): Promise<void> {
   stopAuthPolling();
   await loadAuthProviders();
   await refreshConfig();
+  renderSettingsBusyState();
   notify("OpenAI Codex connected");
 }
 
@@ -1288,6 +1928,7 @@ async function logoutOpenAICodex(): Promise<void> {
     await authMutation("/api/auth/openai-codex", { method: "DELETE" });
     await loadAuthProviders();
     await refreshConfig();
+    renderSettingsBusyState();
     notify("OpenAI Codex disconnected");
   } catch (error) {
     notify(messageFrom(error));

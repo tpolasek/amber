@@ -25,7 +25,7 @@ export const SETTINGS_TEMPLATE = {
       auth_url: "<INSERT_AUTH_URL_HERE>",
       default_model: "<INSERT_DEFAULT_MODEL_HERE>",
       thinking_level: "max",
-      compact_tokens: 100_000,
+      compact_tokens: 200_000,
       models: {},
     },
   },
@@ -82,9 +82,10 @@ export const SETTINGS_TEMPLATE_SOURCE = `${stringify(SETTINGS_TEMPLATE).trimEnd(
 # [providers.openai-codex]
 # api = "openai"
 # auth = "openai-codex"
-# default_model = "gpt-5.4"
+# default_model = "gpt-5.6-sol"
 # thinking_level = "high"
-# Then save and connect ChatGPT from Auth providers in Amber's Settings modal.
+# compact_tokens = 250000
+# Or use Login with Codex in Amber's Settings modal to add and save this automatically.
 `;
 
 export const COMMIT_SKILL_TEMPLATE_SOURCE = `---

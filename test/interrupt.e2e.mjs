@@ -7,7 +7,7 @@
 //
 // Usage: npm run test:e2e   (run from the repository root; builds first)
 import { createServer } from "node:http";
-import { access, chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -1120,6 +1120,33 @@ try {
   const browserModule = await fetch(amberUrl(amber.port, "/built-in-commands.js"));
   check("browser command module is served",
     browserModule.status === 200 && (await browserModule.text()).includes("BUILT_IN_COMMANDS"));
+
+  const initialConfig = await (await fetch(amberUrl(amber.port, "/api/config"))).json();
+  const settingsResponse = await fetch(amberUrl(amber.port, "/api/settings"));
+  const settingsDocument = await settingsResponse.json();
+  check("settings API returns a structured document",
+    settingsResponse.status === 200
+      && settingsDocument.settings?.providers?.mock?.api === "anthropic"
+      && !("source" in settingsDocument),
+    JSON.stringify(settingsDocument));
+  settingsDocument.settings.theme = "light+";
+  const settingsSave = await fetch(amberUrl(amber.port, "/api/settings"), {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      "x-amber-auth-action-token": initialConfig.authActionToken,
+    },
+    body: JSON.stringify({ settings: settingsDocument.settings }),
+  });
+  const savedSettings = await settingsSave.json();
+  const generatedSettingsSource = await readFile(join(runDirectory, "home", ".amber", "settings.toml"), "utf8");
+  check("structured settings save regenerates TOML and hot reloads Amber",
+    settingsSave.status === 200
+      && savedSettings.config?.configured === true
+      && savedSettings.config?.theme === "light+"
+      && savedSettings.settings?.theme === "light+"
+      && generatedSettingsSource.includes('theme = "light+"'),
+    JSON.stringify(savedSettings));
 
   // Scenario 1: the reported case - ten sequential bash calls, queue once two finished.
   await runScenario(mock, amber, "sequential bash calls", "Run ten bash commands one at a time.", 2);

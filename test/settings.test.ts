@@ -4,8 +4,15 @@ import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse, stringify } from "smol-toml";
-import { loadSettings, loadSettingsSource, parseSettingsSource, saveSettingsSource } from "../src/settings.js";
-import { COMMIT_SKILL_TEMPLATE_SOURCE, SETTINGS_TEMPLATE } from "../src/settings-template.js";
+import {
+  loadSettings,
+  loadSettingsSource,
+  parseSettingsSource,
+  saveSettingsSource,
+  settingsForEditor,
+  settingsSourceFromEditor,
+} from "../src/settings.js";
+import { COMMIT_SKILL_TEMPLATE_SOURCE, SETTINGS_TEMPLATE, SETTINGS_TEMPLATE_SOURCE } from "../src/settings-template.js";
 
 test("creates a settings template on first load", async () => {
   const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
@@ -26,7 +33,7 @@ test("creates a settings template on first load", async () => {
   assert.equal((await stat(settingsPath)).mode & 0o777, 0o600);
 });
 
-test("loads, parses, and saves settings source for the browser editor", async () => {
+test("loads, parses, and atomically saves the settings file", async () => {
   const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
   const initial = await loadSettingsSource(homeDirectory);
   assert.equal(initial.path, join(homeDirectory, ".amber", "settings.toml"));
@@ -37,6 +44,67 @@ test("loads, parses, and saves settings source for the browser editor", async ()
   assert.equal((await loadSettings(homeDirectory)).theme, "hacker");
   assert.equal(await readFile(initial.path, "utf8"), updated);
   assert.equal((await stat(initial.path)).mode & 0o777, 0o600);
+});
+
+test("presents settings as a structured editor document without template placeholders", () => {
+  const editor = settingsForEditor(parseSettingsSource(SETTINGS_TEMPLATE_SOURCE));
+
+  assert.equal(editor.theme, "light+");
+  assert.deepEqual(editor.providers.default, {
+    api: "anthropic",
+    thinking_level: "max",
+    compact_tokens: 200_000,
+    models: {},
+  });
+  assert.equal(editor.agents.length, 2);
+});
+
+test("generates canonical TOML from structured settings", () => {
+  const result = settingsSourceFromEditor({
+    theme: "light+",
+    default_provider: "openai-codex",
+    ignored: "not persisted",
+    providers: {
+      "openai-codex": {
+        api: "openai",
+        auth: "openai-codex",
+        auth_url: "https://chatgpt.com/backend-api",
+        default_model: "gpt-5.6-sol",
+        thinking_level: "high",
+        compact_tokens: 250_000,
+        models: {},
+        ignored: true,
+      },
+    },
+    agents: [],
+  }, "/tmp/settings.toml");
+
+  assert.deepEqual(parse(result.source), {
+    theme: "light+",
+    default_provider: "openai-codex",
+    providers: {
+      "openai-codex": {
+        api: "openai",
+        auth: "openai-codex",
+        default_model: "gpt-5.6-sol",
+        thinking_level: "high",
+        compact_tokens: 250_000,
+      },
+    },
+    agents: [],
+  });
+  assert.equal(result.settings.providers["openai-codex"]?.auth_url, "https://chatgpt.com/backend-api");
+  assert.doesNotMatch(result.source, /ignored|models|auth_url/);
+});
+
+test("rejects invalid structured settings before generating a usable document", () => {
+  assert.throws(() => settingsSourceFromEditor({
+    theme: "light+",
+    providers: {
+      broken: { api: "openai", auth_key: "", auth_url: "", models: {} },
+    },
+    agents: [],
+  }, "/tmp/settings.toml"), /providers\.broken\.auth_key must be a non-empty string/);
 });
 
 test("seeds the commit skill when settings are first created", async () => {

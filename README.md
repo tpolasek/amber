@@ -55,63 +55,24 @@ For development with automatic rebuilds:
 npm run dev
 ```
 
-## Configure **settings.toml**
+## Settings
 
-AMBER reads **~/.amber/settings.toml**. Each provider is configured with **api = "anthropic"** (Anthropic Messages API) or **api = "openai"** (OpenAI Responses API); **api** defaults to **"anthropic"** when omitted. Either way, providers discover their available models from **/v1/models**. OpenAI-protocol providers prefer the Responses API and automatically fall back to **Chat Completions** when the server does not implement it (LM Studio, Ollama, vLLM, llama.cpp), so local servers work without extra configuration.
+Open Settings with the gear beside the selected model. The modal is the primary interface for **~/.amber/settings.toml** and exposes every supported setting:
 
-```toml
-theme = "dark" # dark (current Amber), light (Solarized Light), light+ (VS Code Light+), or hacker (terminal green)
-default_provider = "zai"
-default_agent_provider = "openai"
-default_agent_model = "gpt-5.4" # Optional; otherwise uses the agent provider's default model.
+- Theme and default provider/agent model selection
+- Editable API provider and per-model override lists
+- Editable agent definitions, prompts, permissions, model overrides, and compaction
+- OpenAI Codex login and connection status
 
-[providers.zai]
-api = "anthropic"        # "anthropic" (default) or "openai"
-auth_key = "your-key"
-auth_url = "https://api.z.ai/api/anthropic"
-default_model = "glm-5.3" # Optional; otherwise uses the first discovered model.
-thinking_level = "max"    # none, low, medium, high, xhigh, or max; levels beyond an API's ceiling are clamped.
-compact_tokens = 200000   # Automatically compact context at this size.
+The UI regenerates the TOML file, so hand-written formatting and comments are not preserved. Every save is validated and written atomically before Amber reloads its theme, provider catalog, model defaults, and agents. If startup configuration is invalid, the modal remains open until a working configuration is saved (and a default Codex provider is connected).
 
-# Override a discovered model or add a custom model.
-[providers.zai.models.glm-4.7]
-thinking_level = "low"
-compact_tokens = 100000
+API-key providers use either the **Anthropic Messages** or **OpenAI Responses** protocol and default to a 200,000-token compaction threshold. Both protocols discover available models from **/v1/models**. OpenAI-protocol providers prefer the Responses API and automatically fall back to **Chat Completions** for compatible local servers such as LM Studio, Ollama, vLLM, and llama.cpp. OpenAI provider/model ids may contain slashes, so OpenRouter-style backends work.
 
-# Add OpenAI alongside Anthropic-compatible providers.
-[providers.openai]
-api = "openai"
-auth_key = "your-openai-key"
-auth_url = "https://api.openai.com"
-default_model = "gpt-5.4"
-thinking_level = "high"
-
-# Local servers speaking the OpenAI Chat Completions API (LM Studio, Ollama,
-# vLLM, llama.cpp) use the same "openai" protocol: AMBER tries the Responses
-# API first and falls back to Chat Completions when it is unavailable.
-[providers.lm-studio]
-api = "openai"
-auth_key = "your-local-key"   # Any non-empty string when the server does not check keys.
-auth_url = "http://127.0.0.1:1234/v1"
-default_model = "qwen3-32b"
-thinking_level = "high"       # Reasoning is controlled server-side; deltas display when streamed.
-
-[[agents]]
-type = "explore"
-whenToUse = "Search and inspect a codebase."
-systemPrompt = "Inspect the requested code and return concise findings."
-readOnly = true
-compact = false          # Optional; enables auto-compaction of the agent's context (disabled by default).
-model = "zai/glm-5.3" # Optional; overrides the global agent defaults.
-```
-
-The theme and provider catalog are reloaded whenever settings are saved. Open Settings with the gear beside the selected model.
-
-Provider credentials belong under **[providers.\<name>]**, never under an agent. API-key provider configuration comes from **settings.toml**; no environment variables are used. **api** selects the provider's protocol: **"anthropic"** (the default) or **"openai"**. Authentication is either **auth_key** or **auth = "openai-codex"**, never both; Codex authentication is available only with the OpenAI protocol. OpenAI-protocol providers accept slashed model ids such as **xiaomi/mimo-v2-pro**, so OpenRouter-style backends work. Models in `[[agents]]` are referenced as **provider/model**. Agent model precedence is the per-agent `model`, then `default_agent_model` within `default_agent_provider`, then that provider's default model; without agent defaults, agents inherit the session model. Select a session's model from the model name in the browser's top-right corner. Set an agent's **compact** to **true** to auto-compact its context at the model's **compact_tokens** threshold; agents never auto-compact otherwise.
+Agent model precedence is the per-agent model override, then the default agent model within the default agent provider, then that provider's default model. Without agent defaults, agents inherit the session model. Agent auto-compaction is opt-in.
 
 ### ChatGPT Plus/Pro OAuth for OpenAI Codex
 
-Amber can use a ChatGPT Plus/Pro subscription through OpenAI's Codex OAuth flow. Configure the provider without an API key:
+Amber can use a ChatGPT Plus/Pro subscription through OpenAI's Codex OAuth flow. **Login with Codex** creates and immediately saves this preset, makes it the default provider, and starts browser authentication:
 
 ```toml
 default_provider = "openai-codex"
@@ -120,11 +81,12 @@ default_provider = "openai-codex"
 api = "openai"
 auth = "openai-codex"
 # auth_url defaults to https://chatgpt.com/backend-api
-default_model = "gpt-5.4" # Required (or list models) so the provider works before login; replaced by discovery after connecting.
+default_model = "gpt-5.6-sol"
 thinking_level = "high"
+compact_tokens = 250000
 ```
 
-Start Amber, open the top-right **Settings** gear, save the Codex provider, then choose either connection method under **Auth providers**:
+The Codex connection section also provides both authentication methods:
 
 - **Browser login** — Authorization Code + PKCE through `auth.openai.com`, with a state-validated callback on `localhost:1455`. Remote sessions can paste the final redirect URL or authorization code.
 - **Device code** — displays a code for `https://auth.openai.com/codex/device` and waits for authorization.

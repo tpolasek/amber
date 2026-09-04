@@ -14,8 +14,11 @@ import {
   loadSettingsSource,
   parseSettingsSource,
   saveSettingsSource,
+  settingsForEditor,
+  settingsSourceFromEditor,
   type AmberSettings,
 } from "./settings.js";
+import { SETTINGS_TEMPLATE_SOURCE } from "./settings-template.js";
 import { loadUserInstructions } from "./user-instructions.js";
 import { AuthStorage } from "./auth-storage.js";
 import { OpenAICodexAuth } from "./openai-codex-oauth.js";
@@ -232,10 +235,18 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     if (!authorizeLocalSettingsAccess(request, response)) return;
     try {
       const current = await loadSettingsSource();
+      let editableSettings: AmberSettings;
+      let documentError = configurationError;
+      try {
+        editableSettings = parseSettingsSource(current.source, current.path);
+      } catch (error) {
+        editableSettings = settings ?? parseSettingsSource(SETTINGS_TEMPLATE_SOURCE, current.path);
+        documentError ??= configurationErrorMessage(error);
+      }
       return json(response, 200, {
-        source: current.source,
+        settings: settingsForEditor(editableSettings),
         path: current.path,
-        error: configurationError,
+        ...(documentError ? { error: documentError } : {}),
       });
     } catch (error) {
       return json(response, 500, { error: errorMessage(error) });
@@ -244,12 +255,11 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   if (method === "PUT" && url.pathname === "/api/settings") {
     if (!authorizeSettingsMutation(request, response)) return;
     const body = await readJson(request, 512_000);
-    const source = typeof body.source === "string" ? body.source : undefined;
-    if (source === undefined) return json(response, 400, { error: "Settings source must be a string" });
-    if (!source.trim()) return json(response, 400, { error: "Settings cannot be empty" });
+    if (!("settings" in body)) return json(response, 400, { error: "Settings document is required" });
+    let source: string;
     let nextSettings: AmberSettings;
     try {
-      nextSettings = parseSettingsSource(source, settingsPath);
+      ({ source, settings: nextSettings } = settingsSourceFromEditor(body.settings, settingsPath));
     } catch (error) {
       return json(response, 400, { error: configurationErrorMessage(error) });
     }
@@ -266,7 +276,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       deactivateConfiguration(nextSettings, error);
     }
     return json(response, 200, {
-      source,
+      settings: settingsForEditor(nextSettings),
       path: settingsPath,
       ...(configurationError ? { error: configurationError } : {}),
       config: await configPayload(),
@@ -2378,7 +2388,7 @@ function configurationRequired(response: ServerResponse): void {
 }
 
 async function configPayload(): Promise<object> {
-  const defaultProvider = providerCatalog?.model(undefined).provider;
+  const defaultProvider = settings?.default_provider ?? Object.keys(settings?.providers ?? {})[0];
   const authenticationRequired = Boolean(
     defaultProvider
     && settings?.providers[defaultProvider]?.auth === "openai-codex"

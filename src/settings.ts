@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { parse } from "smol-toml";
+import { parse, stringify } from "smol-toml";
 import type { AgentDefinition } from "./agent-tool.js";
 import type { ProviderProtocol, ThinkingLevel } from "./types.js";
 import { COMMIT_SKILL_TEMPLATE_SOURCE, SETTINGS_TEMPLATE_SOURCE } from "./settings-template.js";
@@ -30,6 +30,24 @@ export interface ProviderSettings extends ModelSettings {
   auth_url: string;
   default_model?: string;
   models: Record<string, ModelSettings>;
+}
+
+export interface EditableProviderSettings extends ModelSettings {
+  api: ProviderProtocol;
+  auth?: "openai-codex";
+  auth_key?: string;
+  auth_url?: string;
+  default_model?: string;
+  models: Record<string, ModelSettings>;
+}
+
+export interface EditableAmberSettings {
+  theme: AmberTheme;
+  default_provider?: string;
+  default_agent_provider?: string;
+  default_agent_model?: string;
+  providers: Record<string, EditableProviderSettings>;
+  agents: AgentDefinition[];
 }
 
 export async function loadSettings(homeDirectory = homedir()): Promise<AmberSettings> {
@@ -83,6 +101,121 @@ export async function saveSettingsSource(source: string, homeDirectory = homedir
     throw error;
   }
   return settingsPath;
+}
+
+/** Converts parsed settings into the canonical shape exposed to the settings UI. */
+export function settingsForEditor(settings: AmberSettings): EditableAmberSettings {
+  return {
+    theme: settings.theme ?? "light+",
+    ...(settings.default_provider ? { default_provider: settings.default_provider } : {}),
+    ...(settings.default_agent_provider ? { default_agent_provider: settings.default_agent_provider } : {}),
+    ...(settings.default_agent_model ? { default_agent_model: settings.default_agent_model } : {}),
+    providers: Object.fromEntries(Object.entries(settings.providers).map(([name, provider]) => {
+      const authKey = configuredSetting(provider.auth_key);
+      const authUrl = configuredSetting(provider.auth_url);
+      const defaultModel = configuredSetting(provider.default_model);
+      return [name, {
+        api: provider.api,
+        ...(provider.auth ? { auth: provider.auth } : {}),
+        ...(authKey ? { auth_key: authKey } : {}),
+        ...(authUrl && !(provider.auth === "openai-codex" && authUrl === "https://chatgpt.com/backend-api")
+          ? { auth_url: authUrl }
+          : {}),
+        ...(defaultModel ? { default_model: defaultModel } : {}),
+        ...(provider.thinking_level ? { thinking_level: provider.thinking_level } : {}),
+        ...(provider.compact_tokens ? { compact_tokens: provider.compact_tokens } : {}),
+        models: structuredClone(provider.models),
+      } satisfies EditableProviderSettings];
+    })),
+    agents: structuredClone(settings.agents),
+  };
+}
+
+/** Encodes the UI's structured document and validates it with the normal settings parser. */
+export function settingsSourceFromEditor(
+  value: unknown,
+  settingsPath = join(homedir(), ".amber", "settings.toml"),
+): { source: string; settings: AmberSettings } {
+  let source: string;
+  try {
+    source = `${stringify(canonicalEditorValue(value)).trimEnd()}\n`;
+  } catch (error) {
+    throw new Error(`Could not write ${settingsPath}: ${errorMessage(error)}`);
+  }
+  return { source, settings: parseSettingsSource(source, settingsPath) };
+}
+
+function canonicalEditorValue(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const result: Record<string, unknown> = {};
+  copySetting(result, value, "theme");
+  copyOptionalString(result, value, "default_provider");
+  copyOptionalString(result, value, "default_agent_provider");
+  copyOptionalString(result, value, "default_agent_model");
+  result.providers = canonicalProviders(value.providers);
+  result.agents = canonicalAgents(value.agents);
+  return result;
+}
+
+function canonicalProviders(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.entries(value).map(([name, candidate]) => {
+    if (!isRecord(candidate)) return [name, candidate];
+    const provider: Record<string, unknown> = {};
+    copySetting(provider, candidate, "api");
+    copySetting(provider, candidate, "auth");
+    copySetting(provider, candidate, "auth_key");
+    if (!(candidate.auth === "openai-codex"
+      && (candidate.auth_url === undefined || candidate.auth_url === "https://chatgpt.com/backend-api"))) {
+      copySetting(provider, candidate, "auth_url");
+    }
+    copyOptionalString(provider, candidate, "default_model");
+    copyOptionalString(provider, candidate, "thinking_level");
+    copySetting(provider, candidate, "compact_tokens");
+    const models = canonicalModels(candidate.models);
+    if (!isRecord(models) || Object.keys(models).length > 0) provider.models = models;
+    return [name, provider];
+  }));
+}
+
+function canonicalModels(value: unknown): unknown {
+  if (value === undefined) return {};
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.entries(value).map(([name, candidate]) => {
+    if (!isRecord(candidate)) return [name, candidate];
+    const model: Record<string, unknown> = {};
+    copyOptionalString(model, candidate, "thinking_level");
+    copySetting(model, candidate, "compact_tokens");
+    return [name, model];
+  }));
+}
+
+function canonicalAgents(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map((candidate) => {
+    if (!isRecord(candidate)) return candidate;
+    const agent: Record<string, unknown> = {};
+    copySetting(agent, candidate, "type");
+    copySetting(agent, candidate, "whenToUse");
+    copySetting(agent, candidate, "systemPrompt");
+    copySetting(agent, candidate, "readOnly");
+    copySetting(agent, candidate, "compact");
+    copyOptionalString(agent, candidate, "model");
+    return agent;
+  });
+}
+
+function copySetting(target: Record<string, unknown>, source: Record<string, unknown>, key: string): void {
+  if (source[key] !== undefined) target[key] = source[key];
+}
+
+function copyOptionalString(target: Record<string, unknown>, source: Record<string, unknown>, key: string): void {
+  if (typeof source[key] === "string" && !source[key].trim()) return;
+  copySetting(target, source, key);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function parseSettings(parsed: unknown, settingsPath: string): AmberSettings {

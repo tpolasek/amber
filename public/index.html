@@ -181,14 +181,37 @@
           <section class="settings-editor-section">
             <div class="settings-section-heading">
               <div><strong>CONFIGURATION</strong><small id="settings-path">~/.amber/settings.toml</small></div>
-              <p><code>api</code> is <code>anthropic</code> or <code>openai</code>. Use <code>auth_key</code> for API keys, or <code>auth = "openai-codex"</code> with the OpenAI API.</p>
+              <p>Amber generates this file from the controls below, validates it, and reloads providers when you save.</p>
             </div>
-            <textarea id="settings-source" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Amber settings TOML"></textarea>
+            <div id="settings-form" class="settings-form">
+              <section class="settings-group">
+                <div class="settings-group-heading"><div><strong>APPEARANCE &amp; DEFAULTS</strong><small>Choose the interface theme and default providers.</small></div></div>
+                <div id="settings-theme-options" class="settings-theme-options" aria-label="Theme"></div>
+                <div id="settings-defaults" class="settings-field-grid"></div>
+              </section>
+              <section class="settings-group">
+                <div class="settings-group-heading">
+                  <div><strong>PROVIDERS</strong><small>Configure API keys, endpoints, defaults, and model overrides.</small></div>
+                  <div class="settings-group-actions">
+                    <button id="settings-add-provider" class="settings-action-button" type="button">ADD API PROVIDER</button>
+                    <button id="settings-login-codex" class="settings-action-button primary" type="button">LOGIN WITH CODEX</button>
+                  </div>
+                </div>
+                <div id="settings-provider-list" class="settings-card-list"></div>
+              </section>
+              <section class="settings-group">
+                <div class="settings-group-heading">
+                  <div><strong>AGENTS</strong><small>Configure agent prompts, permissions, compaction, and model overrides.</small></div>
+                  <button id="settings-add-agent" class="settings-action-button" type="button">ADD AGENT</button>
+                </div>
+                <div id="settings-agent-list" class="settings-card-list"></div>
+              </section>
+            </div>
             <p id="settings-error" class="settings-error" role="alert" hidden></p>
           </section>
           <section class="settings-auth-section">
             <div class="settings-section-heading">
-              <div><strong>AUTH PROVIDERS</strong><small>Subscription-based connections</small></div>
+              <div><strong>CODEX CONNECTION</strong><small>Subscription-based authentication</small></div>
               <p>Codex providers use your ChatGPT Plus/Pro login instead of an API key.</p>
             </div>
             <div id="settings-auth-body" class="settings-auth-body"></div>
