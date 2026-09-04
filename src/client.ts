@@ -45,6 +45,7 @@ type PlanningTaskStatus = "pending" | "in_progress" | "completed";
 interface PlanningTask { id: string; subject: string; description: string; activeForm: string; status: PlanningTaskStatus; owner: string; blocks: string[]; blockedBy: string[]; metadata: Record<string, unknown> }
 interface InvokedSkill { name: string; path: string; content: string; invokedAt: string }
 interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; model?: string; thinkingLevel?: ThinkingLevel; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error" | "stopped"; planningTasks?: PlanningTask[]; planningTaskArchiveHighWaterMark?: number; contextTokens?: number; planMode?: SessionPlanMode; skillRoots?: string[]; skillTouchedPaths?: string[]; invokedSkills?: InvokedSkill[] }
+interface AgentSessionSummary { id: string; description: string; status: NonNullable<Session["agentStatus"]> }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface AvailableModel { key: string; provider: string; api: "anthropic" | "openai"; model: string; displayName: string; thinkingLevel: ThinkingLevel; compactTokens?: number }
 interface Config { provider: string; model: string; defaultModel: string; models: AvailableModel[]; mode: "live"; homeDirectory: string; workspaceRoot: string; authActionToken: string; theme: "dark" | "light" | "light+" | "hacker" }
@@ -135,6 +136,11 @@ let authPollTimer: number | undefined;
 let sessionRunController: AbortController | null = null;
 let sessionRunId: string | null = null;
 let sessionRunReconnectTimer: number | undefined;
+let agentSessions: AgentSessionSummary[] = [];
+let agentSessionsOwnerId: string | null = null;
+let dismissedAgentSessionIds = new Set<string>();
+let agentSessionsRequest = 0;
+let agentSessionsPollTimer: number | undefined;
 let queuedMessage: { sessionId: string; content: string; kind: "message" | "command"; queuedAt: number; images?: MessageImage[] } | null = null;
 
 const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
@@ -167,6 +173,7 @@ const elements = {
   terminal: required<HTMLElement>("terminal"),
   sessionList: required<HTMLElement>("session-list"),
   planningTaskList: required<HTMLElement>("planning-task-list"),
+  activeAgentList: required<HTMLElement>("active-agent-list"),
   transcript: required<HTMLElement>("transcript"),
   emptyState: required<HTMLElement>("empty-state"),
   composer: required<HTMLFormElement>("composer"),
@@ -529,6 +536,7 @@ function wireEvents(): void {
 function openLandingDialog(): void {
   if (state.streaming) return;
   state.session = null;
+  syncAgentSessionsForCurrentSession();
   renderModelStatus();
   renderPlanMode();
   sessionDialogReturnsToLanding = false;
@@ -2375,6 +2383,9 @@ function applyToolUpdate(session: Session, payload: { messageId: string; toolCal
   if (index >= 0) calls[index] = payload.toolCall;
   else calls.push(payload.toolCall);
   updateMessage(messageElement(message.id), message);
+  if (payload.toolCall.name === "Agent" && payload.toolCall.agentSessionId) {
+    scheduleAgentSessionsRefresh(0);
+  }
 }
 
 function applyToolOutput(session: Session, payload: { messageId: string; toolUseId: string; chunk: string }): void {
@@ -2794,6 +2805,7 @@ function renderSession(): void {
   renderComposer();
   renderPlanMode();
   renderPlanningTasks();
+  syncAgentSessionsForCurrentSession();
   renderContextMeter();
   renderQueuedMessage();
   syncSessionRunUpdates();
@@ -2846,6 +2858,7 @@ function updateRenderedSession(session: Session): void {
   renderComposer();
   renderPlanMode();
   renderPlanningTasks();
+  syncAgentSessionsForCurrentSession();
   renderContextMeter();
   renderQueuedMessage();
   syncSessionRunUpdates();
@@ -2974,6 +2987,97 @@ function renderPlanningTasks(): void {
     item.append(copy);
     elements.planningTaskList.append(item);
   }
+}
+
+function syncAgentSessionsForCurrentSession(): void {
+  const sessionId = state.session?.id ?? null;
+  if (agentSessionsOwnerId === sessionId) return;
+  agentSessionsRequest += 1;
+  if (agentSessionsPollTimer !== undefined) window.clearTimeout(agentSessionsPollTimer);
+  agentSessionsPollTimer = undefined;
+  agentSessionsOwnerId = sessionId;
+  agentSessions = [];
+  dismissedAgentSessionIds = new Set();
+  renderAgentSessions();
+  if (sessionId) scheduleAgentSessionsRefresh(0);
+}
+
+function scheduleAgentSessionsRefresh(delayMs = 1_000): void {
+  const sessionId = state.session?.id;
+  if (!sessionId || agentSessionsOwnerId !== sessionId) return;
+  if (agentSessionsPollTimer !== undefined) {
+    if (delayMs > 0) return;
+    window.clearTimeout(agentSessionsPollTimer);
+  }
+  agentSessionsPollTimer = window.setTimeout(() => {
+    agentSessionsPollTimer = undefined;
+    void refreshAgentSessions(sessionId);
+  }, delayMs);
+}
+
+async function refreshAgentSessions(sessionId: string): Promise<void> {
+  const request = ++agentSessionsRequest;
+  try {
+    const result = await api<{ agents: AgentSessionSummary[] }>(`/api/sessions/${sessionId}/agents`);
+    if (request !== agentSessionsRequest || state.session?.id !== sessionId) return;
+    const currentCohort = result.agents.filter((agent) => !dismissedAgentSessionIds.has(agent.id));
+    if (currentCohort.length > 0 && currentCohort.every((agent) => agent.status !== "running")) {
+      for (const agent of currentCohort) dismissedAgentSessionIds.add(agent.id);
+      agentSessions = [];
+    } else {
+      agentSessions = currentCohort;
+    }
+    renderAgentSessions();
+  } catch {
+    // Preserve the last snapshot and retry while the session or an agent is active.
+  } finally {
+    if (request !== agentSessionsRequest || state.session?.id !== sessionId) return;
+    if (state.streaming || agentSessions.some((agent) => agent.status === "running")) {
+      scheduleAgentSessionsRefresh();
+    }
+  }
+}
+
+function renderAgentSessions(): void {
+  elements.activeAgentList.replaceChildren();
+  if (agentSessions.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "active-agent-empty";
+    empty.textContent = "No agents spawned";
+    elements.activeAgentList.append(empty);
+    return;
+  }
+
+  for (const agent of agentSessions) {
+    const link = document.createElement("a");
+    link.className = `active-agent-item ${agent.status}`;
+    link.href = `/s/${agent.id}`;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.title = agent.description;
+    link.setAttribute("aria-label", `${agent.description} · ${agent.status} · open agent session`);
+
+    const description = document.createElement("strong");
+    description.className = "active-agent-description";
+    description.textContent = shortenAgentDescription(agent.description);
+    const meta = document.createElement("span");
+    meta.className = "active-agent-meta";
+    const session = document.createElement("span");
+    session.className = "active-agent-session";
+    session.textContent = `↗ ${agent.id.slice(agent.id.lastIndexOf(".") + 1)}`;
+    session.title = agent.id;
+    const status = document.createElement("span");
+    status.className = `active-agent-status ${agent.status}`;
+    status.textContent = agent.status;
+    meta.append(session, status);
+    link.append(description, meta);
+    elements.activeAgentList.append(link);
+  }
+}
+
+function shortenAgentDescription(description: string): string {
+  const compact = description.replace(/\s+/g, " ").trim();
+  return compact.length <= 42 ? compact : `${compact.slice(0, 41).trimEnd()}…`;
 }
 
 function renderContextMeter(): void {
@@ -3395,6 +3499,10 @@ function setStreaming(streaming: boolean): void {
   elements.prompt.disabled = false;
   renderModelStatus();
   renderPlanMode();
+  if (streaming) {
+    syncAgentSessionsForCurrentSession();
+    scheduleAgentSessionsRefresh(0);
+  }
 }
 
 /**

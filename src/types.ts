@@ -158,6 +158,12 @@ export interface SessionSummary {
   preview: string;
 }
 
+export interface AgentSessionSummary {
+  id: string;
+  description: string;
+  status: NonNullable<Session["agentStatus"]>;
+}
+
 export interface ProviderCacheControl {
   type: "ephemeral";
   scope?: "global";

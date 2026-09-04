@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomInt, randomUUID } from "node:crypto";
-import type { Message, Session, SessionSummary } from "./types.js";
+import type { AgentSessionSummary, Message, Session, SessionSummary } from "./types.js";
 import { BASIC_ENGLISH_2000 } from "./basic-english-2000.js";
 
 const SESSION_ID = /^(?:[a-f0-9-]{36}|[a-z]+(?:\.[a-z]+){2})(?:\.[2-9]\d*)?(?:\.[a-z0-9]{8})*$/;
@@ -235,6 +235,31 @@ export class SessionStore {
             || "No messages yet",
         };
       });
+  }
+
+  async listAgents(parentSessionId: string): Promise<AgentSessionSummary[]> {
+    if (!SESSION_ID.test(parentSessionId)) return [];
+    const entries = await readdir(this.#directory, { withFileTypes: true });
+    const sessions = await Promise.all(
+      entries
+        .filter((entry) =>
+          entry.isFile()
+          && entry.name.startsWith(`${parentSessionId}.`)
+          && entry.name.endsWith(".json")
+        )
+        .map((entry) => this.get(entry.name.slice(0, -5))),
+    );
+
+    return sessions
+      .filter((session): session is Session =>
+        session?.parentSessionId === parentSessionId && session.agentStatus !== undefined
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .map((session) => ({
+        id: session.id,
+        description: session.agentDescription ?? session.title,
+        status: session.agentStatus!,
+      }));
   }
 
   async family(id: string): Promise<Session[]> {

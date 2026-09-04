@@ -198,6 +198,28 @@ test("creates linked agent sub-sessions using the parent id and a short uuid", a
   assert.deepEqual((await store.list()).map((session) => session.id), [parent.id]);
 });
 
+test("lists direct agent sub-sessions with their persisted status", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const parent = await store.create();
+  const first = await store.createAgentSession(parent, "general-purpose", "Research the API");
+  const second = await store.createAgentSession(parent, "code-review", "Review the patch");
+  const nested = await store.createAgentSession(first, "general-purpose", "Nested agent");
+  first.agentStatus = "complete";
+  second.agentStatus = "error";
+  nested.agentStatus = "stopped";
+  await Promise.all([store.save(first), store.save(second), store.save(nested)]);
+
+  const agents = await store.listAgents(parent.id);
+  assert.deepEqual(new Set(agents), new Set([
+    { id: first.id, description: "Research the API", status: "complete" },
+    { id: second.id, description: "Review the patch", status: "error" },
+  ]));
+  assert.equal(agents.some((agent) => agent.id === nested.id), false);
+  assert.deepEqual(await store.listAgents("missing.session.id"), []);
+});
+
 test("resolves a complete root session family from the root or a nested agent", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-store-"));
   const store = new SessionStore(directory);

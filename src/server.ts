@@ -326,6 +326,14 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       : json(response, 404, { error: "Session not found" });
   }
 
+  const sessionAgentsMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/agents$`));
+  if (method === "GET" && sessionAgentsMatch?.[1]) {
+    const session = activeSessions.session(sessionAgentsMatch[1]) ?? await store.get(sessionAgentsMatch[1]);
+    return session
+      ? json(response, 200, { agents: await store.listAgents(sessionAgentsMatch[1]) })
+      : json(response, 404, { error: "Session not found" });
+  }
+
   const sessionModelMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/model$`));
   if (method === "POST" && sessionModelMatch?.[1]) {
     if (activeSessions.has(sessionModelMatch[1])) {

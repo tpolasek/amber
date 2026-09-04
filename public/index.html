@@ -6,7 +6,7 @@
     <meta name="description" content="AMBER — browser terminal for persistent LLM agent sessions">
     <title>AMBER // Agent Terminal</title>
     <link rel="stylesheet" href="/themes.css?v=1">
-    <link rel="stylesheet" href="/styles.css?v=51">
+    <link rel="stylesheet" href="/styles.css?v=53">
   </head>
   <body>
     <div class="noise" aria-hidden="true"></div>
@@ -35,6 +35,8 @@
         </fieldset>
         <div class="sidebar-label"><span>ACTIVE TASKS</span><span class="line"></span></div>
         <nav id="planning-task-list" class="session-list planning-task-list" aria-label="Tasks for this session"></nav>
+        <div class="sidebar-label"><span>ACTIVE AGENTS</span><span class="line"></span></div>
+        <nav id="active-agent-list" class="session-list active-agent-list" aria-label="Agents for this session"></nav>
         <footer class="sidebar-footer">
           <button id="auth-settings" class="sidebar-auth-button" type="button"><span>AUTH</span><small>PROVIDERS</small><i>›</i></button>
           <div id="context-meter" class="system-meter context-meter context-green"><span>CTX</span><i><b id="context-meter-bar"></b></i><span id="context-meter-value">0k</span></div>
