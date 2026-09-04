@@ -58,11 +58,11 @@ test("any other listen failure still reports the underlying error", () => {
 
 test("an invalid settings file is reported without a stack trace", () => {
   const settingsPath = "/home/user/.amber/settings.toml";
-  const error = new Error(`${settingsPath}: providers.openai-codex: openai-codex auth requires default_model or at least one explicit model`);
+  const error = new Error(`${settingsPath}: providers.openai.api must be anthropic or openai`);
   const message = startupErrorMessage(error, settingsPath);
   assert.match(message, /AMBER cannot start/);
   assert.match(message, /settings\.toml is not valid/);
-  assert.match(message, /openai-codex auth requires default_model/);
+  assert.match(message, /api must be anthropic or openai/);
   assert.match(message, /Edit \/home\/user\/\.amber\/settings\.toml and run amber again\./);
   assert.doesNotMatch(message, new RegExp(`${settingsPath}: providers`));
 });

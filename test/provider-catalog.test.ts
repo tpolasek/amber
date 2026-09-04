@@ -252,7 +252,6 @@ test("uses OAuth-backed Codex discovery and provider requests", async () => {
         api: "openai",
         auth: "openai-codex",
         auth_url: "https://chatgpt.com/backend-api",
-        default_model: "gpt-codex",
         models: {},
       },
     },

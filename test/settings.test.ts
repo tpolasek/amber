@@ -500,7 +500,6 @@ test("loads an OpenAI Codex OAuth provider without an API key", async () => {
       "openai-codex": {
         api: "openai",
         auth: "openai-codex",
-        default_model: "gpt-codex",
         thinking_level: "high",
       },
     },
@@ -510,7 +509,6 @@ test("loads an OpenAI Codex OAuth provider without an API key", async () => {
     api: "openai",
     auth: "openai-codex",
     auth_url: "https://chatgpt.com/backend-api",
-    default_model: "gpt-codex",
     thinking_level: "high",
     models: {},
   });
@@ -544,7 +542,7 @@ test("rejects multiple OpenAI Codex OAuth providers", () => {
   );
 });
 
-test("rejects OpenAI Codex OAuth providers without a usable fallback model", async () => {
+test("allows an OpenAI Codex OAuth provider to omit its default model before login", async () => {
   const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
   const settingsDirectory = join(homeDirectory, ".amber");
   await mkdir(settingsDirectory);
@@ -552,10 +550,12 @@ test("rejects OpenAI Codex OAuth providers without a usable fallback model", asy
     providers: { "openai-codex": { api: "openai", auth: "openai-codex" } },
   }), "utf8");
 
-  await assert.rejects(
-    loadSettings(homeDirectory),
-    /openai-codex auth requires default_model or at least one explicit model/,
-  );
+  assert.deepEqual((await loadSettings(homeDirectory)).providers["openai-codex"], {
+    api: "openai",
+    auth: "openai-codex",
+    auth_url: "https://chatgpt.com/backend-api",
+    models: {},
+  });
 });
 
 test("rejects OpenAI Codex OAuth on non-OpenAI providers", async () => {

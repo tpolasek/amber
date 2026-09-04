@@ -81,10 +81,11 @@ default_provider = "openai-codex"
 api = "openai"
 auth = "openai-codex"
 # auth_url defaults to https://chatgpt.com/backend-api
-default_model = "gpt-5.6-sol"
 thinking_level = "high"
 compact_tokens = 250000
 ```
+
+After login, Amber discovers the available Codex models and uses the first model as the default unless you select another one.
 
 The Codex provider card shows connection status and provides both authentication methods:
 

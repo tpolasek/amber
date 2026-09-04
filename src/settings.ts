@@ -294,9 +294,6 @@ function parseProviders(value: unknown, settingsPath: string): Record<string, Pr
     if (!authUrl) throw new Error(`${settingsPath}: providers.${name}.auth_url must be a non-empty string`);
     const defaultModel = optionalString(provider.default_model, `${settingsPath}: providers.${name}.default_model`);
     const models = parseModels(provider.models, `${settingsPath}: providers.${name}.models`, api);
-    if (auth === "openai-codex" && !defaultModel && Object.keys(models).length === 0) {
-      throw new Error(`${settingsPath}: providers.${name}: openai-codex auth requires default_model or at least one explicit model`);
-    }
     providers[name] = {
       api,
       ...(auth ? { auth } : {}),

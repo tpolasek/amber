@@ -1194,7 +1194,7 @@ function providerSettingsCard(name: string, provider: EditableProviderSettings):
       setOptionalString(provider, "auth_url", value);
       markSettingsDirty();
     }),
-    settingsTextField("DEFAULT MODEL", provider.default_model ?? "", "First discovered model", (value) => {
+    settingsProviderDefaultModelField(name, provider.default_model, (value) => {
       setOptionalString(provider, "default_model", value);
       markSettingsDirty();
     }),
@@ -1368,7 +1368,6 @@ async function setupAndLoginWithCodex(method: "browser" | "device_code" = "brows
   settingsDraft.providers[codexName] = {
     api: "openai",
     auth: "openai-codex",
-    default_model: "gpt-5.6-sol",
     thinking_level: "high",
     compact_tokens: 250_000,
     models: {},
@@ -1610,6 +1609,24 @@ function settingsAgentModelField(agent: EditableAgentSettings): HTMLLabelElement
   });
 }
 
+function settingsProviderDefaultModelField(
+  providerName: string,
+  value: string | undefined,
+  onChange: (value: string) => void,
+): HTMLLabelElement {
+  const models = (state.config?.models ?? []).filter((model) => model.provider === providerName);
+  return settingsModelSelectionField({
+    label: "DEFAULT MODEL",
+    value,
+    models,
+    emptyLabel: "Default: First discovered model",
+    placeholder: "Default model. Press save to load the model list.",
+    optionValue: (model) => model.model,
+    optionLabel: settingsUnqualifiedModelLabel,
+    onChange,
+  });
+}
+
 function settingsDefaultAgentModelField(
   providerName: string | undefined,
   value: string | undefined,
@@ -1625,9 +1642,7 @@ function settingsDefaultAgentModelField(
     emptyLabel: "Provider default model",
     placeholder: "Model id (optional)",
     optionValue: (model) => model.model,
-    optionLabel: (model) => model.displayName === model.model
-      ? model.model
-      : `${model.displayName} · ${model.model}`,
+    optionLabel: settingsUnqualifiedModelLabel,
     onChange,
   });
   const control = field.querySelector<HTMLInputElement | HTMLSelectElement>("input, select");
@@ -1663,6 +1678,12 @@ function settingsModelSelectionField(options: {
     label: options.optionLabel(model),
   })));
   return settingsSelectField(options.label, options.value ?? "", choices, update);
+}
+
+function settingsUnqualifiedModelLabel(model: AvailableModel): string {
+  return model.displayName.toLocaleLowerCase() === model.model.toLocaleLowerCase()
+    ? model.displayName
+    : `${model.displayName} · ${model.model}`;
 }
 
 function settingsNumberField(
@@ -2024,6 +2045,11 @@ async function completeAuthLogin(): Promise<void> {
   stopAuthPolling();
   await loadAuthProviders();
   await refreshConfig();
+  if (state.config?.configured) {
+    showSettingsError();
+    elements.settingsStatus.textContent = "Connected · Amber loaded the available Codex models.";
+    renderSettingsForm();
+  }
   renderSettingsBusyState();
   notify("OpenAI Codex connected");
 }

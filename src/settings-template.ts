@@ -82,7 +82,6 @@ export const SETTINGS_TEMPLATE_SOURCE = `${stringify(SETTINGS_TEMPLATE).trimEnd(
 # [providers.openai-codex]
 # api = "openai"
 # auth = "openai-codex"
-# default_model = "gpt-5.6-sol"
 # thinking_level = "high"
 # compact_tokens = 250000
 # Or use Login with Codex in Amber's Settings modal to add and save this automatically.
