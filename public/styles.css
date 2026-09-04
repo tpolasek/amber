@@ -372,13 +372,15 @@ button { color: inherit; }
 .settings-card-list { display: grid; gap: 9px; }
 .settings-card { display: grid; gap: 13px; padding: 13px; border: 1px solid var(--accent-a20); background: var(--bg-dialog); }
 .settings-card-heading > strong { min-width: 0; overflow: hidden; color: var(--amber-hot); font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.settings-card-identity { min-width: 0; display: flex; align-items: center; gap: 9px; }
+.settings-card-identity { min-width: 0; display: flex; align-items: end; gap: 9px; }
+.settings-provider-name { width: min(280px, 50vw); }
 .settings-card-identity input { width: min(280px, 50vw); min-width: 120px; padding: 6px 8px; border: 1px solid transparent; outline: 0; background: transparent; color: var(--amber-hot); font: 12px/1.3 var(--mono); font-weight: 600; }
 .settings-card-identity input:hover, .settings-card-identity input:focus { border-color: var(--accent-a28); background: var(--bg-input); }
 .settings-badge { flex: none; padding: 3px 6px; border: 1px solid var(--accent-a20); color: var(--fg-metadata); font-size: 9px; letter-spacing: .08em; }
 .settings-remove-button { flex: none; width: 28px; height: 28px; border: 1px solid transparent; background: transparent; color: var(--fg-label); cursor: pointer; font: 18px/1 var(--mono); }
 .settings-remove-button:hover, .settings-remove-button:focus-visible { border-color: var(--danger-a40); outline: 0; background: var(--danger-a06); color: var(--error-text); }
 .settings-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.settings-default-agent-fields { display: grid; align-content: start; gap: 10px; }
 .settings-field { min-width: 0; display: grid; align-content: start; gap: 6px; color: var(--fg-label); font-size: 9px; font-weight: 600; letter-spacing: .09em; }
 .settings-field.wide { grid-column: 1 / -1; }
 .settings-field input, .settings-field select, .settings-field textarea { width: 100%; min-width: 0; padding: 8px 9px; border: 1px solid var(--accent-a22); border-radius: 0; outline: 0; background: var(--bg-input); color: var(--fg-content); font: 11px/1.4 var(--mono); letter-spacing: 0; }
@@ -396,10 +398,12 @@ button { color: inherit; }
 .settings-checkbox { display: flex; align-items: center; gap: 7px; padding: 5px 2px; color: var(--fg-label); cursor: pointer; font-size: 9px; font-weight: 600; letter-spacing: .09em; }
 .settings-checkbox input { accent-color: var(--amber); }
 .settings-empty { margin: 0; padding: 13px; border: 1px dashed var(--accent-a18); color: var(--fg-metadata); font-size: 10px; line-height: 1.45; text-align: center; }
-.settings-error { margin: 0; padding: 9px 11px; border: 1px solid var(--danger-a40); background: var(--danger-a06); color: var(--error-text); font-size: 11px; line-height: 1.5; white-space: pre-wrap; }
+.settings-error { margin: 0; padding: 9px 11px; border: 1px solid var(--danger-a40); background: var(--danger-a06); color: var(--error-muted); font-size: 11px; line-height: 1.5; white-space: pre-wrap; }
 .settings-auth-body { min-height: 130px; }
 .settings-dialog-footer > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.settings-dialog-footer button { flex: none; }
+.settings-status.error { color: var(--error-muted); }
+.settings-dialog-actions { flex: none; display: flex; gap: 7px; }
+.settings-dialog-actions button { flex: none; }
 .auth-provider-card { display: grid; gap: 14px; padding: 16px; border: 1px solid var(--accent-a20); background: var(--accent-a025); }
 .auth-provider-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .auth-provider-heading h2 { margin: 0; color: var(--amber-hot); font-size: 15px; font-weight: 500; letter-spacing: .05em; }
@@ -419,7 +423,7 @@ button { color: inherit; }
 .auth-manual-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .auth-manual-form input { min-width: 0; padding: 8px 9px; border: 1px solid var(--accent-a22); outline: 0; background: var(--bg-input); color: var(--amber-hot); font: 11px/1.4 var(--mono); }
 .auth-manual-form input:focus { border-color: var(--amber); }
-.auth-error { color: var(--error-text) !important; }
+.auth-error { color: var(--error-muted) !important; }
 .auth-note { color: var(--fg-label) !important; }
 .tasks-empty { min-height: 180px; display: grid; place-items: center; color: var(--fg-metadata); font-size: 13px; }
 .tasks-list { padding: 6px; }
@@ -553,7 +557,8 @@ button { color: inherit; }
   .settings-group-actions > button { flex: 1; }
   .settings-model-row { grid-template-columns: 1fr; }
   .settings-model-row > .settings-remove-button { justify-self: end; }
-  .settings-dialog-footer button { width: 100%; }
+  .settings-dialog-actions { width: 100%; }
+  .settings-dialog-actions button { flex: 1; }
   .landing-actions { grid-template-columns: 1fr; }
   .question-dialog-body { min-height: 0; }
   .question-content.has-preview { grid-template-columns: minmax(0, 1fr); }

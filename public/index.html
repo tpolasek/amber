@@ -218,8 +218,12 @@
           </section>
         </div>
         <footer class="tasks-dialog-footer settings-dialog-footer">
-          <span id="settings-status">Changes are validated before ~/.amber/settings.toml is updated.</span>
-          <button id="settings-save" class="question-submit-button" type="button">SAVE SETTINGS</button>
+          <span id="settings-status" class="settings-status">Changes are validated before ~/.amber/settings.toml is updated.</span>
+          <div class="settings-dialog-actions">
+            <button id="settings-cancel" class="settings-action-button" type="button">CANCEL</button>
+            <button id="settings-save" class="question-submit-button" type="button">SAVE</button>
+            <button id="settings-save-close" class="question-submit-button" type="button">SAVE · CLOSE</button>
+          </div>
         </footer>
       </section>
     </div>

@@ -266,7 +266,9 @@ const elements = {
   settingsPath: required<HTMLElement>("settings-path"),
   settingsError: required<HTMLElement>("settings-error"),
   settingsStatus: required<HTMLElement>("settings-status"),
+  settingsCancel: required<HTMLButtonElement>("settings-cancel"),
   settingsSave: required<HTMLButtonElement>("settings-save"),
+  settingsSaveClose: required<HTMLButtonElement>("settings-save-close"),
   settingsAuthBody: required<HTMLElement>("settings-auth-body"),
   tasksDialog: required<HTMLElement>("tasks-dialog"),
   tasksDialogTitle: required<HTMLElement>("tasks-dialog-title"),
@@ -412,7 +414,9 @@ function wireEvents(): void {
   elements.modelDialogClose.addEventListener("click", closeModelDialog);
   elements.settingsButton.addEventListener("click", () => void openSettingsDialog());
   elements.settingsClose.addEventListener("click", () => void closeSettingsDialog());
+  elements.settingsCancel.addEventListener("click", () => void closeSettingsDialog());
   elements.settingsSave.addEventListener("click", () => void saveSettings());
+  elements.settingsSaveClose.addEventListener("click", () => void saveSettingsAndClose());
   elements.settingsAddProvider.addEventListener("click", addApiProvider);
   elements.settingsLoginCodex.addEventListener("click", () => void setupAndLoginWithCodex());
   elements.settingsAddAgent.addEventListener("click", addAgent);
@@ -1050,6 +1054,15 @@ async function saveSettings(showNotification = true): Promise<boolean> {
   }
 }
 
+async function saveSettingsAndClose(): Promise<void> {
+  if (!(await saveSettings())) return;
+  if (settingsDialogIsBlocking()) {
+    elements.settingsStatus.textContent = settingsBlockingMessage();
+    return;
+  }
+  await closeSettingsDialog();
+}
+
 function renderSettingsForm(): void {
   renderThemeOptions();
   renderSettingsDefaults();
@@ -1093,15 +1106,17 @@ function renderSettingsDefaults(): void {
   elements.settingsDefaults.replaceChildren();
   if (!settingsDraft) return;
   const providerNames = Object.keys(settingsDraft.providers);
-  elements.settingsDefaults.append(
-    settingsSelectField("DEFAULT PROVIDER", settingsDraft.default_provider ?? "", [
-      { value: "", label: "First configured provider" },
-      ...providerNames.map((name) => ({ value: name, label: name })),
-    ], (value) => {
-      if (!settingsDraft) return;
-      setOptionalString(settingsDraft, "default_provider", value);
-      markSettingsDirty();
-    }),
+  const defaultProvider = settingsSelectField("DEFAULT PROVIDER", settingsDraft.default_provider ?? "", [
+    { value: "", label: "First configured provider" },
+    ...providerNames.map((name) => ({ value: name, label: name })),
+  ], (value) => {
+    if (!settingsDraft) return;
+    setOptionalString(settingsDraft, "default_provider", value);
+    markSettingsDirty();
+  });
+  const agentDefaults = document.createElement("div");
+  agentDefaults.className = "settings-default-agent-fields";
+  agentDefaults.append(
     settingsSelectField("DEFAULT AGENT PROVIDER", settingsDraft.default_agent_provider ?? "", [
       { value: "", label: "Inherit session provider" },
       ...providerNames.map((name) => ({ value: name, label: name })),
@@ -1113,12 +1128,13 @@ function renderSettingsDefaults(): void {
       renderSettingsDefaults();
       renderSettingsBusyState();
     }),
-    settingsTextField("DEFAULT AGENT MODEL", settingsDraft.default_agent_model ?? "", "Model id (optional)", (value) => {
+    settingsDefaultAgentModelField(settingsDraft.default_agent_provider, settingsDraft.default_agent_model, (value) => {
       if (!settingsDraft) return;
       setOptionalString(settingsDraft, "default_agent_model", value);
       markSettingsDirty();
-    }, { disabled: !settingsDraft.default_agent_provider }),
+    }),
   );
+  elements.settingsDefaults.append(defaultProvider, agentDefaults);
 }
 
 function renderProviderSettings(): void {
@@ -1139,6 +1155,8 @@ function providerSettingsCard(name: string, provider: EditableProviderSettings):
   heading.className = "settings-card-heading";
   const identity = document.createElement("div");
   identity.className = "settings-card-identity";
+  const nameField = settingsField("PROVIDER");
+  nameField.classList.add("settings-provider-name");
   const nameInput = document.createElement("input");
   nameInput.value = name;
   nameInput.autocomplete = "off";
@@ -1148,7 +1166,8 @@ function providerSettingsCard(name: string, provider: EditableProviderSettings):
   const badge = document.createElement("span");
   badge.className = "settings-badge";
   badge.textContent = provider.auth === "openai-codex" ? "CODEX OAUTH" : "API KEY";
-  identity.append(nameInput, badge);
+  nameField.append(nameInput);
+  identity.append(nameField, badge);
   heading.append(identity, settingsRemoveButton("Remove provider", () => removeProvider(name)));
 
   const fields = document.createElement("div");
@@ -1276,10 +1295,7 @@ function agentSettingsCard(agent: EditableAgentSettings, index: number): HTMLEle
       title.textContent = value || `Agent ${index + 1}`;
       markSettingsDirty();
     }),
-    settingsTextField("MODEL OVERRIDE", agent.model ?? "", "provider/model (optional)", (value) => {
-      setOptionalString(agent, "model", value);
-      markSettingsDirty();
-    }),
+    settingsAgentModelField(agent),
   );
   const prompts = document.createElement("div");
   prompts.className = "settings-agent-prompts";
@@ -1544,6 +1560,78 @@ function settingsThinkingField(
   ], onChange);
 }
 
+function settingsAgentModelField(agent: EditableAgentSettings): HTMLLabelElement {
+  const models = state.config?.models ?? [];
+  return settingsModelSelectionField({
+    label: "MODEL OVERRIDE",
+    value: agent.model,
+    models,
+    emptyLabel: "Inherit configured defaults",
+    placeholder: "provider/model (optional)",
+    optionValue: (model) => model.key,
+    optionLabel: (model) => `${model.provider}/${model.displayName}`,
+    onChange: (value) => {
+      setOptionalString(agent, "model", value);
+      markSettingsDirty();
+    },
+  });
+}
+
+function settingsDefaultAgentModelField(
+  providerName: string | undefined,
+  value: string | undefined,
+  onChange: (value: string) => void,
+): HTMLLabelElement {
+  const models = providerName
+    ? (state.config?.models ?? []).filter((model) => model.provider === providerName)
+    : [];
+  const field = settingsModelSelectionField({
+    label: "DEFAULT AGENT MODEL",
+    value,
+    models,
+    emptyLabel: "Provider default model",
+    placeholder: "Model id (optional)",
+    optionValue: (model) => model.model,
+    optionLabel: (model) => model.displayName === model.model
+      ? model.model
+      : `${model.displayName} · ${model.model}`,
+    onChange,
+  });
+  const control = field.querySelector<HTMLInputElement | HTMLSelectElement>("input, select");
+  if (control && !providerName) {
+    control.disabled = true;
+    control.dataset.permanentlyDisabled = "true";
+  }
+  return field;
+}
+
+function settingsModelSelectionField(options: {
+  label: string;
+  value: string | undefined;
+  models: AvailableModel[];
+  emptyLabel: string;
+  placeholder: string;
+  optionValue: (model: AvailableModel) => string;
+  optionLabel: (model: AvailableModel) => string;
+  onChange: (value: string) => void;
+}): HTMLLabelElement {
+  const update = (nextValue: string): void => {
+    options.onChange(nextValue);
+  };
+  if (options.models.length === 0) {
+    return settingsTextField(options.label, options.value ?? "", options.placeholder, update);
+  }
+  const choices = [{ value: "", label: options.emptyLabel }];
+  if (options.value && !options.models.some((model) => options.optionValue(model) === options.value)) {
+    choices.push({ value: options.value, label: `${options.value} (not currently loaded)` });
+  }
+  choices.push(...options.models.map((model) => ({
+    value: options.optionValue(model),
+    label: options.optionLabel(model),
+  })));
+  return settingsSelectField(options.label, options.value ?? "", choices, update);
+}
+
 function settingsNumberField(
   label: string,
   value: number | undefined,
@@ -1650,6 +1738,7 @@ function focusProviderName(name: string): void {
 function showSettingsError(message?: string): void {
   elements.settingsError.hidden = !message;
   elements.settingsError.textContent = message ?? "";
+  elements.settingsStatus.classList.toggle("error", Boolean(message));
 }
 
 function renderSettingsBusyState(): void {
@@ -1657,8 +1746,12 @@ function renderSettingsBusyState(): void {
   for (const control of elements.settingsForm.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>(
     "input, select, textarea, button",
   )) control.disabled = settingsBusy || control.dataset.permanentlyDisabled === "true";
+  elements.settingsCancel.hidden = blocking;
+  elements.settingsCancel.disabled = settingsBusy;
   elements.settingsSave.disabled = settingsBusy;
-  elements.settingsSave.textContent = settingsBusy ? "VALIDATING…" : "SAVE SETTINGS";
+  elements.settingsSave.textContent = settingsBusy ? "VALIDATING…" : "SAVE";
+  elements.settingsSaveClose.disabled = settingsBusy;
+  elements.settingsSaveClose.textContent = settingsBusy ? "VALIDATING…" : "SAVE · CLOSE";
   elements.settingsClose.hidden = blocking;
   elements.settingsClose.disabled = settingsBusy;
 }
