@@ -42,6 +42,11 @@ interface ToolCall { id: string; name: string; input: Record<string, unknown>; s
 interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; thinkingProvider?: "anthropic" | "openai"; streamingThinking?: boolean; resyncedThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result" | "skill" | "agent-notification"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean; skillName?: string; images?: MessageImage[] }
 interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
 type PlanningTaskStatus = "pending" | "in_progress" | "completed";
+const PLANNING_TASK_STATUS_LABELS: Record<PlanningTaskStatus, string> = {
+  pending: "WAIT",
+  in_progress: "WORK",
+  completed: "DONE",
+};
 interface PlanningTask { id: string; subject: string; description: string; activeForm: string; status: PlanningTaskStatus; owner: string; blocks: string[]; blockedBy: string[]; metadata: Record<string, unknown> }
 interface InvokedSkill { name: string; path: string; content: string; invokedAt: string }
 interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; model?: string; thinkingLevel?: ThinkingLevel; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error" | "stopped"; planningTasks?: PlanningTask[]; planningTaskArchiveHighWaterMark?: number; contextTokens?: number; planMode?: SessionPlanMode; skillRoots?: string[]; skillTouchedPaths?: string[]; invokedSkills?: InvokedSkill[] }
@@ -2967,7 +2972,6 @@ function renderPlanningTasks(): void {
     elements.planningTaskList.append(empty);
     return;
   }
-  const completedIds = new Set(allTasks.filter((task) => task.status === "completed").map((task) => task.id));
   for (const task of tasks) {
     const item = document.createElement("div");
     item.className = `planning-task-item ${task.status}`;
@@ -2975,15 +2979,12 @@ function renderPlanningTasks(): void {
     const copy = document.createElement("span");
     copy.className = "planning-task-copy";
     const subject = document.createElement("strong");
-    subject.textContent = task.status === "in_progress" ? task.activeForm : task.subject;
-    const meta = document.createElement("small");
-    const marker = task.status === "completed" ? "[✓]" : task.status === "in_progress" ? "[~]" : "[ ]";
-    const status = task.status.replace("_", " ");
-    const activeBlockers = task.blockedBy.filter((id) => !completedIds.has(id));
-    const blockedBy = activeBlockers.length > 0 ? ` · blocked by ${activeBlockers.map((id) => `#${id}`).join(", ")}` : "";
-    const owner = task.owner ? ` · ${task.owner}` : "";
-    meta.textContent = `${marker} #${task.id} · ${status}${blockedBy}${owner}`;
-    copy.append(meta, subject);
+    const description = task.status === "in_progress" ? task.activeForm : task.subject;
+    const status = document.createElement("span");
+    status.className = "planning-task-status";
+    status.textContent = `[${PLANNING_TASK_STATUS_LABELS[task.status]}]`;
+    subject.append(status, ` ${description.replace(/\s+/g, " ").trim()}`);
+    copy.append(subject);
     item.append(copy);
     elements.planningTaskList.append(item);
   }
