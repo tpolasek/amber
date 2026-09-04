@@ -34,6 +34,7 @@ test("appends user instructions as a delimited final system block", () => {
   assert.match(instructions, /~\/\.amber\/AGENTS\.md/);
   assert.match(instructions, /<user-instructions>\nPrefer plain dashes\.\n<\/user-instructions>/);
   assert.equal(system[2]?.text.includes("Prefer plain dashes."), false);
+  assert.deepEqual(system[3]?.cache_control, { type: "ephemeral" });
 });
 
 test("omits the user instructions block when there are none", () => {

@@ -1,9 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, realpath, stat } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BashExecutor, BASH_TOOL, parseBashInput } from "../src/bash-tool.js";
+
+function quoteShellArgument(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
 
 test("defines the Bash tool and parses its input with the default timeout", () => {
   assert.equal(BASH_TOOL.name, "Bash");
@@ -70,13 +74,15 @@ test("formats failing Bash results like Claude Code", async () => {
 
 test("does not leak Node watch dependency reporting into Bash descendants", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-bash-"));
+  const interpreterPath = join(directory, "node path's");
+  await symlink(process.execPath, interpreterPath);
   const previous = process.env.WATCH_REPORT_DEPENDENCIES;
   process.env.WATCH_REPORT_DEPENDENCIES = "1";
   try {
     const result = await new BashExecutor().run(
-      // The login shell bash -lc starts may not have node on its PATH, so spawn this interpreter.
+      // The login shell bash -lc starts may not have node on its PATH, so spawn an exact interpreter path.
       {
-        command: `${process.execPath} -e 'process.stdout.write(process.env.WATCH_REPORT_DEPENDENCIES ?? "unset")'`,
+        command: `${quoteShellArgument(interpreterPath)} -e 'process.stdout.write(process.env.WATCH_REPORT_DEPENDENCIES ?? "unset")'`,
         timeoutMs: 2_000,
       },
       [directory],

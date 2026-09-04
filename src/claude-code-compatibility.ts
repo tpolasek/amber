@@ -91,7 +91,13 @@ export function buildClaudeCodeSystemPrompt(
   return [
     ...(structuredClone(compatibility.systemPrefix) as ProviderSystemBlock[]),
     { type: "text", text: environment },
-    ...(userInstructions?.trim() ? [{ type: "text" as const, text: userInstructionsBlock(userInstructions.trim()) }] : []),
+    ...(userInstructions?.trim()
+      ? [{
+          type: "text" as const,
+          text: userInstructionsBlock(userInstructions.trim()),
+          cache_control: { type: "ephemeral" as const },
+        }]
+      : []),
   ];
 }
 
