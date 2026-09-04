@@ -2941,7 +2941,11 @@ function renderPlanningTasks(): void {
   const archiveHighWaterMark = session?.planningTaskArchiveHighWaterMark ?? 0;
   const allTasks = (session?.planningTasks ?? [])
     .filter((task) => Number(task.id) > archiveHighWaterMark)
-    .sort((left, right) => Number(left.id) - Number(right.id));
+    .sort((left, right) => {
+      const statusOrder = { in_progress: 0, pending: 1, completed: 2 } as const;
+      return statusOrder[left.status] - statusOrder[right.status]
+        || Number(left.id) - Number(right.id);
+    });
   const tasks = allTasks.length > 0 && allTasks.every((task) => task.status === "completed") ? [] : allTasks;
   if (tasks.length === 0) {
     const empty = document.createElement("div");
