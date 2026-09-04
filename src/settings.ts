@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
@@ -32,6 +33,11 @@ export interface ProviderSettings extends ModelSettings {
 }
 
 export async function loadSettings(homeDirectory = homedir()): Promise<AmberSettings> {
+  const { source, path } = await loadSettingsSource(homeDirectory);
+  return parseSettingsSource(source, path);
+}
+
+export async function loadSettingsSource(homeDirectory = homedir()): Promise<{ source: string; path: string }> {
   const settingsDirectory = join(homeDirectory, ".amber");
   const settingsPath = join(settingsDirectory, "settings.toml");
   await mkdir(settingsDirectory, { recursive: true, mode: 0o700 });
@@ -51,6 +57,10 @@ export async function loadSettings(homeDirectory = homedir()): Promise<AmberSett
     source = await readFile(settingsPath, "utf8");
   }
 
+  return { source, path: settingsPath };
+}
+
+export function parseSettingsSource(source: string, settingsPath = join(homedir(), ".amber", "settings.toml")): AmberSettings {
   let parsed: unknown;
   try {
     parsed = parse(source);
@@ -58,6 +68,21 @@ export async function loadSettings(homeDirectory = homedir()): Promise<AmberSett
     throw new Error(`Could not read ${settingsPath}: ${errorMessage(error)}`);
   }
   return parseSettings(parsed, settingsPath);
+}
+
+export async function saveSettingsSource(source: string, homeDirectory = homedir()): Promise<string> {
+  const settingsDirectory = join(homeDirectory, ".amber");
+  const settingsPath = join(settingsDirectory, "settings.toml");
+  const temporaryPath = join(settingsDirectory, `.settings-${randomUUID()}.tmp`);
+  await mkdir(settingsDirectory, { recursive: true, mode: 0o700 });
+  await writeFile(temporaryPath, source, { encoding: "utf8", flag: "wx", mode: 0o600 });
+  try {
+    await rename(temporaryPath, settingsPath);
+  } catch (error) {
+    await unlink(temporaryPath).catch(() => undefined);
+    throw error;
+  }
+  return settingsPath;
 }
 
 function parseSettings(parsed: unknown, settingsPath: string): AmberSettings {
@@ -120,8 +145,11 @@ function parseProviders(value: unknown, settingsPath: string): Record<string, Pr
     if (auth === "openai-codex" && api !== "openai") {
       throw new Error(`${settingsPath}: providers.${name}: openai-codex auth requires api = "openai"`);
     }
+    if (auth === "openai-codex" && provider.auth_key !== undefined) {
+      throw new Error(`${settingsPath}: providers.${name}: use auth or auth_key, not both`);
+    }
     const authKey = auth === "openai-codex"
-      ? optionalString(provider.auth_key, `${settingsPath}: providers.${name}.auth_key`)
+      ? undefined
       : requiredString(provider.auth_key, `${settingsPath}: providers.${name}.auth_key`);
     const authUrl = optionalString(provider.auth_url, `${settingsPath}: providers.${name}.auth_url`)
       ?? (auth === "openai-codex" ? "https://chatgpt.com/backend-api" : undefined);

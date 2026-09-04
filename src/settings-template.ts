@@ -84,7 +84,7 @@ export const SETTINGS_TEMPLATE_SOURCE = `${stringify(SETTINGS_TEMPLATE).trimEnd(
 # auth = "openai-codex"
 # default_model = "gpt-5.4"
 # thinking_level = "high"
-# Then start Amber and connect ChatGPT from the Auth settings dialog.
+# Then save and connect ChatGPT from Auth providers in Amber's Settings modal.
 `;
 
 export const COMMIT_SKILL_TEMPLATE_SOURCE = `---

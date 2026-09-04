@@ -53,7 +53,9 @@ interface Session { id: string; title: string; createdAt: string; updatedAt: str
 interface AgentSessionSummary { id: string; description: string; status: NonNullable<Session["agentStatus"]> }
 interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 interface AvailableModel { key: string; provider: string; api: "anthropic" | "openai"; model: string; displayName: string; thinkingLevel: ThinkingLevel; compactTokens?: number }
-interface Config { provider: string; model: string; defaultModel: string; models: AvailableModel[]; mode: "live"; homeDirectory: string; workspaceRoot: string; authActionToken: string; theme: "dark" | "light" | "light+" | "hacker" }
+interface Config { configured: boolean; authenticationRequired: boolean; configurationError?: string; provider: string; model: string; defaultModel: string; models: AvailableModel[]; mode: "live"; homeDirectory: string; workspaceRoot: string; authActionToken: string; theme: "dark" | "light" | "light+" | "hacker" }
+interface SettingsDocument { source: string; path: string; error?: string }
+interface SavedSettings extends SettingsDocument { config: Config }
 interface AuthProviderStatus { id: "openai-codex"; name: string; authName: string; configured: boolean; providerConfigured: boolean }
 type AuthLoginStatus = { status: "pending" } | { status: "complete" } | { status: "failed"; error: string } | { status: "cancelled" };
 type AuthLoginStart =
@@ -138,6 +140,7 @@ let authProviders: AuthProviderStatus[] = [];
 let activeAuthLogin: ActiveAuthLogin | null = null;
 let authBusy = false;
 let authPollTimer: number | undefined;
+let settingsBusy = false;
 let sessionRunController: AbortController | null = null;
 let sessionRunId: string | null = null;
 let sessionRunReconnectTimer: number | undefined;
@@ -229,10 +232,15 @@ const elements = {
   modelDialogClose: required<HTMLButtonElement>("model-dialog-close"),
   modelSearch: required<HTMLInputElement>("model-search"),
   modelList: required<HTMLElement>("model-list"),
-  authSettings: required<HTMLButtonElement>("auth-settings"),
-  authDialog: required<HTMLElement>("auth-dialog"),
-  authClose: required<HTMLButtonElement>("auth-close"),
-  authDialogBody: required<HTMLElement>("auth-dialog-body"),
+  settingsButton: required<HTMLButtonElement>("settings-button"),
+  settingsDialog: required<HTMLElement>("settings-dialog"),
+  settingsClose: required<HTMLButtonElement>("settings-close"),
+  settingsSource: required<HTMLTextAreaElement>("settings-source"),
+  settingsPath: required<HTMLElement>("settings-path"),
+  settingsError: required<HTMLElement>("settings-error"),
+  settingsStatus: required<HTMLElement>("settings-status"),
+  settingsSave: required<HTMLButtonElement>("settings-save"),
+  settingsAuthBody: required<HTMLElement>("settings-auth-body"),
   tasksDialog: required<HTMLElement>("tasks-dialog"),
   tasksDialogTitle: required<HTMLElement>("tasks-dialog-title"),
   tasksDialogBody: required<HTMLElement>("tasks-dialog-body"),
@@ -277,6 +285,7 @@ async function initialize(): Promise<void> {
     const id = location.pathname.match(SESSION_ROUTE)?.[1];
     if (id) await loadSession(id);
     else openLandingDialog();
+    if (settingsDialogIsBlocking()) await openSettingsDialog();
   } catch (error) {
     notify(messageFrom(error));
   } finally {
@@ -286,7 +295,7 @@ async function initialize(): Promise<void> {
 
 function wireEvents(): void {
   document.addEventListener("keydown", (event) => {
-    if (handleAuthDialogKeydown(event)) return;
+    if (handleSettingsDialogKeydown(event)) return;
     if (handlePlanModeDialogKeydown(event)) return;
     if (handleNewSessionDialogKeydown(event)) return;
     if (handleQuestionDialogKeydown(event)) return;
@@ -374,10 +383,15 @@ function wireEvents(): void {
   elements.modelSelector.addEventListener("click", openModelDialog);
   elements.thinkingLevelButton.addEventListener("click", () => void cycleThinkingLevel());
   elements.modelDialogClose.addEventListener("click", closeModelDialog);
-  elements.authSettings.addEventListener("click", () => void openAuthDialog());
-  elements.authClose.addEventListener("click", () => void closeAuthDialog());
-  elements.authDialog.addEventListener("click", (event) => {
-    if (event.target === elements.authDialog) void closeAuthDialog();
+  elements.settingsButton.addEventListener("click", () => void openSettingsDialog());
+  elements.settingsClose.addEventListener("click", () => void closeSettingsDialog());
+  elements.settingsSave.addEventListener("click", () => void saveSettings());
+  elements.settingsSource.addEventListener("input", () => {
+    showSettingsError();
+    elements.settingsStatus.textContent = "Unsaved changes";
+  });
+  elements.settingsDialog.addEventListener("click", (event) => {
+    if (event.target === elements.settingsDialog) void closeSettingsDialog();
   });
   elements.modelSearch.addEventListener("input", () => {
     modelDialogQuery = elements.modelSearch.value;
@@ -908,52 +922,137 @@ function handleSessionDialogKeydown(event: KeyboardEvent): boolean {
   return true;
 }
 
-async function openAuthDialog(): Promise<void> {
-  elements.authDialog.hidden = false;
+async function openSettingsDialog(): Promise<void> {
+  elements.settingsDialog.hidden = false;
   document.body.classList.remove("sidebar-open");
-  renderAuthDialog();
+  renderAuthProviders();
+  settingsBusy = true;
+  renderSettingsBusyState();
   try {
-    await loadAuthProviders();
+    const [document] = await Promise.all([
+      api<SettingsDocument>("/api/settings"),
+      loadAuthProviders(),
+    ]);
+    elements.settingsSource.value = document.source;
+    elements.settingsPath.textContent = document.path;
+    elements.settingsStatus.textContent = document.error
+      ? "Configuration needs attention"
+      : "Changes are validated before the active configuration is updated.";
+    showSettingsError(document.error);
   } catch (error) {
-    notify(messageFrom(error));
+    showSettingsError(messageFrom(error));
+  } finally {
+    settingsBusy = false;
+    renderSettingsBusyState();
+    if (!elements.settingsDialog.hidden) elements.settingsSource.focus();
   }
 }
 
-async function closeAuthDialog(): Promise<void> {
-  elements.authDialog.hidden = true;
+async function closeSettingsDialog(): Promise<void> {
+  if (settingsBusy || settingsDialogIsBlocking()) {
+    elements.settingsStatus.textContent = settingsBlockingMessage();
+    renderSettingsBusyState();
+    return;
+  }
+  elements.settingsDialog.hidden = true;
   stopAuthPolling();
   if (activeAuthLogin?.status.status === "pending") {
     const loginId = activeAuthLogin.start.id;
     activeAuthLogin = null;
-    renderAuthDialog();
+    renderAuthProviders();
     await authMutation(`/api/auth/openai-codex/logins/${loginId}`, { method: "DELETE" }).catch(() => undefined);
   }
-  elements.prompt.focus();
+  if (!elements.landingDialog.hidden) elements.landingNewSession.focus();
+  else elements.prompt.focus();
 }
 
-function handleAuthDialogKeydown(event: KeyboardEvent): boolean {
-  if (elements.authDialog.hidden) return false;
+function handleSettingsDialogKeydown(event: KeyboardEvent): boolean {
+  if (elements.settingsDialog.hidden) return false;
   if (event.key === "Escape") {
     event.preventDefault();
-    void closeAuthDialog();
+    if (settingsBusy || settingsDialogIsBlocking()) {
+      elements.settingsStatus.textContent = settingsBlockingMessage();
+    } else {
+      void closeSettingsDialog();
+    }
+  } else if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+    event.preventDefault();
+    void saveSettings();
   }
   return true;
+}
+
+async function saveSettings(): Promise<void> {
+  if (settingsBusy) return;
+  settingsBusy = true;
+  showSettingsError();
+  elements.settingsStatus.textContent = "Validating providers and discovering models…";
+  renderSettingsBusyState();
+  try {
+    const result = await settingsMutation<SavedSettings>("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ source: elements.settingsSource.value }),
+    });
+    state.config = result.config;
+    document.documentElement.dataset.theme = result.config.theme;
+    elements.settingsSource.value = result.source;
+    elements.settingsPath.textContent = result.path;
+    showSettingsError(result.error);
+    elements.settingsStatus.textContent = result.config.configured
+      ? "Saved · Amber reloaded the active configuration."
+      : "Saved · configuration needs attention before Amber can run a session.";
+    renderConfig();
+    await loadAuthProviders();
+    notify(result.config.configured ? "Settings saved and reloaded" : "Settings saved · configuration needs attention");
+  } catch (error) {
+    const message = messageFrom(error);
+    showSettingsError(message);
+    elements.settingsStatus.textContent = "Not saved · fix the configuration error and try again.";
+  } finally {
+    settingsBusy = false;
+    renderSettingsBusyState();
+  }
+}
+
+function showSettingsError(message?: string): void {
+  elements.settingsError.hidden = !message;
+  elements.settingsError.textContent = message ?? "";
+}
+
+function renderSettingsBusyState(): void {
+  const blocking = settingsDialogIsBlocking();
+  elements.settingsSource.disabled = settingsBusy;
+  elements.settingsSave.disabled = settingsBusy;
+  elements.settingsSave.textContent = settingsBusy ? "VALIDATING…" : "SAVE SETTINGS";
+  elements.settingsClose.hidden = blocking;
+  elements.settingsClose.disabled = settingsBusy;
+}
+
+function settingsDialogIsBlocking(): boolean {
+  return !state.config?.configured || state.config.authenticationRequired;
+}
+
+function settingsBlockingMessage(): string {
+  if (settingsBusy) return "Wait for the settings operation to finish.";
+  return state.config?.authenticationRequired
+    ? "Connect the default Codex provider to continue."
+    : "Save a valid configuration to continue.";
 }
 
 async function loadAuthProviders(): Promise<void> {
   const response = await api<{ providers: AuthProviderStatus[] }>("/api/auth");
   authProviders = response.providers;
-  renderAuthDialog();
+  renderAuthProviders();
 }
 
-function renderAuthDialog(): void {
-  elements.authDialogBody.replaceChildren();
+function renderAuthProviders(): void {
+  elements.settingsAuthBody.replaceChildren();
   const provider = authProviders.find((candidate) => candidate.id === "openai-codex");
   if (!provider) {
     const loading = document.createElement("div");
     loading.className = "tasks-empty";
     loading.textContent = "Loading authentication status…";
-    elements.authDialogBody.append(loading);
+    elements.settingsAuthBody.append(loading);
     return;
   }
 
@@ -976,7 +1075,7 @@ function renderAuthDialog(): void {
   if (!provider.providerConfigured) {
     const note = document.createElement("p");
     note.className = "auth-note";
-    note.textContent = "Add an api=\"openai\", auth=\"openai-codex\" provider in ~/.amber/settings.toml to expose Codex models.";
+    note.textContent = "Add an api=\"openai\", auth=\"openai-codex\" provider above and save settings before connecting ChatGPT.";
     card.append(note);
   }
 
@@ -988,14 +1087,15 @@ function renderAuthDialog(): void {
     if (provider.configured) {
       actions.append(authButton("DISCONNECT", "danger", () => void logoutOpenAICodex()));
     } else {
-      actions.append(
-        authButton("BROWSER LOGIN", "", () => void startAuthLogin("browser")),
-        authButton("DEVICE CODE", "secondary", () => void startAuthLogin("device_code")),
-      );
+      const browserLogin = authButton("BROWSER LOGIN", "", () => void startAuthLogin("browser"));
+      const deviceLogin = authButton("DEVICE CODE", "secondary", () => void startAuthLogin("device_code"));
+      browserLogin.disabled = !provider.providerConfigured || authBusy;
+      deviceLogin.disabled = !provider.providerConfigured || authBusy;
+      actions.append(browserLogin, deviceLogin);
     }
     card.append(actions);
   }
-  elements.authDialogBody.append(card);
+  elements.settingsAuthBody.append(card);
 }
 
 function renderActiveAuthFlow(card: HTMLElement, login: ActiveAuthLogin): void {
@@ -1007,7 +1107,7 @@ function renderActiveAuthFlow(card: HTMLElement, login: ActiveAuthLogin): void {
     error.textContent = login.status.status === "failed" ? login.status.error : "Login cancelled";
     const back = authButton("TRY AGAIN", "secondary", () => {
       activeAuthLogin = null;
-      renderAuthDialog();
+      renderAuthProviders();
     });
     flow.append(error, back);
     card.append(flow);
@@ -1076,7 +1176,7 @@ async function startAuthLogin(method: "browser" | "device_code"): Promise<void> 
   if (authBusy) return;
   const popup = method === "browser" ? window.open("about:blank", "_blank") : null;
   authBusy = true;
-  renderAuthDialog();
+  renderAuthProviders();
   try {
     const start = await authMutation<AuthLoginStart>("/api/auth/openai-codex/login", {
       method: "POST",
@@ -1084,14 +1184,14 @@ async function startAuthLogin(method: "browser" | "device_code"): Promise<void> 
     });
     activeAuthLogin = { start, status: { status: "pending" } };
     if (start.method === "browser" && popup) popup.location.href = start.authorizationUrl;
-    renderAuthDialog();
+    renderAuthProviders();
     scheduleAuthPoll();
   } catch (error) {
     popup?.close();
     notify(messageFrom(error));
   } finally {
     authBusy = false;
-    renderAuthDialog();
+    renderAuthProviders();
   }
 }
 
@@ -1117,12 +1217,12 @@ async function pollAuthLogin(): Promise<void> {
     } else if (status.status === "complete") {
       await completeAuthLogin();
     } else {
-      renderAuthDialog();
+      renderAuthProviders();
     }
   } catch (error) {
     if (activeAuthLogin?.start.id === login.start.id) {
       activeAuthLogin.status = { status: "failed", error: messageFrom(error) };
-      renderAuthDialog();
+      renderAuthProviders();
     }
   }
 }
@@ -1131,7 +1231,7 @@ async function submitManualAuth(input: string): Promise<void> {
   const login = activeAuthLogin;
   if (!login || login.start.method !== "browser" || authBusy) return;
   authBusy = true;
-  renderAuthDialog();
+  renderAuthProviders();
   try {
     const status = await authMutation<AuthLoginStatus>(
       `/api/auth/openai-codex/logins/${login.start.id}/manual`,
@@ -1142,7 +1242,7 @@ async function submitManualAuth(input: string): Promise<void> {
     notify(messageFrom(error));
   } finally {
     authBusy = false;
-    renderAuthDialog();
+    renderAuthProviders();
   }
 }
 
@@ -1157,6 +1257,7 @@ async function completeAuthLogin(): Promise<void> {
 async function refreshConfig(): Promise<void> {
   try {
     state.config = await api<Config>("/api/config");
+    document.documentElement.dataset.theme = state.config.theme;
     renderConfig();
   } catch {
     // Keep the previous config; reopening the page refetches it.
@@ -1175,23 +1276,24 @@ async function cancelActiveAuthLogin(): Promise<void> {
     notify(messageFrom(error));
   } finally {
     authBusy = false;
-    renderAuthDialog();
+    renderAuthProviders();
   }
 }
 
 async function logoutOpenAICodex(): Promise<void> {
   if (authBusy) return;
   authBusy = true;
-  renderAuthDialog();
+  renderAuthProviders();
   try {
     await authMutation("/api/auth/openai-codex", { method: "DELETE" });
     await loadAuthProviders();
+    await refreshConfig();
     notify("OpenAI Codex disconnected");
   } catch (error) {
     notify(messageFrom(error));
   } finally {
     authBusy = false;
-    renderAuthDialog();
+    renderAuthProviders();
   }
 }
 
@@ -1201,7 +1303,7 @@ function openModelDialog(): void {
   if (!session || !config || session.parentSessionId || state.streaming) return;
   modelDialogQuery = "";
   elements.modelSearch.value = "";
-  const currentModel = session.model ?? config.defaultModel;
+  const currentModel = effectiveModelKey(session, config);
   const currentIndex = config.models.findIndex((model) => model.key === currentModel);
   modelDialogSelection = currentIndex >= 0 ? currentIndex : 0;
   renderModelList();
@@ -1234,7 +1336,7 @@ function renderModelList(): void {
     elements.modelList.append(empty);
     return;
   }
-  const activeModel = state.session?.model ?? state.config?.defaultModel;
+  const activeModel = state.session && state.config ? effectiveModelKey(state.session, state.config) : state.config?.defaultModel;
   models.forEach((model, index) => {
     const button = document.createElement("button");
     button.type = "button";
@@ -1263,7 +1365,7 @@ function renderModelList(): void {
 async function selectModel(model: AvailableModel): Promise<void> {
   const session = state.session;
   if (!session || session.parentSessionId || state.streaming) return;
-  if ((session.model ?? state.config?.defaultModel) === model.key) return closeModelDialog();
+  if (state.config && effectiveModelKey(session, state.config) === model.key) return closeModelDialog();
   setBusy(true);
   try {
     const result = await api<{ session: Session }>(`/api/sessions/${session.id}/model`, {
@@ -1286,8 +1388,14 @@ async function selectModel(model: AvailableModel): Promise<void> {
 
 function effectiveThinkingLevel(session: Session, config: Config): ThinkingLevel {
   if (session.thinkingLevel) return session.thinkingLevel;
-  const model = config.models.find((candidate) => candidate.key === (session.model ?? config.defaultModel));
+  const model = config.models.find((candidate) => candidate.key === effectiveModelKey(session, config));
   return model?.thinkingLevel ?? "none";
+}
+
+function effectiveModelKey(session: Session, config: Config): string {
+  return session.model && config.models.some((model) => model.key === session.model)
+    ? session.model
+    : config.defaultModel;
 }
 
 async function cycleThinkingLevel(): Promise<void> {
@@ -2775,7 +2883,11 @@ async function runCompactCommand(command: string, clearComposer = true): Promise
 
 function renderConfig(): void {
   if (!state.config) return;
-  elements.providerDot.classList.remove("demo");
+  document.documentElement.dataset.theme = state.config.theme;
+  const needsSettings = settingsDialogIsBlocking();
+  elements.providerDot.classList.toggle("demo", needsSettings);
+  elements.settingsButton.classList.toggle("attention", needsSettings);
+  renderSettingsBusyState();
   renderModelStatus();
   renderPlanMode();
 }
@@ -2942,15 +3054,17 @@ function renderModelStatus(): void {
   const config = state.config;
   const session = state.session;
   if (!config) return;
-  const model = session?.model ?? config.defaultModel;
+  const model = config.configured
+    ? session ? effectiveModelKey(session, config) : config.defaultModel
+    : "CONFIGURE";
   elements.model.textContent = model;
   elements.model.title = model;
-  elements.modelSelector.disabled = !session || Boolean(session.parentSessionId) || state.streaming;
+  elements.modelSelector.disabled = !config.configured || !session || Boolean(session.parentSessionId) || state.streaming;
   const thinkingLevel = session ? effectiveThinkingLevel(session, config) : "none";
   elements.thinkingLevel.textContent = thinkingLevel;
   elements.thinkingLevelButton.title = `Thinking level: ${thinkingLevel}. Click to select the next level.`;
   elements.thinkingLevelButton.setAttribute("aria-label", elements.thinkingLevelButton.title);
-  elements.thinkingLevelButton.disabled = !session || Boolean(session.parentSessionId) || state.streaming;
+  elements.thinkingLevelButton.disabled = !config.configured || !session || Boolean(session.parentSessionId) || state.streaming;
 }
 
 function renderPlanningTasks(): void {
@@ -3083,10 +3197,12 @@ function shortenAgentDescription(description: string): string {
 
 function renderContextMeter(): void {
   const session = state.session;
+  const config = state.config;
   const tokens = session?.contextTokens
     ?? session?.messages.reduce((largest, message) => Math.max(largest, message.usage?.input ?? 0), 0)
     ?? 0;
-  const activeModel = state.config?.models.find((model) => model.key === (session?.model ?? state.config?.defaultModel));
+  const activeModel = config?.models.find((model) =>
+    model.key === (session ? effectiveModelKey(session, config) : config.defaultModel));
   const limit = activeModel?.compactTokens ?? 200_000;
   const ratio = tokens / limit;
   const level = ratio < .5 ? "green" : ratio <= .75 ? "yellow" : "red";
@@ -3570,6 +3686,15 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 async function authMutation<T = unknown>(path: string, init: RequestInit): Promise<T> {
   const token = state.config?.authActionToken;
   if (!token) throw new Error("Authentication settings are not initialized");
+  return api<T>(path, {
+    ...init,
+    headers: { ...init.headers, "x-amber-auth-action-token": token },
+  });
+}
+
+async function settingsMutation<T = unknown>(path: string, init: RequestInit): Promise<T> {
+  const token = state.config?.authActionToken;
+  if (!token) throw new Error("Settings are not initialized");
   return api<T>(path, {
     ...init,
     headers: { ...init.headers, "x-amber-auth-action-token": token },

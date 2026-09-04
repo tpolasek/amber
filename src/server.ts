@@ -5,11 +5,17 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { browserUrl, openBrowser } from "./browser-launch.js";
-import { listenErrorMessage, parseCliCommand, startupErrorMessage, usageText } from "./cli.js";
+import { listenErrorMessage, parseCliCommand, usageText } from "./cli.js";
 import { builtInCommand } from "./built-in-commands.js";
 import { SessionStore } from "./store.js";
 import { ProviderCatalog } from "./provider-catalog.js";
-import { loadSettings } from "./settings.js";
+import {
+  loadSettings,
+  loadSettingsSource,
+  parseSettingsSource,
+  saveSettingsSource,
+  type AmberSettings,
+} from "./settings.js";
 import { loadUserInstructions } from "./user-instructions.js";
 import { AuthStorage } from "./auth-storage.js";
 import { OpenAICodexAuth } from "./openai-codex-oauth.js";
@@ -47,7 +53,14 @@ import { executeGrep, GREP_TOOL, parseGrepInput } from "./grep-tool.js";
 import { executeGlob, GLOB_TOOL, parseGlobInput } from "./glob-tool.js";
 import { completeDirectories, completeDirectoryRoots, completeFiles } from "./directory-completion.js";
 import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
-import { AGENT_TOOL_NAME, getAgentDefinition, parseAgentInput, resolveAgentModel, startAgentRuns } from "./agent-tool.js";
+import {
+  AGENT_TOOL_NAME,
+  getAgentDefinition,
+  parseAgentInput,
+  resolveAgentModel,
+  startAgentRuns,
+  type AgentDefinition,
+} from "./agent-tool.js";
 import { ActiveSessionRuns, abortSessionOperations } from "./session-aborts.js";
 import { SessionInputPriorityQueue, type QueuedSessionInput } from "./session-queue.js";
 import {
@@ -130,13 +143,13 @@ const authStorage = new AuthStorage(join(amberDirectory, "auth.json"));
 const openAICodexAuth = new OpenAICodexAuth({ storage: authStorage });
 const authActionToken = randomUUID();
 const settingsPath = join(amberDirectory, "settings.toml");
-const settings = await startupStep(() => loadSettings());
-const agentDefinitions = settings.agents;
-let providerCatalog = await startupStep(() => loadProviderCatalog());
-let provider = await startupStep(() => providerCatalog.provider(undefined));
-await startupStep(() => validateAgentModels(providerCatalog));
+let settings: AmberSettings | undefined;
+let configurationError: string | undefined;
+let providerCatalog: ProviderCatalog | undefined;
+let provider: LlmProvider | undefined;
+let agentDefinitions: AgentDefinition[] = [];
 const loginCatalogActivations = new Map<string, Promise<void>>();
-const claudeCodeTools = createClaudeCodeTools(agentDefinitions);
+let claudeCodeTools = createClaudeCodeTools(agentDefinitions);
 const activeSessions = new ActiveSessionRuns();
 const queuedSessionMessages = new SessionInputPriorityQueue();
 const interruptibleSessions = new Set<string>();
@@ -148,6 +161,8 @@ const agentRunToken = randomUUID();
 const AUTO_COMPACTION_CONTINUE_MESSAGE = "We have just compacted the session, continue your work.";
 const SESSION_PATH_ID = "([a-z0-9.-]+)";
 const sessionEventSubscribers = new Map<string, Set<ServerResponse>>();
+
+await reloadSettingsFromDisk();
 
 interface AutomaticNameRun {
   controller: AbortController;
@@ -180,7 +195,8 @@ server.on("error", (error: NodeJS.ErrnoException) => {
 server.listen(port, host, () => {
   const url = browserUrl(host, port);
   console.log(`\n  AMBER agent online at ${url}`);
-  console.log(`  provider: ${provider.name} / ${provider.model} (${provider.mode})\n`);
+  if (provider) console.log(`  provider: ${provider.name} / ${provider.model} (${provider.mode})\n`);
+  else console.log(`  provider: configuration required (open Settings in the browser)\n`);
   openBrowser(url);
 });
 
@@ -210,16 +226,50 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 
   if (method === "GET" && url.pathname === "/api/config") {
+    return json(response, 200, await configPayload());
+  }
+  if (method === "GET" && url.pathname === "/api/settings") {
+    if (!authorizeLocalSettingsAccess(request, response)) return;
+    try {
+      const current = await loadSettingsSource();
+      return json(response, 200, {
+        source: current.source,
+        path: current.path,
+        error: configurationError,
+      });
+    } catch (error) {
+      return json(response, 500, { error: errorMessage(error) });
+    }
+  }
+  if (method === "PUT" && url.pathname === "/api/settings") {
+    if (!authorizeSettingsMutation(request, response)) return;
+    const body = await readJson(request, 512_000);
+    const source = typeof body.source === "string" ? body.source : undefined;
+    if (source === undefined) return json(response, 400, { error: "Settings source must be a string" });
+    if (!source.trim()) return json(response, 400, { error: "Settings cannot be empty" });
+    let nextSettings: AmberSettings;
+    try {
+      nextSettings = parseSettingsSource(source, settingsPath);
+    } catch (error) {
+      return json(response, 400, { error: configurationErrorMessage(error) });
+    }
+    try {
+      await saveSettingsSource(source);
+    } catch (error) {
+      return json(response, 500, { error: `Could not save settings: ${errorMessage(error)}` });
+    }
+    try {
+      const nextCatalog = await loadProviderCatalog(nextSettings);
+      validateAgentModels(nextCatalog, nextSettings.agents);
+      activateConfiguration(nextSettings, nextCatalog);
+    } catch (error) {
+      deactivateConfiguration(nextSettings, error);
+    }
     return json(response, 200, {
-      provider: provider.name,
-      model: provider.model,
-      defaultModel: providerCatalog.defaultModel,
-      models: providerCatalog.models,
-      mode: provider.mode,
-      homeDirectory: homedir(),
-      workspaceRoot,
-      authActionToken,
-      theme: settings.theme ?? "dark",
+      source,
+      path: settingsPath,
+      ...(configurationError ? { error: configurationError } : {}),
+      config: await configPayload(),
     });
   }
   if (method === "GET" && url.pathname === "/api/auth") {
@@ -229,7 +279,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
         name: "OpenAI Codex",
         authName: "ChatGPT Plus/Pro",
         configured: await openAICodexAuth.configured(),
-        providerConfigured: Object.values(settings.providers).some((candidate) => candidate.auth === "openai-codex"),
+        providerConfigured: Object.values(settings?.providers ?? {}).some((candidate) => candidate.auth === "openai-codex"),
       }],
     });
   }
@@ -287,6 +337,8 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return json(response, 200, { sessions: await store.list() });
   }
   if (method === "POST" && url.pathname === "/api/sessions") {
+    const catalog = providerCatalog;
+    if (!catalog) return configurationRequired(response);
     const body = await readJson(request);
     const rawName = body.name;
     const name = typeof rawName === "string" ? rawName.replace(/\s+/g, " ").trim() : "";
@@ -299,7 +351,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     try {
       const directory = await resolveAddedDirectory(path);
       const session = await store.create();
-      session.model = providerCatalog.defaultModel;
+      session.model = catalog.defaultModel;
       if (name) session.title = name;
       if (directory !== workspaceRoot) session.directories = [directory];
       session.cwd = directory;
@@ -336,6 +388,8 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
 
   const sessionModelMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/model$`));
   if (method === "POST" && sessionModelMatch?.[1]) {
+    const catalog = providerCatalog;
+    if (!catalog) return configurationRequired(response);
     if (activeSessions.has(sessionModelMatch[1])) {
       return json(response, 409, { error: "Wait for the current response to finish" });
     }
@@ -344,7 +398,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
     const body = await readJson(request);
     const model = typeof body.model === "string" ? body.model.trim() : "";
-    if (!providerCatalog.has(model)) return json(response, 400, { error: `Model '${model}' is not configured` });
+    if (!catalog.has(model)) return json(response, 400, { error: `Model '${model}' is not configured` });
     session.model = model;
     await store.save(session);
     return json(response, 200, { session });
@@ -646,6 +700,8 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
 }
 
 async function runPrompt(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const catalog = providerCatalog;
+  if (!catalog) return configurationRequired(response);
   const body = await readJson(request);
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   if (!prompt || prompt.length > 32_000) {
@@ -668,7 +724,7 @@ async function runPrompt(request: IncomingMessage, response: ServerResponse): Pr
   }
 
   const session = await store.create();
-  session.model = providerCatalog.defaultModel;
+  session.model = catalog.defaultModel;
   if (currentDirectory !== workspaceRoot) session.directories = [currentDirectory];
   session.cwd = currentDirectory;
   session.addDirInitialized = true;
@@ -691,6 +747,7 @@ async function runPrompt(request: IncomingMessage, response: ServerResponse): Pr
 }
 
 async function streamMessage(request: IncomingMessage, response: ServerResponse, sessionId: string): Promise<void> {
+  if (!providerCatalog) return configurationRequired(response);
   if (activeSessions.has(sessionId)) return json(response, 409, { error: "A response is already streaming" });
   const session = await store.get(sessionId);
   if (!session) return json(response, 404, { error: "Session not found" });
@@ -774,7 +831,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       }
       const skills = await sessionSkills(session);
       const userInstructions = await sessionUserInstructions(session);
-      const activeProvider = turnModel ? providerCatalog.provider(turnModel) : providerForSession(session);
+      const activeProvider = turnModel ? activeProviderCatalog().provider(turnModel) : providerForSession(session);
       const thinkingLevel = turnEffort ?? session.thinkingLevel;
       const baseHistory = buildProviderHistory(session.messages, assistantMessage.id, session.compaction, session.invokedSkills);
       const historyLimitError = providerImageLimitError(baseHistory);
@@ -1300,7 +1357,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                 cwd: currentDirectory,
                 signal: controller.signal,
               });
-              const resolvedModel = resolveSkillModel(expanded.model, providerCatalog.models);
+              const resolvedModel = resolveSkillModel(expanded.model, activeProviderCatalog().models);
               if (resolvedModel) {
                 turnModel = resolvedModel;
                 call.skillModel = resolvedModel;
@@ -1649,7 +1706,8 @@ function sessionSystemPrompt(
 }
 
 function providerForSession(session: Session): LlmProvider {
-  return providerCatalog.provider(session.model);
+  const catalog = activeProviderCatalog();
+  return catalog.provider(session.model && catalog.has(session.model) ? session.model : undefined);
 }
 
 function isPlanModeTool(name: string): boolean {
@@ -1681,17 +1739,18 @@ async function executeAgentCall(
   try {
     throwIfSessionAborted(signal);
     const input = parseAgentInput(call.input, agentDefinitions);
+    const catalog = activeProviderCatalog();
     const agentModel = resolveAgentModel(
       getAgentDefinition(agentDefinitions, input.subagentType).model,
-      providerCatalog.defaultAgentModel,
-      parent.model,
-      providerCatalog.defaultModel,
+      catalog.defaultAgentModel,
+      parent.model && catalog.has(parent.model) ? parent.model : undefined,
+      catalog.defaultModel,
     );
     child = await store.createAgentSession(parent, input.subagentType, input.description, agentModel);
     throwIfSessionAborted(signal);
     call.agentSessionId = child.id;
     call.agentType = input.subagentType;
-    const agentModelInfo = providerCatalog.model(child.model);
+    const agentModelInfo = catalog.model(child.model);
     call.agentModel = agentModelInfo.key;
     call.agentThinkingLevel = agentModelInfo.thinkingLevel;
     await persistParent();
@@ -1919,7 +1978,8 @@ function shouldAutoCompactSession(session: Session): boolean {
   if (!compactionTarget(session)) return false;
   // Agent sub-sessions only compact when the agent opts in; disabled by default.
   if (session.agentType && !agentDefinitions.find((agent) => agent.type === session.agentType)?.compact) return false;
-  const compactTokens = providerCatalog.model(session.model).compactTokens;
+  const catalog = activeProviderCatalog();
+  const compactTokens = catalog.model(session.model && catalog.has(session.model) ? session.model : undefined).compactTokens;
   const history = buildProviderHistory(session.messages, undefined, session.compaction);
   return shouldAutoCompact(compactTokens, sessionContextTokens(session), history);
 }
@@ -2227,30 +2287,60 @@ function json(response: ServerResponse, status: number, body: unknown): void {
   response.end(JSON.stringify(body));
 }
 
-// Startup runs at module scope, so a configuration error would otherwise escape as
-// an unhandled rejection and print a stack trace instead of something actionable.
-async function startupStep<T>(work: () => Promise<T> | T): Promise<T> {
-  try {
-    return await work();
-  } catch (error) {
-    exitWithMessage(startupErrorMessage(error, settingsPath));
-  }
-}
-
 function exitWithMessage(message: string): never {
   const indented = message.split("\n").map((line) => `  ${line}`).join("\n");
   console.error(`\n${indented}\n`);
   process.exit(1);
 }
 
-async function loadProviderCatalog(): Promise<ProviderCatalog> {
-  return ProviderCatalog.load(settings, fetch, {
+async function reloadSettingsFromDisk(): Promise<void> {
+  try {
+    const nextSettings = await loadSettings();
+    try {
+      const nextCatalog = await loadProviderCatalog(nextSettings);
+      validateAgentModels(nextCatalog, nextSettings.agents);
+      activateConfiguration(nextSettings, nextCatalog);
+    } catch (error) {
+      deactivateConfiguration(nextSettings, error);
+    }
+  } catch (error) {
+    settings = undefined;
+    providerCatalog = undefined;
+    provider = undefined;
+    agentDefinitions = [];
+    claudeCodeTools = createClaudeCodeTools(agentDefinitions);
+    configurationError = configurationErrorMessage(error);
+    console.error(`amber: ${configurationError}`);
+  }
+}
+
+function activateConfiguration(nextSettings: AmberSettings, nextCatalog: ProviderCatalog): void {
+  settings = nextSettings;
+  providerCatalog = nextCatalog;
+  provider = nextCatalog.provider(undefined);
+  agentDefinitions = nextSettings.agents;
+  claudeCodeTools = createClaudeCodeTools(agentDefinitions);
+  configurationError = undefined;
+}
+
+function deactivateConfiguration(nextSettings: AmberSettings, error: unknown): void {
+  settings = nextSettings;
+  providerCatalog = undefined;
+  provider = undefined;
+  agentDefinitions = nextSettings.agents;
+  claudeCodeTools = createClaudeCodeTools(agentDefinitions);
+  configurationError = configurationErrorMessage(error);
+  console.error(`amber: ${configurationError}`);
+}
+
+async function loadProviderCatalog(candidate: AmberSettings): Promise<ProviderCatalog> {
+  return ProviderCatalog.load(candidate, fetch, {
     openAICodexAuth: (signal) => openAICodexAuth.resolveAuth(signal),
   });
 }
 
-function validateAgentModels(catalog: ProviderCatalog): void {
-  for (const definition of agentDefinitions) {
+function validateAgentModels(catalog: ProviderCatalog, definitions: AgentDefinition[]): void {
+  for (const definition of definitions) {
     if (definition.model && !catalog.has(definition.model)) {
       throw new Error(`Agent type '${definition.type}' references unknown model '${definition.model}'`);
     }
@@ -2263,10 +2353,10 @@ async function activateCompletedLogin(loginId: string, status: { status: string 
   if (!activation) {
     activation = (async () => {
       try {
-        const nextCatalog = await loadProviderCatalog();
-        validateAgentModels(nextCatalog);
-        providerCatalog = nextCatalog;
-        provider = nextCatalog.provider(undefined);
+        if (!settings) throw new Error("Save valid settings before connecting OpenAI Codex");
+        const nextCatalog = await loadProviderCatalog(settings);
+        validateAgentModels(nextCatalog, settings.agents);
+        activateConfiguration(settings, nextCatalog);
       } catch (error) {
         // The login itself succeeded; a failed model re-discovery must not
         // report it as failed. Keep the previous catalog and its fallback models.
@@ -2276,6 +2366,57 @@ async function activateCompletedLogin(loginId: string, status: { status: string 
     loginCatalogActivations.set(loginId, activation);
   }
   await activation;
+}
+
+function activeProviderCatalog(): ProviderCatalog {
+  if (providerCatalog) return providerCatalog;
+  throw new Error(configurationError ?? "Save valid provider settings before using Amber");
+}
+
+function configurationRequired(response: ServerResponse): void {
+  json(response, 503, { error: configurationError ?? "Save valid provider settings before using Amber" });
+}
+
+async function configPayload(): Promise<object> {
+  const defaultProvider = providerCatalog?.model(undefined).provider;
+  const authenticationRequired = Boolean(
+    defaultProvider
+    && settings?.providers[defaultProvider]?.auth === "openai-codex"
+    && !(await openAICodexAuth.configured()),
+  );
+  return {
+    configured: Boolean(providerCatalog && provider),
+    authenticationRequired,
+    ...(configurationError ? { configurationError } : {}),
+    provider: provider?.name ?? "",
+    model: provider?.model ?? "",
+    defaultModel: providerCatalog?.defaultModel ?? "",
+    models: providerCatalog?.models ?? [],
+    mode: "live",
+    homeDirectory: homedir(),
+    workspaceRoot,
+    authActionToken,
+    theme: settings?.theme ?? "light+",
+  };
+}
+
+function configurationErrorMessage(error: unknown): string {
+  const detail = errorMessage(error);
+  const prefix = `${settingsPath}: `;
+  return detail.startsWith(prefix) ? detail.slice(prefix.length) : detail;
+}
+
+function authorizeLocalSettingsAccess(request: IncomingMessage, response: ServerResponse): boolean {
+  if (isLoopbackWebRequest(request)) return true;
+  json(response, 403, { error: "Settings can only be viewed from Amber's local interface" });
+  return false;
+}
+
+function authorizeSettingsMutation(request: IncomingMessage, response: ServerResponse): boolean {
+  if (!authorizeLocalSettingsAccess(request, response)) return false;
+  if (request.headers["x-amber-auth-action-token"] === authActionToken) return true;
+  json(response, 403, { error: "Invalid settings action token" });
+  return false;
 }
 
 function authorizeAuthMutation(request: IncomingMessage, response: ServerResponse): boolean {

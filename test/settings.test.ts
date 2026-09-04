@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse, stringify } from "smol-toml";
-import { loadSettings } from "../src/settings.js";
+import { loadSettings, loadSettingsSource, parseSettingsSource, saveSettingsSource } from "../src/settings.js";
 import { COMMIT_SKILL_TEMPLATE_SOURCE, SETTINGS_TEMPLATE } from "../src/settings-template.js";
 
 test("creates a settings template on first load", async () => {
@@ -24,6 +24,19 @@ test("creates a settings template on first load", async () => {
   assert.equal(source.match(/^compact = false$/gm)?.length, 1);
   assert.doesNotMatch(source, /INSERT_AGENT_AUTH/);
   assert.equal((await stat(settingsPath)).mode & 0o777, 0o600);
+});
+
+test("loads, parses, and saves settings source for the browser editor", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const initial = await loadSettingsSource(homeDirectory);
+  assert.equal(initial.path, join(homeDirectory, ".amber", "settings.toml"));
+  assert.deepEqual(parseSettingsSource(initial.source, initial.path), SETTINGS_TEMPLATE);
+
+  const updated = initial.source.replace('theme = "light+"', 'theme = "hacker"');
+  assert.equal(await saveSettingsSource(updated, homeDirectory), initial.path);
+  assert.equal((await loadSettings(homeDirectory)).theme, "hacker");
+  assert.equal(await readFile(initial.path, "utf8"), updated);
+  assert.equal((await stat(initial.path)).mode & 0o777, 0o600);
 });
 
 test("seeds the commit skill when settings are first created", async () => {
@@ -415,6 +428,24 @@ test("rejects OpenAI Codex OAuth on non-OpenAI providers", async () => {
   }), "utf8");
 
   await assert.rejects(loadSettings(homeDirectory), /openai-codex auth requires api = "openai"/);
+});
+
+test("treats API keys and OpenAI Codex as mutually exclusive auth modes", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const settingsDirectory = join(homeDirectory, ".amber");
+  await mkdir(settingsDirectory);
+  await writeFile(join(settingsDirectory, "settings.toml"), stringify({
+    providers: {
+      codex: {
+        api: "openai",
+        auth: "openai-codex",
+        auth_key: "not-used",
+        default_model: "gpt-test",
+      },
+    },
+  }), "utf8");
+
+  await assert.rejects(loadSettings(homeDirectory), /use auth or auth_key, not both/);
 });
 
 test("rejects slashed model names for anthropic providers", async () => {

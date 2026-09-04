@@ -35,7 +35,7 @@ export PATH="$HOME/.local/bin:$PATH"
 amber
 ```
 
-The first run creates **~/.amber/settings.toml**. Add your provider credentials, then run **amber** again.
+The first run creates **~/.amber/settings.toml** and opens Amber's Settings modal. Add your provider credentials and save; Amber validates and loads them without a restart.
 
 ### Run from source
 
@@ -105,9 +105,9 @@ compact = false          # Optional; enables auto-compaction of the agent's cont
 model = "zai/glm-5.3" # Optional; overrides the global agent defaults.
 ```
 
-The theme is applied when Amber starts. Change **theme** and restart Amber to switch palettes.
+The theme and provider catalog are reloaded whenever settings are saved. Open Settings with the gear beside the selected model.
 
-Provider credentials belong under **[providers.\<name>]**, never under an agent. API-key provider configuration comes from **settings.toml**; no environment variables are used. **api** selects the provider's protocol: **"anthropic"** (the default) or **"openai"**. OpenAI-protocol providers accept slashed model ids such as **xiaomi/mimo-v2-pro**, so OpenRouter-style backends work. Models in `[[agents]]` are referenced as **provider/model**. Agent model precedence is the per-agent `model`, then `default_agent_model` within `default_agent_provider`, then that provider's default model; without agent defaults, agents inherit the session model. Select a session's model from the model name in the browser's top-right corner. Set an agent's **compact** to **true** to auto-compact its context at the model's **compact_tokens** threshold; agents never auto-compact otherwise.
+Provider credentials belong under **[providers.\<name>]**, never under an agent. API-key provider configuration comes from **settings.toml**; no environment variables are used. **api** selects the provider's protocol: **"anthropic"** (the default) or **"openai"**. Authentication is either **auth_key** or **auth = "openai-codex"**, never both; Codex authentication is available only with the OpenAI protocol. OpenAI-protocol providers accept slashed model ids such as **xiaomi/mimo-v2-pro**, so OpenRouter-style backends work. Models in `[[agents]]` are referenced as **provider/model**. Agent model precedence is the per-agent `model`, then `default_agent_model` within `default_agent_provider`, then that provider's default model; without agent defaults, agents inherit the session model. Select a session's model from the model name in the browser's top-right corner. Set an agent's **compact** to **true** to auto-compact its context at the model's **compact_tokens** threshold; agents never auto-compact otherwise.
 
 ### ChatGPT Plus/Pro OAuth for OpenAI Codex
 
@@ -124,7 +124,7 @@ default_model = "gpt-5.4" # Required (or list models) so the provider works befo
 thinking_level = "high"
 ```
 
-Start Amber, open **AUTH → PROVIDERS** in the sidebar, and choose either:
+Start Amber, open the top-right **Settings** gear, save the Codex provider, then choose either connection method under **Auth providers**:
 
 - **Browser login** — Authorization Code + PKCE through `auth.openai.com`, with a state-validated callback on `localhost:1455`. Remote sessions can paste the final redirect URL or authorization code.
 - **Device code** — displays a code for `https://auth.openai.com/codex/device` and waits for authorization.

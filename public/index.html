@@ -6,7 +6,7 @@
     <meta name="description" content="AMBER — browser terminal for persistent LLM agent sessions">
     <title>AMBER // Agent Terminal</title>
     <link rel="stylesheet" href="/themes.css?v=1">
-    <link rel="stylesheet" href="/styles.css?v=55">
+    <link rel="stylesheet" href="/styles.css?v=56">
   </head>
   <body>
     <div class="noise" aria-hidden="true"></div>
@@ -38,7 +38,6 @@
         <div class="sidebar-label"><span>ACTIVE AGENTS</span><span class="line"></span></div>
         <nav id="active-agent-list" class="session-list active-agent-list" aria-label="Agents for this session"></nav>
         <footer class="sidebar-footer">
-          <button id="auth-settings" class="sidebar-auth-button" type="button"><span>AUTH</span><small>PROVIDERS</small><i>›</i></button>
           <div id="context-meter" class="system-meter context-meter context-green"><span>CTX</span><i><b id="context-meter-bar"></b></i><span id="context-meter-value">0k</span></div>
         </footer>
       </aside>
@@ -54,6 +53,9 @@
           <div class="topbar-controls">
             <button id="thinking-level-button" class="thinking-level-button" type="button" aria-label="Select thinking level"><span id="thinking-level-label">NONE</span></button>
             <button id="model-selector" class="provider-status" type="button" aria-label="Select model"><span id="provider-dot" class="status-dot"></span><span id="model-label">CONNECTING</span></button>
+            <button id="settings-button" class="settings-button" type="button" aria-label="Open settings" title="Settings">
+              <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="2.6"/><path d="M16.1 11.3a6.5 6.5 0 0 0 0-2.6l1.7-1.3-1.7-2.9-2 .8a7.2 7.2 0 0 0-2.2-1.3L11.6 2H8.4L8 4a7.2 7.2 0 0 0-2.2 1.3l-2-.8-1.7 2.9 1.7 1.3a6.5 6.5 0 0 0 0 2.6l-1.7 1.3 1.7 2.9 2-.8A7.2 7.2 0 0 0 8 16l.3 2h3.3l.3-2a7.2 7.2 0 0 0 2.2-1.3l2 .8 1.7-2.9-1.7-1.3Z"/></svg>
+            </button>
           </div>
         </header>
 
@@ -168,16 +170,33 @@
         </footer>
       </section>
     </div>
-    <div id="auth-dialog" class="tasks-overlay" hidden>
-      <section class="tasks-dialog auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-dialog-title">
+    <div id="settings-dialog" class="tasks-overlay" hidden>
+      <section class="tasks-dialog settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title">
         <header class="tasks-dialog-header">
-          <span class="session-dialog-icon" aria-hidden="true">⌁</span>
-          <strong id="auth-dialog-title">Provider authentication</strong>
-          <button id="auth-close" class="tasks-dialog-button" type="button" aria-label="Close authentication settings">×</button>
+          <span class="session-dialog-icon" aria-hidden="true">⚙</span>
+          <strong id="settings-dialog-title">Settings</strong>
+          <button id="settings-close" class="tasks-dialog-button" type="button" aria-label="Close settings">×</button>
         </header>
-        <div id="auth-dialog-body" class="tasks-dialog-body auth-dialog-body"></div>
-        <footer class="tasks-dialog-footer">
-          <span>Credentials are stored locally in ~/.amber/auth.json</span>
+        <div class="tasks-dialog-body settings-dialog-body">
+          <section class="settings-editor-section">
+            <div class="settings-section-heading">
+              <div><strong>CONFIGURATION</strong><small id="settings-path">~/.amber/settings.toml</small></div>
+              <p><code>api</code> is <code>anthropic</code> or <code>openai</code>. Use <code>auth_key</code> for API keys, or <code>auth = "openai-codex"</code> with the OpenAI API.</p>
+            </div>
+            <textarea id="settings-source" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Amber settings TOML"></textarea>
+            <p id="settings-error" class="settings-error" role="alert" hidden></p>
+          </section>
+          <section class="settings-auth-section">
+            <div class="settings-section-heading">
+              <div><strong>AUTH PROVIDERS</strong><small>Subscription-based connections</small></div>
+              <p>Codex providers use your ChatGPT Plus/Pro login instead of an API key.</p>
+            </div>
+            <div id="settings-auth-body" class="settings-auth-body"></div>
+          </section>
+        </div>
+        <footer class="tasks-dialog-footer settings-dialog-footer">
+          <span id="settings-status">Changes are validated before ~/.amber/settings.toml is updated.</span>
+          <button id="settings-save" class="question-submit-button" type="button">SAVE SETTINGS</button>
         </footer>
       </section>
     </div>
