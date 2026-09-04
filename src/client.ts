@@ -1854,8 +1854,8 @@ function renderQuestionDialog(): void {
   const selection = questionSelections.get(question.question)!;
   const completeCount = request.questions.filter(questionIsAnswered).length;
   elements.questionDialogTitle.textContent = request.questions.length === 1
-    ? "Claude has a question"
-    : `Claude has questions · ${completeCount}/${request.questions.length} answered`;
+    ? "Amber has a question"
+    : `Amber has questions · ${completeCount}/${request.questions.length} answered`;
   elements.questionDialogHints.textContent = question.multiSelect
     ? "↑/↓ focus · Space toggle · Enter action · ←/→ question · Esc decline"
     : "↑/↓ focus · Space select · Enter action · ←/→ question · Esc decline";
@@ -2056,8 +2056,8 @@ function updateQuestionActionState(): void {
     ? (questionSubmitting ? "SUBMITTING…" : "SUBMIT ANSWERS")
     : "NEXT";
   elements.questionDialogTitle.textContent = request.questions.length === 1
-    ? "Claude has a question"
-    : `Claude has questions · ${completeCount}/${request.questions.length} answered`;
+    ? "Amber has a question"
+    : `Amber has questions · ${completeCount}/${request.questions.length} answered`;
 }
 
 function focusCurrentQuestionOption(): void {
@@ -2208,7 +2208,7 @@ function openPlanModeDialog(request: PlanModeRequest): void {
     const content = document.createElement("section");
     content.className = "plan-mode-entry";
     const heading = document.createElement("h2");
-    heading.textContent = "Claude wants to plan before making changes";
+    heading.textContent = "Amber wants to plan before making changes";
     const copy = document.createElement("p");
     copy.textContent = "Plan mode permits codebase exploration and limits Amber’s Write and Edit tools to a session-specific plan file. You’ll review the completed plan before implementation begins.";
     content.append(heading, copy);
