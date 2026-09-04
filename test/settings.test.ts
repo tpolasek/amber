@@ -16,7 +16,7 @@ test("creates a settings template on first load", async () => {
 
   assert.deepEqual(settings, SETTINGS_TEMPLATE);
   assert.deepEqual(parse(source), SETTINGS_TEMPLATE);
-  assert.match(source, /^theme = "dark" # dark \(current Amber\), light \(Solarized Light\), light\+ \(VS Code Light\+\), or hacker \(terminal green\)$/m);
+  assert.match(source, /^theme = "light\+" # dark \(current Amber\), light \(Solarized Light\), light\+ \(VS Code Light\+\), or hacker \(terminal green\)$/m);
   assert.match(source, /^# default_agent_provider = ""$/m);
   assert.match(source, /^# default_agent_model = ""$/m);
   assert.match(source, /# model = "<INSERT_AGENT_PROVIDER_SLASH_MODEL_HERE>"/);
@@ -107,7 +107,7 @@ test("loads settings with no configured agents", async () => {
   }), "utf8");
 
   assert.deepEqual(await loadSettings(homeDirectory), {
-    theme: "dark",
+    theme: "light+",
     providers: {
       zai: { api: "anthropic", auth_key: "saved-key", auth_url: "https://example.test", models: {} },
     },
@@ -285,7 +285,7 @@ test("accepts legacy top-level provider settings", async () => {
   }), "utf8");
 
   assert.deepEqual(await loadSettings(homeDirectory), {
-    theme: "dark",
+    theme: "light+",
     providers: {
       default: {
         api: "anthropic",

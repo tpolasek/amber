@@ -97,8 +97,8 @@ function parseSettings(parsed: unknown, settingsPath: string): AmberSettings {
 }
 
 function parseTheme(value: unknown, field: string): AmberTheme {
-  if (value === undefined || value === "dark") return "dark";
-  if (value === "light" || value === "light+" || value === "hacker") return value;
+  if (value === undefined || value === "light+") return "light+";
+  if (value === "dark" || value === "light" || value === "hacker") return value;
   throw new Error(`${field} must be dark, light, light+, or hacker`);
 }
 
