@@ -145,6 +145,7 @@ const backgroundTasks = new BackgroundTaskManager();
 const askUserQuestions = new AskUserQuestionManager();
 const planModeApprovals = new PlanModeApprovalManager();
 const agentRunToken = randomUUID();
+const AUTO_COMPACTION_CONTINUE_MESSAGE = "We have just compacted the session, continue your work.";
 const SESSION_PATH_ID = "([a-z0-9.-]+)";
 const sessionEventSubscribers = new Map<string, Set<ServerResponse>>();
 
@@ -1361,11 +1362,25 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       takeReadyInputs();
 
       const roundWasInterrupted = interruptions.length > 0;
+      let autoCompactionContinuedTurn = false;
       let interruption = interruptions.shift();
       if (interruption?.priority === 0
         && interruption.kind === "command"
         && interruption.content.trim().toLowerCase() === "/compact") {
-        await startSessionCompaction(session, emit, false).completion;
+        const result = await startSessionCompaction(session, emit, false).completion;
+        if (result.compacted) {
+          const continuationMessage: Message = {
+            id: randomUUID(),
+            role: "user",
+            content: AUTO_COMPACTION_CONTINUE_MESSAGE,
+            createdAt: new Date().toISOString(),
+            status: "complete",
+          };
+          session.messages.push(continuationMessage);
+          await store.save(session);
+          emit("user_message", { message: continuationMessage });
+          autoCompactionContinuedTurn = true;
+        }
         // Input can be queued while summary generation is in flight. Pull it
         // in now and honor the queue's replaceable-user-slot semantics by
         // taking the newest remaining priority-two entry.
@@ -1401,7 +1416,9 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         return;
       }
 
-      if ((orderedCalls.length === 0 || endTurnAfterToolResult) && interruption?.kind !== "message") {
+      if ((orderedCalls.length === 0 || endTurnAfterToolResult)
+        && interruption?.kind !== "message"
+        && !autoCompactionContinuedTurn) {
         if (session.parentSessionId) {
           session.agentStatus = "complete";
           await store.save(session);

@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const basePort = Number(process.env.E2E_PORT ?? 38211);
 const INTERRUPT_TEXT = "INTERRUPT_NOW";
+const AUTO_COMPACTION_CONTINUE_MESSAGE = "We have just compacted the session, continue your work.";
 const failures = [];
 
 function check(name, condition, detail = "") {
@@ -572,7 +573,15 @@ async function runAutomaticCompactionScenario(mock, amber) {
 
   let snapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
   check("compaction persisted a summary", snapshot.session.compaction?.summary === "Summary:\ncompacted context");
-  const userInjected = events.findIndex((event) => event.event === "user_message");
+  const autoContinuation = events.findIndex((event) =>
+    event.event === "user_message" && event.message?.content === AUTO_COMPACTION_CONTINUE_MESSAGE);
+  check("automatic compaction inserted a continuation message",
+    autoContinuation > compactionCompleted
+      && snapshot.session.messages.some((message) =>
+        message.role === "user" && message.content === AUTO_COMPACTION_CONTINUE_MESSAGE),
+    `${compactionCompleted} -> ${autoContinuation}`);
+  const userInjected = events.findIndex((event) =>
+    event.event === "user_message" && event.message?.content === INTERRUPT_TEXT);
   check("the accepted queued message was injected after compaction",
     userInjected > compactionCompleted
       && snapshot.session.messages.some((message) => message.role === "user" && message.content === INTERRUPT_TEXT),
@@ -643,7 +652,7 @@ async function runFailedCompactionDetachedObserverScenario(mock, amber) {
   check("the model handled the queued message without client re-dispatch",
     snapshot.session.messages
       .filter((message) => message.role === "assistant" && message.kind !== "compact-banner")
-      .at(-1)?.content?.startsWith("ACK interrupt after"));
+      .some((message) => message.content?.startsWith("ACK interrupt after")));
 }
 
 async function runDeleteDuringCompactionScenario(mock, amber) {
@@ -1007,6 +1016,12 @@ async function runTerminalToolCompactionScenario(mock, amber) {
   const snapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
   check("terminal-result compaction persisted its summary",
     snapshot.session.compaction?.summary === "Summary:\ncompacted context");
+  check("terminal-result compaction keeps the agent going with an inserted message",
+    snapshot.session.messages.some((message) =>
+      message.role === "user" && message.content === AUTO_COMPACTION_CONTINUE_MESSAGE)
+      && snapshot.session.messages.filter((message) =>
+        message.role === "assistant" && message.kind !== "compact-banner").at(-1)?.content
+        === "continued after automatic compaction");
 }
 
 async function runRedundantManualCompactionScenario(mock, amber) {
