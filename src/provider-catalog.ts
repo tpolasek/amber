@@ -150,7 +150,11 @@ export class ProviderCatalog {
 }
 
 function providerEntries(settings: AmberSettings): Array<[string, ProviderSettings]> {
-  return Object.entries(settings.providers).map(([name, provider]) => {
+  const entries = Object.entries(settings.providers);
+  if (entries.filter(([, provider]) => provider.auth === "openai-codex").length > 1) {
+    throw new Error("Configure at most one provider with auth = \"openai-codex\"");
+  }
+  return entries.map(([name, provider]) => {
     if (provider.auth !== "openai-codex" && !configuredSetting(provider.auth_key)) {
       throw new Error(`Set providers.${name}.auth_key in ~/.amber/settings.toml`);
     }

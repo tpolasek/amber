@@ -142,7 +142,11 @@ export function settingsSourceFromEditor(
   } catch (error) {
     throw new Error(`Could not write ${settingsPath}: ${errorMessage(error)}`);
   }
-  return { source, settings: parseSettingsSource(source, settingsPath) };
+  const settings = parseSettingsSource(source, settingsPath);
+  if (Object.values(settings.providers).filter((provider) => provider.auth === "openai-codex").length > 1) {
+    throw new Error(`${settingsPath}: configure at most one provider with auth = "openai-codex"`);
+  }
+  return { source, settings };
 }
 
 function canonicalEditorValue(value: unknown): unknown {
@@ -201,6 +205,7 @@ function canonicalAgents(value: unknown): unknown {
     copySetting(agent, candidate, "readOnly");
     copySetting(agent, candidate, "compact");
     copyOptionalString(agent, candidate, "model");
+    copyOptionalString(agent, candidate, "thinking_level");
     return agent;
   });
 }
@@ -441,6 +446,9 @@ function parseAgentDefinitions(value: unknown, settingsPath: string): AgentDefin
       && (typeof agent.model !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(agent.model.trim()))) {
       throw new Error(`${settingsPath}: agents[${index}].model must use provider/model`);
     }
+    if (agent.thinking_level !== undefined && !isThinkingLevel(agent.thinking_level)) {
+      throw new Error(`${settingsPath}: agents[${index}].thinking_level must be none, low, medium, high, xhigh, or max`);
+    }
     return {
       type: (agent.type as string).trim(),
       whenToUse: (agent.whenToUse as string).trim(),
@@ -448,6 +456,7 @@ function parseAgentDefinitions(value: unknown, settingsPath: string): AgentDefin
       readOnly: agent.readOnly,
       ...(typeof agent.compact === "boolean" ? { compact: agent.compact } : {}),
       ...(typeof agent.model === "string" ? { model: agent.model.trim() } : {}),
+      ...(isThinkingLevel(agent.thinking_level) ? { thinking_level: agent.thinking_level } : {}),
     };
   });
   const types = definitions.map((agent) => agent.type);

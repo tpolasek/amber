@@ -97,6 +97,25 @@ test("generates canonical TOML from structured settings", () => {
   assert.doesNotMatch(result.source, /ignored|models|auth_url/);
 });
 
+test("preserves a per-agent thinking level in structured settings", () => {
+  const result = settingsSourceFromEditor({
+    theme: "light+",
+    providers: {
+      openai: { api: "openai", auth_key: "key", auth_url: "https://example.test", models: {} },
+    },
+    agents: [{
+      type: "review",
+      whenToUse: "Review code.",
+      systemPrompt: "Review it.",
+      readOnly: true,
+      thinking_level: "high",
+    }],
+  }, "/tmp/settings.toml");
+
+  assert.equal(result.settings.agents[0]?.thinking_level, "high");
+  assert.equal((parse(result.source).agents as Array<Record<string, unknown>>)[0]?.thinking_level, "high");
+});
+
 test("rejects invalid structured settings before generating a usable document", () => {
   assert.throws(() => settingsSourceFromEditor({
     theme: "light+",
@@ -260,6 +279,30 @@ test("loads a qualified provider model for each agent", async () => {
     readOnly: true,
     model: "zai/agent-model",
   });
+});
+
+test("loads and validates a per-agent thinking level", () => {
+  const base = {
+    providers: {
+      openai: { api: "openai", auth_key: "key", auth_url: "https://example.test", models: {} },
+    },
+    agents: [{
+      type: "review",
+      whenToUse: "Review code.",
+      systemPrompt: "Review it.",
+      readOnly: true,
+      thinking_level: "xhigh",
+    }],
+  };
+
+  assert.equal(parseSettingsSource(stringify(base), "/tmp/settings.toml").agents[0]?.thinking_level, "xhigh");
+  assert.throws(
+    () => parseSettingsSource(stringify({
+      ...base,
+      agents: [{ ...base.agents[0], thinking_level: "extreme" }],
+    }), "/tmp/settings.toml"),
+    /agents\[0\]\.thinking_level must be none, low, medium, high, xhigh, or max/,
+  );
 });
 
 test("reports invalid settings fields", async () => {
@@ -471,6 +514,34 @@ test("loads an OpenAI Codex OAuth provider without an API key", async () => {
     thinking_level: "high",
     models: {},
   });
+});
+
+test("rejects multiple OpenAI Codex OAuth providers", () => {
+  const multipleCodexProviders = {
+    default_provider: "openai-codex-2",
+    providers: {
+      "openai-codex": {
+        api: "openai",
+        auth: "openai-codex",
+        default_model: "gpt-primary",
+      },
+      "openai-codex-2": {
+        api: "openai",
+        auth: "openai-codex",
+        default_model: "gpt-secondary",
+      },
+    },
+  };
+
+  assert.equal(
+    Object.keys(parseSettingsSource(stringify(multipleCodexProviders), "/tmp/settings.toml").providers).length,
+    2,
+    "raw settings remain readable so the modal can remove the extra provider",
+  );
+  assert.throws(
+    () => settingsSourceFromEditor(multipleCodexProviders, "/tmp/settings.toml"),
+    /configure at most one provider with auth = "openai-codex"/,
+  );
 });
 
 test("rejects OpenAI Codex OAuth providers without a usable fallback model", async () => {

@@ -1750,19 +1750,26 @@ async function executeAgentCall(
     throwIfSessionAborted(signal);
     const input = parseAgentInput(call.input, agentDefinitions);
     const catalog = activeProviderCatalog();
+    const agentDefinition = getAgentDefinition(agentDefinitions, input.subagentType);
     const agentModel = resolveAgentModel(
-      getAgentDefinition(agentDefinitions, input.subagentType).model,
+      agentDefinition.model,
       catalog.defaultAgentModel,
       parent.model && catalog.has(parent.model) ? parent.model : undefined,
       catalog.defaultModel,
     );
-    child = await store.createAgentSession(parent, input.subagentType, input.description, agentModel);
+    child = await store.createAgentSession(
+      parent,
+      input.subagentType,
+      input.description,
+      agentModel,
+      agentDefinition.thinking_level,
+    );
     throwIfSessionAborted(signal);
     call.agentSessionId = child.id;
     call.agentType = input.subagentType;
     const agentModelInfo = catalog.model(child.model);
     call.agentModel = agentModelInfo.key;
-    call.agentThinkingLevel = agentModelInfo.thinkingLevel;
+    call.agentThinkingLevel = child.thinkingLevel ?? agentModelInfo.thinkingLevel;
     await persistParent();
     onUpdate(call);
     if (input.runInBackground) {

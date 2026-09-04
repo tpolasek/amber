@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomInt, randomUUID } from "node:crypto";
-import type { AgentSessionSummary, Message, Session, SessionSummary } from "./types.js";
+import type { AgentSessionSummary, Message, Session, SessionSummary, ThinkingLevel } from "./types.js";
 import { BASIC_ENGLISH_2000 } from "./basic-english-2000.js";
 
 const SESSION_ID = /^(?:[a-f0-9-]{36}|[a-z]+(?:\.[a-z]+){2})(?:\.[2-9]\d*)?(?:\.[a-z0-9]{8})*$/;
@@ -35,7 +35,13 @@ export class SessionStore {
     return this.#createWithId(id);
   }
 
-  async createAgentSession(parent: Session, agentType: string, description: string, model?: string): Promise<Session> {
+  async createAgentSession(
+    parent: Session,
+    agentType: string,
+    description: string,
+    model?: string,
+    thinkingLevel?: ThinkingLevel,
+  ): Promise<Session> {
     let id = "";
     do id = `${parent.id}.${randomShortId()}`;
     while (await this.get(id));
@@ -61,6 +67,7 @@ export class SessionStore {
       agentDescription: description,
       agentStatus: "running",
       ...(sessionModel ? { model: sessionModel } : {}),
+      ...(thinkingLevel ? { thinkingLevel } : {}),
       ...(parent.directories ? { directories: structuredClone(parent.directories) } : {}),
       ...(parent.cwd ? { cwd: parent.cwd } : {}),
       ...(parent.addDirInitialized !== undefined ? { addDirInitialized: parent.addDirInitialized } : {}),

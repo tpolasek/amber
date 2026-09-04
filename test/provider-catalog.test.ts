@@ -277,7 +277,42 @@ test("uses OAuth-backed Codex discovery and provider requests", async () => {
   assert.equal(catalog.provider(undefined).protocol, "openai");
 });
 
-test("keeps configured Codex models available before login", async () => {
+test("rejects multiple OAuth-backed Codex providers", async () => {
+  const settings: AmberSettings = {
+    default_provider: "codex-work",
+    providers: {
+      "codex-personal": {
+        api: "openai",
+        auth: "openai-codex",
+        auth_url: "https://chatgpt.com/backend-api",
+        default_model: "gpt-codex",
+        thinking_level: "high",
+        models: {},
+      },
+      "codex-work": {
+        api: "openai",
+        auth: "openai-codex",
+        auth_url: "https://chatgpt.com/backend-api",
+        default_model: "gpt-codex",
+        thinking_level: "xhigh",
+        models: {},
+      },
+    },
+    agents: [],
+  };
+  const fetcher: typeof fetch = async () => Response.json({
+    models: [{ slug: "gpt-codex", display_name: "GPT Codex", visibility: "list" }],
+  });
+
+  await assert.rejects(
+    ProviderCatalog.load(settings, fetcher, {
+      openAICodexAuth: async () => ({ accessToken: "oauth-access", accountId: "account-1" }),
+    }),
+    /Configure at most one provider with auth = "openai-codex"/,
+  );
+});
+
+test("keeps a configured Codex model available before login", async () => {
   const catalog = await ProviderCatalog.load({
     default_provider: "openai-codex",
     providers: {
@@ -294,6 +329,7 @@ test("keeps configured Codex models available before login", async () => {
     openAICodexAuth: async () => { throw new Error("not signed in"); },
   });
 
+  assert.equal(catalog.defaultModel, "openai-codex/gpt-codex");
   assert.deepEqual(catalog.models.map((model) => model.key), ["openai-codex/gpt-codex"]);
 });
 

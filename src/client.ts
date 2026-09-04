@@ -64,7 +64,7 @@ interface EditableProviderSettings extends EditableModelSettings {
   default_model?: string;
   models: Record<string, EditableModelSettings>;
 }
-interface EditableAgentSettings { type: string; whenToUse: string; systemPrompt: string; readOnly: boolean; compact?: boolean; model?: string }
+interface EditableAgentSettings { type: string; whenToUse: string; systemPrompt: string; readOnly: boolean; compact?: boolean; model?: string; thinking_level?: ThinkingLevel }
 interface EditableSettings {
   theme: AmberTheme;
   default_provider?: string;
@@ -269,7 +269,6 @@ const elements = {
   settingsCancel: required<HTMLButtonElement>("settings-cancel"),
   settingsSave: required<HTMLButtonElement>("settings-save"),
   settingsSaveClose: required<HTMLButtonElement>("settings-save-close"),
-  settingsAuthBody: required<HTMLElement>("settings-auth-body"),
   tasksDialog: required<HTMLElement>("tasks-dialog"),
   tasksDialogTitle: required<HTMLElement>("tasks-dialog-title"),
   tasksDialogBody: required<HTMLElement>("tasks-dialog-body"),
@@ -1141,11 +1140,13 @@ function renderProviderSettings(): void {
   elements.settingsProviderList.replaceChildren();
   if (!settingsDraft) return;
   const entries = Object.entries(settingsDraft.providers);
+  elements.settingsLoginCodex.hidden = entries.some(([, provider]) => provider.auth === "openai-codex");
   if (entries.length === 0) {
     elements.settingsProviderList.append(settingsEmptyState("No providers configured. Add an API provider or log in with Codex."));
     return;
   }
   for (const [name, provider] of entries) elements.settingsProviderList.append(providerSettingsCard(name, provider));
+  renderAuthProviders();
 }
 
 function providerSettingsCard(name: string, provider: EditableProviderSettings): HTMLElement {
@@ -1155,20 +1156,19 @@ function providerSettingsCard(name: string, provider: EditableProviderSettings):
   heading.className = "settings-card-heading";
   const identity = document.createElement("div");
   identity.className = "settings-card-identity";
-  const nameField = settingsField("PROVIDER");
-  nameField.classList.add("settings-provider-name");
+  const nameField = document.createElement("label");
+  nameField.className = "settings-provider-name";
+  const nameLabel = document.createElement("span");
+  nameLabel.textContent = provider.auth === "openai-codex" ? "PROVIDER (CODEX OAUTH)" : "PROVIDER (API)";
   const nameInput = document.createElement("input");
   nameInput.value = name;
   nameInput.autocomplete = "off";
   nameInput.spellcheck = false;
   nameInput.setAttribute("aria-label", "Provider name");
   nameInput.addEventListener("change", () => renameProvider(name, nameInput.value));
-  const badge = document.createElement("span");
-  badge.className = "settings-badge";
-  badge.textContent = provider.auth === "openai-codex" ? "CODEX OAUTH" : "API KEY";
-  nameField.append(nameInput);
-  identity.append(nameField, badge);
-  heading.append(identity, settingsRemoveButton("Remove provider", () => removeProvider(name)));
+  nameField.append(nameLabel, nameInput);
+  identity.append(nameField);
+  heading.append(identity, settingsRemoveButton("Remove provider", () => void removeProvider(name)));
 
   const fields = document.createElement("div");
   fields.className = "settings-field-grid";
@@ -1226,6 +1226,12 @@ function providerSettingsCard(name: string, provider: EditableProviderSettings):
   add.addEventListener("click", () => addModelOverride(name));
   models.append(summary, list, add);
   card.append(heading, fields, models);
+  if (provider.auth === "openai-codex") {
+    const authBody = document.createElement("div");
+    authBody.className = "settings-provider-auth-body";
+    authBody.dataset.providerName = name;
+    card.append(authBody);
+  }
   return card;
 }
 
@@ -1296,6 +1302,10 @@ function agentSettingsCard(agent: EditableAgentSettings, index: number): HTMLEle
       markSettingsDirty();
     }),
     settingsAgentModelField(agent),
+    settingsThinkingField("THINKING LEVEL", agent.thinking_level, (value) => {
+      setOptionalThinking(agent, value);
+      markSettingsDirty();
+    }, "Model default"),
   );
   const prompts = document.createElement("div");
   prompts.className = "settings-agent-prompts";
@@ -1341,6 +1351,10 @@ function addApiProvider(): void {
 
 async function setupAndLoginWithCodex(method: "browser" | "device_code" = "browser"): Promise<void> {
   if (!settingsDraft || settingsBusy || authBusy) return;
+  if (Object.values(settingsDraft.providers).some((provider) => provider.auth === "openai-codex")) {
+    renderProviderSettings();
+    return;
+  }
   for (const [name, provider] of Object.entries(settingsDraft.providers)) {
     if (name === "default" && provider.api === "anthropic" && provider.thinking_level === "max"
       && (provider.compact_tokens === 100_000 || provider.compact_tokens === 200_000)
@@ -1350,27 +1364,40 @@ async function setupAndLoginWithCodex(method: "browser" | "device_code" = "brows
       removeProviderFromDraft(name);
     }
   }
-  const configuredCodex = Object.entries(settingsDraft.providers)
-    .find(([, provider]) => provider.auth === "openai-codex");
-  const exactNameCollision = settingsDraft.providers["openai-codex"];
-  if (!configuredCodex && exactNameCollision) {
-    showSettingsError("The provider name 'openai-codex' is already used by an API-key provider. Rename or remove it first.");
-    return;
-  }
-  const codexName = configuredCodex?.[0] ?? "openai-codex";
-  if (!configuredCodex) {
-    settingsDraft.providers["openai-codex"] = {
-      api: "openai",
-      auth: "openai-codex",
-      default_model: "gpt-5.6-sol",
-      thinking_level: "high",
-      compact_tokens: 250_000,
-      models: {},
-    };
-  }
+  const codexName = uniqueSettingsName("openai-codex", Object.keys(settingsDraft.providers));
+  settingsDraft.providers[codexName] = {
+    api: "openai",
+    auth: "openai-codex",
+    default_model: "gpt-5.6-sol",
+    thinking_level: "high",
+    compact_tokens: 250_000,
+    models: {},
+  };
   settingsDraft.default_provider = codexName;
   markSettingsDirty();
   renderSettingsForm();
+  const popup = method === "browser" ? window.open("about:blank", "_blank") : null;
+  if (!(await saveSettings(false))) {
+    popup?.close();
+    return;
+  }
+  if (authProviders.some((provider) => provider.id === "openai-codex" && provider.configured)) {
+    popup?.close();
+    notify(`Codex provider '${codexName}' added · using the existing ChatGPT connection`);
+    return;
+  }
+  await startAuthLogin(method, popup);
+}
+
+async function saveAndLoginWithCodex(
+  providerName: string,
+  method: "browser" | "device_code",
+): Promise<void> {
+  if (!settingsDraft || settingsBusy || authBusy) return;
+  if (settingsDraft.providers[providerName]?.auth !== "openai-codex") {
+    showSettingsError(`Codex provider '${providerName}' is no longer available.`);
+    return;
+  }
   const popup = method === "browser" ? window.open("about:blank", "_blank") : null;
   if (!(await saveSettings(false))) {
     popup?.close();
@@ -1399,8 +1426,13 @@ function addAgent(): void {
   elements.settingsAgentList.lastElementChild?.scrollIntoView({ block: "nearest" });
 }
 
-function removeProvider(name: string): void {
+async function removeProvider(name: string): Promise<void> {
   if (!settingsDraft) return;
+  const provider = settingsDraft.providers[name];
+  if (provider?.auth === "openai-codex") {
+    if (activeAuthLogin && !(await cancelActiveAuthLogin())) return;
+    if (!(await logoutOpenAICodex(false))) return;
+  }
   removeProviderFromDraft(name);
   markSettingsDirty();
   renderSettingsForm();
@@ -1552,9 +1584,10 @@ function settingsThinkingField(
   label: string,
   value: ThinkingLevel | undefined,
   onChange: (value: string) => void,
+  emptyLabel = "Provider default",
 ): HTMLLabelElement {
   return settingsSelectField(label, value ?? "", [
-    { value: "", label: "Provider default" },
+    { value: "", label: emptyLabel },
     ...(["none", "low", "medium", "high", "xhigh", "max"] as ThinkingLevel[])
       .map((level) => ({ value: level, label: level.toUpperCase() })),
   ], onChange);
@@ -1774,23 +1807,31 @@ async function loadAuthProviders(): Promise<void> {
 }
 
 function renderAuthProviders(): void {
-  elements.settingsAuthBody.replaceChildren();
+  const targets = [...elements.settingsProviderList.querySelectorAll<HTMLElement>(".settings-provider-auth-body")];
+  for (const target of targets) target.replaceChildren();
+  if (targets.length === 0) return;
   const provider = authProviders.find((candidate) => candidate.id === "openai-codex");
   if (!provider) {
-    const loading = document.createElement("div");
-    loading.className = "tasks-empty";
-    loading.textContent = "Loading authentication status…";
-    elements.settingsAuthBody.append(loading);
+    for (const target of targets) {
+      const loading = document.createElement("div");
+      loading.className = "settings-empty";
+      loading.textContent = "Loading authentication status…";
+      target.append(loading);
+    }
     return;
   }
 
+  for (const target of targets) target.append(authProviderCard(provider, target.dataset.providerName ?? ""));
+}
+
+function authProviderCard(provider: AuthProviderStatus, providerName: string): HTMLElement {
   const card = document.createElement("section");
   card.className = "auth-provider-card";
   const heading = document.createElement("div");
   heading.className = "auth-provider-heading";
   const identity = document.createElement("div");
   const title = document.createElement("h2");
-  title.textContent = provider.name;
+  title.textContent = "ChatGPT connection";
   const subtitle = document.createElement("p");
   subtitle.textContent = provider.authName;
   identity.append(title, subtitle);
@@ -1803,7 +1844,7 @@ function renderAuthProviders(): void {
   if (!provider.providerConfigured) {
     const note = document.createElement("p");
     note.className = "auth-note";
-    note.textContent = "Starting either login flow will add the recommended Codex provider and save it automatically.";
+    note.textContent = "Starting either login flow will save this Codex provider before authentication.";
     card.append(note);
   }
 
@@ -1817,17 +1858,17 @@ function renderAuthProviders(): void {
     } else {
       const browserLogin = authButton("BROWSER LOGIN", "", () => void (provider.providerConfigured
         ? startAuthLogin("browser")
-        : setupAndLoginWithCodex("browser")));
+        : saveAndLoginWithCodex(providerName, "browser")));
       const deviceLogin = authButton("DEVICE CODE", "secondary", () => void (provider.providerConfigured
         ? startAuthLogin("device_code")
-        : setupAndLoginWithCodex("device_code")));
+        : saveAndLoginWithCodex(providerName, "device_code")));
       browserLogin.disabled = settingsBusy || authBusy;
       deviceLogin.disabled = settingsBusy || authBusy;
       actions.append(browserLogin, deviceLogin);
     }
     card.append(actions);
   }
-  elements.settingsAuthBody.append(card);
+  return card;
 }
 
 function renderActiveAuthFlow(card: HTMLElement, login: ActiveAuthLogin): void {
@@ -1890,7 +1931,7 @@ function authButton(label: string, variant: string, action: () => void): HTMLBut
   button.type = "button";
   button.className = `auth-button${variant ? ` ${variant}` : ""}`;
   button.textContent = label;
-  button.disabled = authBusy;
+  button.disabled = authBusy || settingsBusy;
   button.addEventListener("click", action);
   return button;
 }
@@ -1997,24 +2038,27 @@ async function refreshConfig(): Promise<void> {
   }
 }
 
-async function cancelActiveAuthLogin(): Promise<void> {
+async function cancelActiveAuthLogin(): Promise<boolean> {
   const login = activeAuthLogin;
-  if (!login || authBusy) return;
+  if (!login) return true;
+  if (authBusy) return false;
   authBusy = true;
   stopAuthPolling();
   try {
     await authMutation(`/api/auth/openai-codex/logins/${login.start.id}`, { method: "DELETE" });
     activeAuthLogin = null;
+    return true;
   } catch (error) {
     notify(messageFrom(error));
+    return false;
   } finally {
     authBusy = false;
     renderAuthProviders();
   }
 }
 
-async function logoutOpenAICodex(): Promise<void> {
-  if (authBusy) return;
+async function logoutOpenAICodex(showNotification = true): Promise<boolean> {
+  if (authBusy) return false;
   authBusy = true;
   renderAuthProviders();
   try {
@@ -2022,9 +2066,13 @@ async function logoutOpenAICodex(): Promise<void> {
     await loadAuthProviders();
     await refreshConfig();
     renderSettingsBusyState();
-    notify("OpenAI Codex disconnected");
+    if (showNotification) notify("OpenAI Codex disconnected");
+    return true;
   } catch (error) {
-    notify(messageFrom(error));
+    const message = messageFrom(error);
+    showSettingsError(message);
+    notify(message);
+    return false;
   } finally {
     authBusy = false;
     renderAuthProviders();

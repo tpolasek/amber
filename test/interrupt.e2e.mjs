@@ -823,6 +823,8 @@ async function runBackgroundAgentScenario(mock, amber) {
     agentCall?.status === "complete"
       && agentCall.statusDisplay?.text === "BACKGROUND"
       && Boolean(agentCall.agentSessionId), JSON.stringify(agentCall));
+  check("the Agent tool reports the configured per-agent thinking level",
+    agentCall?.agentThinkingLevel === "low", JSON.stringify(agentCall?.agentThinkingLevel));
   check("parent model continues immediately after the background launch",
     snapshot.session.messages.filter((message) => message.role === "assistant").at(-1)?.content
       === "parent continued without waiting");
@@ -840,6 +842,13 @@ async function runBackgroundAgentScenario(mock, amber) {
   check("background child persists its result",
     completedChild.session.messages.filter((message) => message.role === "assistant").at(-1)?.content
       === "background child complete");
+  check("the child session and provider request use the per-agent thinking override",
+    completedChild.session.thinkingLevel === "low"
+      && mock.requests().some((request) => request.temperature === 1 && request.output_config?.effort === "low"),
+    JSON.stringify({
+      thinkingLevel: completedChild.session.thinkingLevel,
+      efforts: mock.requests().filter((request) => request.temperature === 1).map((request) => request.output_config?.effort),
+    }));
 
   const notificationResponse = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
     method: "POST",
@@ -1102,6 +1111,7 @@ await writeFile(join(runDirectory, "home", ".amber", "settings.toml"), [
   'whenToUse = "Run e2e agent scenarios."',
   'systemPrompt = "Complete the assigned e2e task."',
   "readOnly = false",
+  'thinking_level = "low"',
   "",
   "[[agents]]",
   'type = "compacting"',

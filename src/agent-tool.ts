@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "./types.js";
+import type { ThinkingLevel, ToolDefinition } from "./types.js";
 
 export interface AgentInput {
   description: string;
@@ -16,6 +16,8 @@ export interface AgentDefinition {
   /** Enables auto-compaction of the agent's context; disabled by default. */
   compact?: boolean;
   model?: string;
+  /** Per-agent reasoning effort override; undefined uses the selected model's default. */
+  thinking_level?: ThinkingLevel;
 }
 
 export const AGENT_TOOL_NAME = "Agent";

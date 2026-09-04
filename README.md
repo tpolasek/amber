@@ -61,14 +61,14 @@ Open Settings with the gear beside the selected model. The modal is the primary 
 
 - Theme and default provider/agent model selection
 - Editable API provider and per-model override lists
-- Editable agent definitions, prompts, permissions, model overrides, and compaction
+- Editable agent definitions, prompts, permissions, model/thinking overrides, and compaction
 - OpenAI Codex login and connection status
 
 The UI regenerates the TOML file, so hand-written formatting and comments are not preserved. Every save is validated and written atomically before Amber reloads its theme, provider catalog, model defaults, and agents. If startup configuration is invalid, the modal remains open until a working configuration is saved (and a default Codex provider is connected).
 
 API-key providers use either the **Anthropic Messages** or **OpenAI Responses** protocol and default to a 200,000-token compaction threshold. Both protocols discover available models from **/v1/models**. OpenAI-protocol providers prefer the Responses API and automatically fall back to **Chat Completions** for compatible local servers such as LM Studio, Ollama, vLLM, and llama.cpp. OpenAI provider/model ids may contain slashes, so OpenRouter-style backends work.
 
-Agent model precedence is the per-agent model override, then the default agent model within the default agent provider, then that provider's default model. Without agent defaults, agents inherit the session model. Agent auto-compaction is opt-in.
+Agent model precedence is the per-agent model override, then the default agent model within the default agent provider, then that provider's default model. Without agent defaults, agents inherit the session model. An agent thinking-level override takes precedence over the selected model's level. Agent auto-compaction is opt-in.
 
 ### ChatGPT Plus/Pro OAuth for OpenAI Codex
 
@@ -86,10 +86,12 @@ thinking_level = "high"
 compact_tokens = 250000
 ```
 
-The Codex connection section also provides both authentication methods:
+The Codex provider card shows connection status and provides both authentication methods:
 
 - **Browser login** — Authorization Code + PKCE through `auth.openai.com`, with a state-validated callback on `localhost:1455`. Remote sessions can paste the final redirect URL or authorization code.
 - **Device code** — displays a code for `https://auth.openai.com/codex/device` and waits for authorization.
+
+Amber supports one Codex OAuth provider. Removing it from Settings also disconnects and deletes its stored ChatGPT credential.
 
 Amber uses OpenAI Codex's public native-client ID and sends `originator=amber`. OAuth credentials are stored in **~/.amber/auth.json** with user-only permissions. Access tokens are refreshed automatically when fewer than five minutes remain; refreshes are serialized so concurrent requests cannot overwrite a rotated refresh token. The file contains plaintext access and refresh tokens, so protect access to your user account and home directory.
 
