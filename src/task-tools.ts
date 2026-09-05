@@ -1,5 +1,6 @@
 import type { ToolDefinition } from "./types.js";
 import type { BackgroundTask, BackgroundTaskManager } from "./background-tasks.js";
+import { taskNotFoundError } from "./task-errors.js";
 
 export {
   PLANNING_TASK_TOOLS,
@@ -30,7 +31,8 @@ export const TASK_OUTPUT_TOOL: ToolDefinition = {
   name: "TaskOutput",
   description: `Retrieves output from a running or completed background shell or agent task.
 
-- task_id identifies the task returned by a background Agent or Bash call.
+- TaskOutput accepts two ID namespaces: b-prefixed IDs returned by background Bash calls, and linked session IDs returned by background Agent calls.
+- Numeric-string planning task IDs belong to TaskGet and TaskUpdate and are not accepted here.
 - For background Bash, returns the command output together with retrieval status, task status, and exit-code metadata when the process has exited. This differs from foreground Bash, which returns its direct Bash result without requiring TaskOutput.
 - Background Bash output preserves stdout and stderr in the order Amber receives them.
 - Use block=true (the default) to wait for completion.
@@ -39,7 +41,7 @@ export const TASK_OUTPUT_TOOL: ToolDefinition = {
   input_schema: {
     type: "object",
     properties: {
-      task_id: { type: "string", description: "The task ID to get output from." },
+      task_id: { type: "string", description: "A b-prefixed background Bash ID or linked background-agent session ID. Numeric planning task IDs are not accepted." },
       block: { type: "boolean", default: true, description: "Whether to wait for completion. Defaults to true." },
       timeout: { type: "integer", minimum: 0, maximum: 600_000, default: 30_000, description: "Maximum wait time in milliseconds. Defaults to 30000." },
     },
@@ -50,16 +52,17 @@ export const TASK_OUTPUT_TOOL: ToolDefinition = {
 
 export const TASK_STOP_TOOL: ToolDefinition = {
   name: "TaskStop",
-  description: `Stops a running background task by its ID.
+  description: `Stops a running background Bash task by its ID.
 
-- Use task_id to identify the task to stop.
+- TaskStop accepts only b-prefixed IDs returned by background Bash calls.
+- It does not accept numeric planning task IDs or linked background-agent session IDs. TaskOutput can inspect both background Bash and background-agent tasks, but TaskStop cannot stop agents.
 - Returns a success or failure status.
-- Use this tool to terminate a background task that should no longer continue.`,
+- Use this tool to terminate a background Bash task that should no longer continue.`,
   input_schema: {
     type: "object",
     properties: {
-      task_id: { type: "string", description: "The ID of the background task to stop." },
-      shell_id: { type: "string", description: "Deprecated: use task_id instead." },
+      task_id: { type: "string", description: "The b-prefixed ID of a background Bash task to stop." },
+      shell_id: { type: "string", description: "Deprecated alias for a background Bash task ID; use task_id instead." },
     },
     additionalProperties: false,
   },
@@ -126,7 +129,7 @@ export async function executeTaskOutput(
       resultText: formatAgentTaskOutputResult(agent.retrievalStatus, agent.task),
     };
   }
-  throw new Error(`No task found with ID: ${input.taskId}`);
+  throw taskNotFoundError(input.taskId);
 }
 
 interface AgentTaskRetrieval {

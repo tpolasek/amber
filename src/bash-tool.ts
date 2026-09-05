@@ -26,7 +26,7 @@ IMPORTANT: Avoid using this tool to run \`find\`, \`grep\`, \`cat\`, \`head\`, \
 - Always quote file paths that contain spaces.
 - Prefer absolute paths or working_directory over changing directories inside the command.
 - Commands run in the foreground by default and time out after 120000 ms. Foreground calls wait for completion and return the command output directly in Bash's normal result format. timeout may be at most 600000 ms.
-- Set run_in_background when the result is not needed immediately. A background Bash call returns a task ID instead of the command's final output. Pass that ID to TaskOutput to retrieve the output together with task status and exit-code metadata, or to TaskStop to terminate it. Do not append \`&\` when using run_in_background.
+- Set run_in_background when the result is not needed immediately. A background Bash call returns a b-prefixed task ID instead of the command's final output. Pass that ID to TaskOutput to retrieve the output together with task status and exit-code metadata, or to TaskStop to terminate it. Do not append \`&\` when using run_in_background.
 - Foreground Bash and background TaskOutput preserve stdout and stderr in the order Amber receives them.
 - You may issue separate Bash calls for independent commands, but foreground calls execute one at a time. Chain dependent commands with \`&&\`; use \`;\` only when later commands should run after a failure.
 - Avoid unnecessary sleeps and retry loops. Diagnose failures, and use TaskOutput rather than polling background work.
@@ -48,7 +48,7 @@ IMPORTANT: Avoid using this tool to run \`find\`, \`grep\`, \`cat\`, \`head\`, \
       },
       run_in_background: {
         type: "boolean",
-        description: "Set to true to return a background task ID instead of waiting for Bash's direct result. Use TaskOutput with that ID to retrieve the command output, task status, and exit-code metadata.",
+        description: "Set to true to return a b-prefixed background Bash task ID instead of waiting for Bash's direct result. Use TaskOutput with that ID to retrieve the command output, task status, and exit-code metadata; TaskStop accepts the same ID namespace.",
       },
     },
     required: ["command"],

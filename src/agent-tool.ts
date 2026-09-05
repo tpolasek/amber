@@ -32,14 +32,15 @@ export function createAgentTool(definitions: readonly AgentDefinition[]): ToolDe
     description: [
       "Launch a new agent to handle complex, multi-step tasks autonomously.",
       "",
-      `The Agent tool launches a specialized agent in a persisted Amber sub-session. Each invocation starts fresh and returns one final message. If subagent_type is omitted, ${defaultAgentType} is used.`,
+      `The Agent tool launches a specialized agent in a persisted Amber sub-session. Each invocation starts fresh. If subagent_type is omitted, ${defaultAgentType} is used.`,
+      "A foreground Agent result contains the agent's one final response first, followed by Amber metadata: an agentId line and a <usage> block containing total_tokens, tool_uses, and duration_ms. The agentId links the persisted sub-session, and the usage fields support diagnostics.",
       "",
       "Available agent types and the tools they have access to:",
       ...definitions.map((agent) => `- ${agent.type}: ${agent.whenToUse} (Tools: ${agent.readOnly ? "Bash, Glob, Grep, Read, Skill" : WRITABLE_AGENT_TOOLS})`),
       "",
       "Always include a short description (3-5 words). Brief the agent like a smart colleague who has not seen this conversation, and clearly say whether it should write code or only research.",
       "When two or more substantial tasks are independent, you may launch their agents in one response; Amber starts same-response Agent calls in parallel. Do not delegate routine work or duplicate work already assigned to an agent.",
-      "Set run_in_background to true for independent work that should continue while you proceed. The launch returns immediately with the linked sub-session's ID; use TaskOutput with that ID to check its status or wait for its result, which is also injected into your next model turn after it finishes.",
+      "Set run_in_background to true for independent work that should continue while you proceed. The launch returns immediately with the linked sub-session's ID; use TaskOutput with that ID to check its status or wait for its result, which is also injected into your next model turn after it finishes. TaskStop does not accept background-agent session IDs.",
     ].join("\n"),
     input_schema: {
       type: "object",
@@ -58,7 +59,7 @@ export function createAgentTool(definitions: readonly AgentDefinition[]): ToolDe
         },
         run_in_background: {
           type: "boolean",
-          description: "Set to true to run this agent in the background and return immediately with its linked sub-session.",
+          description: "Set to true to run this agent in the background and return immediately with its linked sub-session ID. That ID is accepted by TaskOutput, not TaskStop.",
         },
       },
       required: ["description", "prompt"],

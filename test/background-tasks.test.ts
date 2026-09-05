@@ -10,6 +10,7 @@ import {
   parseTaskOutputInput,
   parseTaskStopInput,
   TASK_OUTPUT_TOOL,
+  TASK_STOP_TOOL,
   type BackgroundAgentSource,
   type BackgroundAgentTask,
 } from "../src/task-tools.js";
@@ -137,7 +138,10 @@ test("TaskStop kills a task and task IDs cannot cross sessions", async () => {
   }, [directory]);
 
   assert.equal(manager.get("session-two", task.id), null);
-  await assert.rejects(manager.output("session-two", task.id, false, 0), /No task found/);
+  await assert.rejects(
+    manager.output("session-two", task.id, false, 0),
+    { message: `No task found with ID: ${task.id}` },
+  );
   const stopped = executeTaskStop(manager, "session-one", task.id);
   assert.match(stopped.resultText, /Successfully stopped task/);
   assert.equal(manager.get("session-one", task.id)?.status, "killed");
@@ -178,6 +182,10 @@ test("task listing includes only active tasks for the session, newest first", as
 test("task tool parsers use Claude Code argument conventions", () => {
   assert.match(TASK_OUTPUT_TOOL.description, /retrieval status, task status, and exit-code metadata/);
   assert.match(TASK_OUTPUT_TOOL.description, /foreground Bash.*direct Bash result/);
+  assert.match(TASK_OUTPUT_TOOL.description, /b-prefixed IDs.*linked session IDs/);
+  assert.match(TASK_OUTPUT_TOOL.description, /Numeric-string planning task IDs.*not accepted/);
+  assert.match(TASK_STOP_TOOL.description, /accepts only b-prefixed IDs/);
+  assert.match(TASK_STOP_TOOL.description, /TaskStop cannot stop agents/);
   assert.deepEqual(parseTaskOutputInput({ task_id: "b123", block: false, timeout: 500 }), {
     taskId: "b123", block: false, timeoutMs: 500,
   });
@@ -295,10 +303,14 @@ test("background agent IDs cannot cross sessions and unknown IDs fail", async ()
   const source = agentSource("session-one", agent);
   await assert.rejects(
     executeTaskOutput(manager, source, "session-two", { taskId: agent.id, block: false, timeoutMs: 0 }),
-    /No task found with ID: girl\.desert\.grand\.6bbl8fx5/,
+    { message: "No task found with ID: girl.desert.grand.6bbl8fx5" },
   );
   await assert.rejects(
     executeTaskOutput(manager, NO_AGENTS, "session-one", { taskId: "b00000000", block: false, timeoutMs: 0 }),
-    /No task found with ID: b00000000/,
+    { message: "No task found with ID: b00000000" },
+  );
+  assert.throws(
+    () => executeTaskStop(manager, "session-one", agent.id),
+    { message: "No task found with ID: girl.desert.grand.6bbl8fx5" },
   );
 });

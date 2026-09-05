@@ -1,4 +1,5 @@
 import type { Session, ToolDefinition } from "./types.js";
+import { taskNotFoundError } from "./task-errors.js";
 
 export type PlanningTaskStatus = "pending" | "in_progress" | "completed";
 export type PlanningTaskResponseStatus = PlanningTaskStatus | "deleted";
@@ -52,17 +53,17 @@ export interface PlanningTaskToolResult<T> {
   resultText: string;
 }
 
-const TASK_CREATE_PROMPT = `Create one item in the current session's task list.
+const TASK_CREATE_PROMPT = `Create one item in the current session's planning task list. Created planning tasks receive numeric-string IDs for use with TaskGet and TaskUpdate; these IDs are not accepted by TaskOutput or TaskStop.
 
 Use task tracking when several meaningful steps need coordination, when the user explicitly requests a task list, or when separate requested outcomes should be tracked independently. Skip it for simple, conversational, or informational work.
 
 Give each task a concise imperative subject and a description of its concrete outcome. activeForm is the present-continuous label shown while the task is in progress. New tasks start as pending. Check TaskList when necessary to avoid duplicates, and use TaskUpdate to record dependencies or status changes.`;
 
-const TASK_GET_PROMPT = `Retrieve one task's full details by ID, including its description, status, owner, metadata, and dependencies. Use it before acting on a task when the TaskList summary does not contain enough context. Do not begin a task while its blockedBy list contains unresolved tasks.`;
+const TASK_GET_PROMPT = `Retrieve one planning task's full details by its numeric-string ID, including its description, status, owner, metadata, and dependencies. TaskGet accepts planning task IDs only, not background Bash IDs beginning with b or linked background-agent session IDs. Use it before acting on a task when the TaskList summary does not contain enough context. Do not begin a task while its blockedBy list contains unresolved tasks.`;
 
-const TASK_LIST_PROMPT = `List the current session's tasks with their IDs, subjects, statuses, owners, and unresolved dependencies. Use this to check progress, avoid duplicates, or find pending work whose blockedBy list is empty. Use TaskGet when a task's full description or metadata is needed.`;
+const TASK_LIST_PROMPT = `List the current session's planning tasks with their numeric-string IDs, subjects, statuses, owners, and unresolved dependencies. Use this to check progress, avoid duplicates, or find pending work whose blockedBy list is empty. Use TaskGet when a task's full description or metadata is needed.`;
 
-const TASK_UPDATE_PROMPT = `Update a task's status, details, owner, metadata, or dependencies.
+const TASK_UPDATE_PROMPT = `Update a planning task's status, details, owner, metadata, or dependencies. TaskUpdate accepts numeric-string planning task IDs only, not background Bash IDs beginning with b or linked background-agent session IDs.
 
 Read the task's latest state with TaskGet before changing it. Move active work from pending to in_progress, and mark it completed only after its requested outcome is fully achieved and relevant verification passes. Leave unfinished or blocked work in progress. Use deleted only for a task that was created in error or is no longer relevant.
 
@@ -90,7 +91,7 @@ export const TASK_GET_TOOL: ToolDefinition = {
   input_schema: {
     type: "object",
     properties: {
-      taskId: { type: "string", description: "The ID of the task to retrieve" },
+      taskId: { type: "string", description: "Numeric-string planning task ID returned by TaskCreate or TaskList" },
     },
     required: ["taskId"],
     additionalProperties: false,
@@ -113,7 +114,7 @@ export const TASK_UPDATE_TOOL: ToolDefinition = {
   input_schema: {
     type: "object",
     properties: {
-      taskId: { type: "string", description: "The ID of the task to update" },
+      taskId: { type: "string", description: "Numeric-string planning task ID returned by TaskCreate or TaskList" },
       subject: { type: "string", description: "New subject for the task" },
       description: { type: "string", description: "New description for the task" },
       activeForm: { type: "string", description: 'Present continuous form shown in spinner when in_progress (e.g., "Running tests")' },
@@ -190,9 +191,9 @@ export function executeTaskCreate(session: Session, input: TaskCreateInput): Pla
   return jsonResult(visibleTask(task));
 }
 
-export function executeTaskGet(session: Session, taskId: string): PlanningTaskToolResult<PlanningTaskResponse | null> {
+export function executeTaskGet(session: Session, taskId: string): PlanningTaskToolResult<PlanningTaskResponse> {
   const task = findTask(session, taskId);
-  if (!task) return { data: null, output: "Task not found", resultText: "Task not found" };
+  if (!task) throw taskNotFoundError(taskId);
   return jsonResult(visibleTask(task));
 }
 
@@ -211,9 +212,9 @@ export function executeTaskList(session: Session): PlanningTaskToolResult<Planni
   return jsonResult(summaries);
 }
 
-export function executeTaskUpdate(session: Session, input: TaskUpdateInput): PlanningTaskToolResult<PlanningTaskResponse | null> {
+export function executeTaskUpdate(session: Session, input: TaskUpdateInput): PlanningTaskToolResult<PlanningTaskResponse> {
   const task = findTask(session, input.taskId);
-  if (!task) return { data: null, output: "Task not found", resultText: "Task not found" };
+  if (!task) throw taskNotFoundError(input.taskId);
 
   if (input.status === "deleted") {
     const deleted = visibleTask({ ...task, status: task.status });

@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import type { BashInput } from "./bash-tool.js";
 import { appendBashOutput, bashChildEnvironment, resolveBashWorkingDirectory } from "./bash-tool.js";
+import { taskNotFoundError } from "./task-errors.js";
 
 const TASK_ID_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
 const MAX_TASK_STREAM_CHARACTERS = 200_000;
@@ -170,7 +171,7 @@ export class BackgroundTaskManager {
 
   #taskForSession(sessionId: string, taskId: string): ManagedTask {
     const task = this.#tasks.get(taskId);
-    if (!task || task.sessionId !== sessionId) throw new Error(`No task found with ID: ${taskId}`);
+    if (!task || task.sessionId !== sessionId) throw taskNotFoundError(taskId);
     return task;
   }
 

@@ -13,7 +13,7 @@ test("defines the Bash tool and parses its input with the default timeout", () =
   assert.equal(BASH_TOOL.name, "Bash");
   assert.match(BASH_TOOL.description, /preserve stdout and stderr in the order Amber receives them/);
   assert.match(BASH_TOOL.description, /Foreground calls wait for completion and return the command output directly/);
-  assert.match(BASH_TOOL.description, /background Bash call returns a task ID instead of the command's final output/);
+  assert.match(BASH_TOOL.description, /background Bash call returns a b-prefixed task ID/);
   const runInBackground = (BASH_TOOL.input_schema.properties as Record<string, { description?: string }>).run_in_background;
   assert.match(
     runInBackground?.description ?? "",
