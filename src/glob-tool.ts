@@ -2,7 +2,6 @@ import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
 import {
-  basenameGlob,
   expandBracePattern,
   isPermissionOnlyRipgrepStderr,
   isRipgrepAvailable,
@@ -20,19 +19,23 @@ export const GLOB_TOOL: ToolDefinition = {
   name: "Glob",
   description: [
     "- Fast file pattern matching tool that works with any codebase size",
-    '- Supports glob patterns like "**/*.js" or "src/**/*.ts"',
+    '- The pattern is matched against file paths relative to path, or relative to the session working directory when path is omitted',
+    '- `*` and `?` stay within one directory component; only `**` can match across directory separators',
+    '- Supports patterns like "*.js", "**/*.js", "src/*", or "src/**/*.ts"',
+    "- Searches hidden and ignored files, but excludes version-control metadata directories",
     "- Returns matching file paths sorted by modification time",
-    "- Returned paths are relative to the session working directory",
+    "- Returned paths are relative to the session working directory when possible, even when path is absolute",
+    `- Returns at most ${GLOB_FILE_LIMIT} files. If results are truncated, use a more specific path or pattern`,
     "- Use this tool when you need to find files by name patterns",
     "- When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the Agent tool instead",
   ].join("\n"),
   input_schema: {
     type: "object",
     properties: {
-      pattern: { type: "string", description: "The glob pattern to match files against" },
+      pattern: { type: "string", description: "Glob matched against file paths relative to the search root. * does not cross directories; ** does." },
       path: {
         type: "string",
-        description: 'The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter "undefined" or "null" - simply omit it for the default behavior. Must be a valid directory path if provided.',
+        description: "Directory that establishes the search root. Defaults to the session working directory. Directory components in pattern are resolved beneath this root.",
       },
     },
     required: ["pattern"],
@@ -50,6 +53,8 @@ export interface GlobResult {
   resultText: string;
   workingDirectory: string;
 }
+
+export type GlobBackend = "rg" | "grep";
 
 function optionalString(input: Record<string, unknown>, name: string): string | undefined {
   const value = input[name];
@@ -117,30 +122,28 @@ export async function executeGlob(
   allowedDirectories: string[],
   currentDirectory: string,
   signal?: AbortSignal,
+  backend?: GlobBackend,
 ): Promise<GlobResult> {
   if (signal?.aborted) throw abortError();
   if (!currentDirectory) throw new Error("No current working directory is configured");
   const searchPath = await resolveSearchPath(input.path, allowedDirectories, currentDirectory);
   if (signal?.aborted) throw abortError();
-  const command: "rg" | "grep" = (await isRipgrepAvailable()) ? "rg" : "grep";
+  const command: GlobBackend = backend ?? ((await isRipgrepAvailable()) ? "rg" : "grep");
   const args: string[] = [];
   if (command === "rg") {
-    args.push("--files", "--hidden");
+    // The grep fallback does not interpret ignore files. --no-ignore keeps the
+    // candidate set consistent before both backends apply the shared matcher.
+    args.push("--files", "--hidden", "--no-ignore");
     for (const directory of VCS_DIRECTORIES_TO_EXCLUDE) {
       args.push("--glob", `!${directory}`);
     }
-    args.push("--glob", input.pattern, "--", searchPath);
+    args.push("--", searchPath);
   } else {
-    // grep has no --files mode; listing files whose contents match the empty pattern
-    // covers every file with at least one line (0-byte files are not listed), filtered
-    // to the pattern with --include/--exclude globs.
-    args.push("-r", "-l", "-e", "");
+    // grep has no --files mode. -L with an impossible expression lists every file,
+    // including empty files; path-relative filtering is applied below for both backends.
+    args.push("-r", "-L", "-e", "a^");
     for (const directory of VCS_DIRECTORIES_TO_EXCLUDE) {
       args.push("--exclude-dir", directory);
-    }
-    const negated = input.pattern.startsWith("!");
-    for (const pattern of expandBracePattern(negated ? input.pattern.slice(1) : input.pattern)) {
-      args.push(negated ? "--exclude" : "--include", basenameGlob(pattern));
     }
     args.push("--", searchPath);
   }
@@ -151,7 +154,11 @@ export async function executeGlob(
     throw new Error(`${command} failed (exit ${run.exitCode}): ${run.stderr.trim() || "unknown error"}`);
   }
   if (run.exitCode === null) throw new Error(`${command} terminated unexpectedly`);
-  const lines = run.stdout.split("\n").filter((line) => line.length > 0);
+  const matches = globPathMatcher(input.pattern);
+  const lines = run.stdout
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .filter((filePath) => matches(relativeGlobPath(searchPath, filePath)));
 
   // Sort by modification time (newest first) with a filename tiebreaker.
   const stats = await Promise.allSettled(lines.map((filePath) => stat(filePath)));
@@ -168,6 +175,108 @@ export async function executeGlob(
     return { output: "No files found", resultText: "No files found", workingDirectory: searchPath };
   }
   const resultText = filenames.join("\n")
-    + (truncated ? "\n(Results are truncated. Consider using a more specific path or pattern.)" : "");
+    + (truncated
+      ? `\n(Results truncated after ${GLOB_FILE_LIMIT} files. Use a more specific path or pattern to narrow the search.)`
+      : "");
   return { output: resultText, resultText, workingDirectory: searchPath };
+}
+
+function relativeGlobPath(searchPath: string, filePath: string): string {
+  return relative(searchPath, filePath).replaceAll("\\", "/");
+}
+
+/** Compiles Amber's path-relative glob contract independently of the search backend. */
+export function globPathMatcher(pattern: string): (filePath: string) => boolean {
+  const negated = pattern.startsWith("!");
+  const source = negated ? pattern.slice(1) : pattern;
+  const alternatives = expandBracePattern(source).map((part) => compileGlobPattern(part));
+  return (filePath) => negated !== alternatives.some((tokens) => matchGlobTokens(tokens, filePath));
+}
+
+type GlobToken =
+  | { kind: "literal"; value: string }
+  | { kind: "star" | "globstar" | "globstar_directories" | "question" }
+  | { kind: "class"; expression: RegExp };
+
+function compileGlobPattern(pattern: string): GlobToken[] {
+  const tokens: GlobToken[] = [];
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index]!;
+    if (character === "*") {
+      let end = index;
+      while (pattern[end + 1] === "*") end += 1;
+      if (end > index) {
+        if (pattern[end + 1] === "/") {
+          tokens.push({ kind: "globstar_directories" });
+          end += 1;
+        } else {
+          tokens.push({ kind: "globstar" });
+        }
+      } else {
+        tokens.push({ kind: "star" });
+      }
+      index = end;
+      continue;
+    }
+    if (character === "?") {
+      tokens.push({ kind: "question" });
+      continue;
+    }
+    if (character === "[") {
+      const end = pattern.indexOf("]", index + 1);
+      if (end > index + 1) {
+        const body = pattern.slice(index + 1, end);
+        const negatedClass = body.startsWith("!");
+        const classBody = negatedClass ? body.slice(1) : body;
+        try {
+          tokens.push({
+            kind: "class",
+            expression: new RegExp(`^[${negatedClass ? "^" : ""}${classBody.replaceAll("\\", "\\\\")}]$`),
+          });
+          index = end;
+          continue;
+        } catch {
+          // Treat a malformed character class as literal text, matching common
+          // shell glob behavior rather than leaking a JavaScript regex error.
+        }
+      }
+    }
+    tokens.push({ kind: "literal", value: character });
+  }
+  return tokens;
+}
+
+function matchGlobTokens(tokens: GlobToken[], filePath: string): boolean {
+  let reachable = new Uint8Array(filePath.length + 1);
+  reachable[0] = 1;
+  for (const token of tokens) {
+    const next = new Uint8Array(filePath.length + 1);
+    if (token.kind === "star" || token.kind === "globstar") {
+      let active = false;
+      for (let position = 0; position <= filePath.length; position += 1) {
+        active ||= reachable[position] === 1;
+        if (active) next[position] = 1;
+        if (token.kind === "star" && filePath[position] === "/") active = false;
+      }
+    } else if (token.kind === "globstar_directories") {
+      next.set(reachable);
+      let active = false;
+      for (let position = 0; position < filePath.length; position += 1) {
+        active ||= reachable[position] === 1;
+        if (active && filePath[position] === "/") next[position + 1] = 1;
+      }
+    } else {
+      for (let position = 0; position < filePath.length; position += 1) {
+        if (reachable[position] !== 1) continue;
+        const character = filePath[position]!;
+        if (token.kind === "literal" && character === token.value) next[position + 1] = 1;
+        else if (token.kind === "question" && character !== "/") next[position + 1] = 1;
+        else if (token.kind === "class" && character !== "/" && token.expression.test(character)) {
+          next[position + 1] = 1;
+        }
+      }
+    }
+    reachable = next;
+  }
+  return reachable[filePath.length] === 1;
 }

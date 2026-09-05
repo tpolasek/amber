@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, realpath, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isPermissionOnlyRipgrepStderr } from "../src/grep-tool.js";
-import { executeGlob, GLOB_TOOL, parseGlobInput } from "../src/glob-tool.js";
+import { isPermissionOnlyRipgrepStderr, isRipgrepAvailable } from "../src/grep-tool.js";
+import { executeGlob, globPathMatcher, GLOB_TOOL, parseGlobInput, type GlobBackend } from "../src/glob-tool.js";
 
 const signal = () => new AbortController().signal;
 
@@ -23,6 +23,24 @@ test("defines the Glob tool and parses its input with defaults", () => {
   assert.throws(() => parseGlobInput({ pattern: "" }), /non-empty pattern/);
   assert.throws(() => parseGlobInput({ pattern: 7 }), /non-empty pattern/);
   assert.throws(() => parseGlobInput({ pattern: "x", path: 7 }), /path must be a string/);
+  assert.match(GLOB_TOOL.description, /relative to path/);
+  assert.match(GLOB_TOOL.description, /only `\*\*`/);
+  assert.match(GLOB_TOOL.description, /at most 100 files/);
+});
+
+test("matches glob syntax against paths relative to the search root", () => {
+  const topLevel = globPathMatcher("*.ts");
+  assert.equal(topLevel("top.ts"), true);
+  assert.equal(topLevel("sub/nested.ts"), false);
+
+  const recursive = globPathMatcher("**/*.ts");
+  assert.equal(recursive("top.ts"), true);
+  assert.equal(recursive("sub/nested.ts"), true);
+
+  const oneDirectory = globPathMatcher("*/hello.py");
+  assert.equal(oneDirectory("tools/hello.py"), true);
+  assert.equal(oneDirectory("hello.py"), false);
+  assert.equal(oneDirectory("tools/nested/hello.py"), false);
 });
 
 test("lists matching files newest first", async () => {
@@ -39,14 +57,37 @@ test("lists matching files newest first", async () => {
   assert.equal(result.workingDirectory, directory);
 });
 
-test("recursive patterns descend into subdirectories", async () => {
+test("only recursive patterns descend into subdirectories", async () => {
   const directory = await fixture();
   await mkdir(join(directory, "sub"));
   await writeFile(join(directory, "top.ts"), "top\n");
   await writeFile(join(directory, "sub", "nested.ts"), "nested\n");
   await writeFile(join(directory, "skipped.txt"), "skip\n");
-  const result = await executeGlob(parseGlobInput({ pattern: "**/*.ts" }), [directory], directory, signal());
-  assert.deepEqual(result.resultText.split("\n").sort(), ["sub/nested.ts", "top.ts"]);
+  const direct = await executeGlob(parseGlobInput({ pattern: "*.ts" }), [directory], directory, signal());
+  assert.equal(direct.resultText, "top.ts");
+  const recursive = await executeGlob(parseGlobInput({ pattern: "**/*.ts" }), [directory], directory, signal());
+  assert.deepEqual(recursive.resultText.split("\n").sort(), ["sub/nested.ts", "top.ts"]);
+});
+
+test("single-star directory components match exactly one level", async () => {
+  const directory = await fixture();
+  await mkdir(join(directory, "tool_tests", "nested"), { recursive: true });
+  await mkdir(join(directory, "other"));
+  await writeFile(join(directory, "tool_tests", "direct.ts"), "direct\n");
+  await writeFile(join(directory, "tool_tests", "hello.py"), "hello\n");
+  await writeFile(join(directory, "tool_tests", "nested", "deep.ts"), "deep\n");
+  await writeFile(join(directory, "tool_tests", "nested", "hello.py"), "nested\n");
+  await writeFile(join(directory, "other", "hello.py"), "other\n");
+  await writeFile(join(directory, "hello.py"), "top\n");
+
+  const directoryFiles = await executeGlob(
+    parseGlobInput({ pattern: "tool_tests/*" }),
+    [directory], directory, signal(),
+  );
+  assert.deepEqual(directoryFiles.resultText.split("\n").sort(), ["tool_tests/direct.ts", "tool_tests/hello.py"]);
+
+  const oneLevel = await executeGlob(parseGlobInput({ pattern: "*/hello.py" }), [directory], directory, signal());
+  assert.deepEqual(oneLevel.resultText.split("\n").sort(), ["other/hello.py", "tool_tests/hello.py"]);
 });
 
 test("reports no files without matches", async () => {
@@ -65,7 +106,10 @@ test("truncates results at 100 files with a note", async () => {
   const lines = result.resultText.split("\n");
   assert.equal(lines.length, 101);
   assert.equal(new Set(lines.slice(0, 100)).size, 100);
-  assert.match(lines[100] ?? "", /Results are truncated/);
+  assert.equal(
+    lines[100],
+    "(Results truncated after 100 files. Use a more specific path or pattern to narrow the search.)",
+  );
 });
 
 test("resolves relative and absolute search paths and rejects invalid ones", async () => {
@@ -82,6 +126,11 @@ test("resolves relative and absolute search paths and rejects invalid ones", asy
     [directory], directory, signal(),
   );
   assert.equal(absolute.resultText, "sub/file.txt");
+  const embeddedDirectory = await executeGlob(
+    parseGlobInput({ pattern: "sub/*.txt" }),
+    [directory], directory, signal(),
+  );
+  assert.equal(embeddedDirectory.resultText, relative.resultText);
   await assert.rejects(
     executeGlob(parseGlobInput({ pattern: "*.txt", path: "missing" }), [directory], directory, signal()),
     /Path does not exist: missing/,
@@ -94,6 +143,40 @@ test("resolves relative and absolute search paths and rejects invalid ones", asy
     executeGlob(parseGlobInput({ pattern: "*.txt", path: tmpdir() }), [directory], directory, signal()),
     /outside the project and added directories/,
   );
+});
+
+test("ripgrep and fallback backends apply identical glob semantics", async (context) => {
+  const directory = await fixture();
+  await mkdir(join(directory, "tool_tests", "nested"), { recursive: true });
+  await mkdir(join(directory, "other"));
+  await writeFile(join(directory, "top.ts"), "top\n");
+  await writeFile(join(directory, "empty.ts"), "");
+  await writeFile(join(directory, ".gitignore"), "ignored.ts\n");
+  await writeFile(join(directory, "ignored.ts"), "ignored\n");
+  await writeFile(join(directory, "tool_tests", "direct.ts"), "direct\n");
+  await writeFile(join(directory, "tool_tests", "hello.py"), "hello\n");
+  await writeFile(join(directory, "tool_tests", "nested", "deep.ts"), "deep\n");
+  await writeFile(join(directory, "other", "hello.py"), "other\n");
+
+  const backends: GlobBackend[] = ["grep"];
+  if (await isRipgrepAvailable()) backends.push("rg");
+  else context.diagnostic("ripgrep unavailable; fallback expectations still exercised");
+
+  const expected = new Map<string, string[]>([
+    ["*.ts", ["empty.ts", "ignored.ts", "top.ts"]],
+    ["**/*.ts", ["empty.ts", "ignored.ts", "tool_tests/direct.ts", "tool_tests/nested/deep.ts", "top.ts"]],
+    ["tool_tests/*", ["tool_tests/direct.ts", "tool_tests/hello.py"]],
+    ["*/hello.py", ["other/hello.py", "tool_tests/hello.py"]],
+  ]);
+  for (const backend of backends) {
+    for (const [pattern, files] of expected) {
+      const result = await executeGlob(
+        parseGlobInput({ pattern }),
+        [directory], directory, signal(), backend,
+      );
+      assert.deepEqual(result.resultText.split("\n").sort(), files, `${backend}: ${pattern}`);
+    }
+  }
 });
 
 test("includes hidden files but excludes version control directories", async () => {
