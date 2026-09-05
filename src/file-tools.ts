@@ -21,7 +21,14 @@ const STATIC_READ_DIRECTORIES = [join(homedir(), ".amber", "plans")];
 
 export const READ_TOOL: ToolDefinition = {
   name: "Read",
-  description: `Read a file from the local filesystem. Relative file_path values resolve from the session current working directory; absolute and ~/ paths are also accepted. By default this reads up to ${MAX_LINES_TO_READ} lines from line 1. Results use cat -n style line numbers. Use offset and limit for large files. Read files, not directories. Previously returned ranges remain in conversation context; do not reread them. A redundant Read returns only a short cache reminder. JPEG, PNG, GIF, and WebP images are returned as image content attached to the tool result. PDFs and notebooks are not supported.`,
+  description: `Reads a file from the local filesystem. Relative file_path values resolve from the session current working directory; absolute and ~/ paths are also accepted. If a path does not exist, an error is returned.
+
+Usage:
+- By default, reads up to ${MAX_LINES_TO_READ} lines starting at line 1. Use offset and limit for large files, but prefer reading the whole file when practical.
+- Results use cat -n style line numbering.
+- Previously returned ranges remain in conversation context; do not reread them. A redundant Read returns only a short cache reminder.
+- JPEG, PNG, GIF, and WebP images are returned as image content attached to the tool result. PDFs and Jupyter notebooks are not supported.
+- Read accepts files, not directories. Use Glob to inspect directory contents.`,
   input_schema: {
     type: "object",
     properties: {
@@ -36,7 +43,15 @@ export const READ_TOOL: ToolDefinition = {
 
 export const WRITE_TOOL: ToolDefinition = {
   name: "Write",
-  description: "Write a file to the local filesystem. Relative file_path values resolve from the session current working directory; absolute and ~/ paths are also accepted. Existing files must first be fully read once with Read so their contents are available in conversation context; repeated Reads are unnecessary. Prefer Edit for small changes; Write replaces the complete file. A successful Write invalidates cached Read coverage for this file, so a later inspection may Read it once again.",
+  description: `Writes a file to the local filesystem. Relative file_path values resolve from the session current working directory; absolute and ~/ paths are also accepted.
+
+Usage:
+- This tool overwrites an existing file completely.
+- Existing files must first be fully read once with Read so their contents are available in conversation context; repeated Reads are unnecessary.
+- Prefer Edit for modifying existing files because it sends only the replacement. Use Write for new files or complete rewrites.
+- Do not create documentation or README files unless the user explicitly requests them.
+- Only add emojis to files when the user explicitly requests them.
+- A successful Write invalidates cached Read coverage for this file, so a later inspection may Read it once again.`,
   input_schema: {
     type: "object",
     properties: {
@@ -50,7 +65,16 @@ export const WRITE_TOOL: ToolDefinition = {
 
 export const EDIT_TOOL: ToolDefinition = {
   name: "Edit",
-  description: "Perform an exact string replacement in a text file. Relative file_path values resolve from the session current working directory; absolute and ~/ paths are also accepted. Before editing, Read the file or at least the lines around old_string; an Edit is allowed once every line of old_string was returned by an earlier Read (a full-file Read always qualifies), so do not repeatedly Read it before editing. old_string must be unique unless replace_all is true. Never include Read's line-number prefix in old_string. A successful Edit invalidates cached Read coverage for this file, so a later inspection may Read it once again.",
+  description: `Performs exact string replacements in text files. Relative file_path values resolve from the session current working directory; absolute and ~/ paths are also accepted.
+
+Usage:
+- Prefer editing existing files instead of creating new ones unless a new file is required.
+- Before editing, Read the file or at least every line covered by old_string. A full-file Read always qualifies; do not repeatedly Read it before editing.
+- Preserve the exact indentation returned by Read. Never include Read's line-number prefix in old_string.
+- The edit fails when old_string is not unique. Include more surrounding context to make it unique, or set replace_all to replace every occurrence.
+- Use replace_all for renaming a value throughout a file.
+- Only add emojis to files when the user explicitly requests them.
+- A successful Edit invalidates cached Read coverage for this file, so a later inspection may Read it once again.`,
   input_schema: {
     type: "object",
     properties: {

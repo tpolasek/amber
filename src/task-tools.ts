@@ -28,7 +28,13 @@ export type {
 
 export const TASK_OUTPUT_TOOL: ToolDefinition = {
   name: "TaskOutput",
-  description: "Retrieve output and status from a background task. Use block=true to wait for completion or block=false to check its current state.",
+  description: `Retrieves output from a running or completed background shell or agent task.
+
+- task_id identifies the task returned by a background Agent or Bash call.
+- Returns the task output together with status information.
+- Use block=true (the default) to wait for completion.
+- Use block=false for a non-blocking check of the current status.
+- timeout controls how long a blocking request waits and does not stop the task.`,
   input_schema: {
     type: "object",
     properties: {
@@ -43,7 +49,11 @@ export const TASK_OUTPUT_TOOL: ToolDefinition = {
 
 export const TASK_STOP_TOOL: ToolDefinition = {
   name: "TaskStop",
-  description: "Stop a running background task by ID.",
+  description: `Stops a running background task by its ID.
+
+- Use task_id to identify the task to stop.
+- Returns a success or failure status.
+- Use this tool to terminate a background task that should no longer continue.`,
   input_schema: {
     type: "object",
     properties: {

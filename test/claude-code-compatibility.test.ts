@@ -11,7 +11,12 @@ import {
   toolsForPlanMode,
 } from "../src/claude-code-compatibility.js";
 import { getAgentDefinition } from "../src/agent-tool.js";
+import { BASH_TOOL } from "../src/bash-tool.js";
+import { EDIT_TOOL, READ_TOOL, WRITE_TOOL } from "../src/file-tools.js";
+import { GLOB_TOOL } from "../src/glob-tool.js";
+import { GREP_TOOL } from "../src/grep-tool.js";
 import { SETTINGS_TEMPLATE } from "../src/settings-template.js";
+import { TASK_OUTPUT_TOOL, TASK_STOP_TOOL } from "../src/task-tools.js";
 
 const CLAUDE_CODE_TOOLS = createClaudeCodeTools(SETTINGS_TEMPLATE.agents);
 
@@ -42,7 +47,7 @@ test("omits the user instructions block when there are none", () => {
   assert.equal(buildClaudeCodeSystemPrompt("/tmp/amber-not-a-repository", "mimo-v2.5", "").length, 3);
 });
 
-test("injects the verified reminders before only the first user prompt", () => {
+test("injects the date reminder before only the first user prompt", () => {
   const messages = injectClaudeCodeUserContext([
     { role: "user", content: "4 + 4" },
     { role: "assistant", content: "8" },
@@ -51,10 +56,9 @@ test("injects the verified reminders before only the first user prompt", () => {
   assert.ok(Array.isArray(messages[0]?.content));
   const firstContent = messages[0]?.content;
   assert.ok(Array.isArray(firstContent));
-  assert.equal(firstContent.length, 3);
-  assert.match(firstContent[0]?.type === "text" ? firstContent[0].text : "", /The following skills are available/);
-  assert.match(firstContent[1]?.type === "text" ? firstContent[1].text : "", /# currentDate/);
-  assert.deepEqual(firstContent[2], { type: "text", text: "4 + 4" });
+  assert.equal(firstContent.length, 2);
+  assert.match(firstContent[0]?.type === "text" ? firstContent[0].text : "", /# currentDate/);
+  assert.deepEqual(firstContent[1], { type: "text", text: "4 + 4" });
   assert.equal(messages[2]?.content, "again");
 
   const single = injectClaudeCodeUserContext([{ role: "user", content: "solo" }]);
@@ -86,6 +90,13 @@ test("advertises the fifteen Amber tools in Claude Code order", () => {
     assert.equal(tool.input_schema.type, "object");
     assert.equal(tool.input_schema.additionalProperties, false);
   }
+  const implementationTools = [BASH_TOOL, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, READ_TOOL];
+  for (const tool of implementationTools) {
+    assert.equal(CLAUDE_CODE_TOOLS.find((candidate) => candidate.name === tool.name), tool);
+  }
+  assert.equal(CLAUDE_CODE_TOOLS.find((tool) => tool.name === "TaskOutput"), TASK_OUTPUT_TOOL);
+  assert.equal(CLAUDE_CODE_TOOLS.find((tool) => tool.name === "TaskStop"), TASK_STOP_TOOL);
+  assert.equal(CLAUDE_CODE_TOOLS.find((tool) => tool.name === "Write"), WRITE_TOOL);
   assert.equal(createClaudeCodeTools([]).some((tool) => tool.name === "Agent"), false);
 });
 
@@ -136,7 +147,7 @@ test("structures an agent prompt with the date reminder and uses the shared chil
   ]);
 });
 
-test("injects the reminders into array-content user messages such as image turns", () => {
+test("injects context into array-content user messages such as image turns", () => {
   const injected = injectClaudeCodeUserContext([
     {
       role: "user",
@@ -145,7 +156,7 @@ test("injects the reminders into array-content user messages such as image turns
         { type: "text", text: "What is this?" },
       ],
     },
-  ]);
+  ], "<system-reminder>\nThe following skills are available\n</system-reminder>");
   const content = injected[0]?.content;
   assert.ok(Array.isArray(content));
   assert.equal(content.length, 4);

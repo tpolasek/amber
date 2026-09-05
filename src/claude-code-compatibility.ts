@@ -1,10 +1,13 @@
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { basename, dirname, join } from "node:path";
 import { platform, release, type } from "node:os";
-import compatibility from "./claude-code-compatibility.json" with { type: "json" };
-import toolCatalog from "./claude-code-tools.json" with { type: "json" };
 import { ASK_USER_QUESTION_TOOL } from "./ask-user-question-tool.js";
 import { createAgentTool, type AgentDefinition } from "./agent-tool.js";
+import { BASH_TOOL } from "./bash-tool.js";
+import { EDIT_TOOL, READ_TOOL, WRITE_TOOL } from "./file-tools.js";
+import { GLOB_TOOL } from "./glob-tool.js";
+import { GREP_TOOL } from "./grep-tool.js";
 import { ENTER_PLAN_MODE_TOOL, EXIT_PLAN_MODE_TOOL } from "./plan-mode.js";
 import {
   TASK_CREATE_TOOL,
@@ -13,23 +16,32 @@ import {
   TASK_UPDATE_TOOL,
 } from "./planning-task-tools.js";
 import { SKILL_TOOL } from "./skill-tool.js";
+import { TASK_OUTPUT_TOOL, TASK_STOP_TOOL } from "./task-tools.js";
 import type { ProviderContentBlock, ProviderMessage, ProviderSystemBlock, ToolDefinition } from "./types.js";
 
-const catalogTools = toolCatalog.tools as unknown as ToolDefinition[];
-const taskOutputIndex = catalogTools.findIndex((tool) => tool.name === "TaskOutput");
-const writeIndex = catalogTools.findIndex((tool) => tool.name === "Write");
+const require = createRequire(import.meta.url);
+const compatibility = require("./claude-code-compatibility.json") as {
+  systemPrefix: ProviderSystemBlock[];
+  userPrefix: Array<{ type: "text"; text: string }>;
+};
+
 export function createClaudeCodeTools(agentDefinitions: readonly AgentDefinition[]): ToolDefinition[] {
   return [
     ...(agentDefinitions.length ? [createAgentTool(agentDefinitions)] : []),
     ASK_USER_QUESTION_TOOL,
-    ...catalogTools.slice(1, taskOutputIndex),
+    BASH_TOOL,
+    EDIT_TOOL,
+    GLOB_TOOL,
+    GREP_TOOL,
+    READ_TOOL,
     SKILL_TOOL,
     TASK_CREATE_TOOL,
     TASK_GET_TOOL,
     TASK_LIST_TOOL,
-    ...catalogTools.slice(taskOutputIndex, writeIndex),
+    TASK_OUTPUT_TOOL,
+    TASK_STOP_TOOL,
     TASK_UPDATE_TOOL,
-    ...catalogTools.slice(writeIndex),
+    WRITE_TOOL,
   ];
 }
 
@@ -43,13 +55,17 @@ export function toolsForPlanMode(
 }
 
 export const CLAUDE_CODE_AGENT_TOOLS: ToolDefinition[] = [
-  ...catalogTools.slice(1, taskOutputIndex),
+  BASH_TOOL,
+  EDIT_TOOL,
+  GLOB_TOOL,
+  GREP_TOOL,
+  READ_TOOL,
   SKILL_TOOL,
   TASK_CREATE_TOOL,
   TASK_GET_TOOL,
   TASK_LIST_TOOL,
   TASK_UPDATE_TOOL,
-  ...catalogTools.slice(writeIndex),
+  WRITE_TOOL,
 ];
 
 /** Keeps skills available even when an agent is restricted to read-only tools. */
@@ -72,7 +88,6 @@ export function buildClaudeCodeSystemPrompt(
   const shell = basename(process.env.SHELL ?? "unknown");
   const environment = [
     "# Session-specific guidance",
-    " - If you do not understand why the user has denied a tool call, use the AskUserQuestion to ask them.",
     " - Use the Agent tool with specialized agents when the task at hand matches the agent's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but they should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing - if you delegate research to a subagent, do not also perform the same searches yourself.",
     " - /<skill-name> (e.g., /commit) is shorthand for users to invoke a user-invocable skill. When executed, the skill gets expanded to a full prompt. Use the Skill tool to execute them. IMPORTANT: Only use Skill for skills listed in its user-invocable skills section - do not guess or use built-in CLI commands.",
     "",

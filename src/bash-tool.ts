@@ -9,7 +9,27 @@ const MAX_OUTPUT_CHARACTERS = 200_000;
 
 export const BASH_TOOL: ToolDefinition = {
   name: "Bash",
-  description: "Execute a bash command. Commands run in the foreground by default; set run_in_background to receive a task ID immediately and inspect or stop the command later. Foreground Bash calls execute one at a time within this session. By default the command starts in the session CWD; use working_directory to select another authorized directory for this call.",
+  description: `Executes a given bash command and returns its output.
+
+Each call starts in the session current working directory unless working_directory selects another authorized directory for that call. Shell state does not persist between calls. The shell environment is initialized from the user's profile.
+
+IMPORTANT: Avoid using this tool to run \`find\`, \`grep\`, \`cat\`, \`head\`, \`tail\`, \`sed\`, \`awk\`, or \`echo\` commands unless explicitly instructed or a dedicated tool cannot accomplish the task. Instead use:
+
+- File search: Glob
+- Content search: Grep
+- Read files: Read
+- Edit files: Edit
+- Write files: Write
+- Communication: output text directly
+
+# Instructions
+- Always quote file paths that contain spaces.
+- Prefer absolute paths or working_directory over changing directories inside the command.
+- Commands run in the foreground by default and time out after 120000 ms. timeout may be at most 600000 ms.
+- Set run_in_background when the result is not needed immediately. The call returns a task ID; use TaskOutput to inspect or wait for it, or TaskStop to terminate it. Do not append \`&\` when using run_in_background.
+- When independent commands can run in parallel, make multiple Bash calls in one response. Chain dependent commands with \`&&\`; use \`;\` only when later commands should run after a failure.
+- Avoid unnecessary sleeps and retry loops. Diagnose failures, and use TaskOutput rather than polling background work.
+- Foreground Bash calls execute one at a time within this session.`,
   input_schema: {
     type: "object",
     properties: {
