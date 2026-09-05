@@ -26,7 +26,7 @@ export const READ_TOOL: ToolDefinition = {
 Usage:
 - By default, reads up to ${MAX_LINES_TO_READ} lines starting at line 1. Use offset and limit for large files, but prefer reading the whole file when practical.
 - Text results use \`LINE→content\` numbering.
-- Previously returned ranges remain in conversation context; do not reread them. A redundant Read returns only a short cache reminder.
+- Previously returned ranges are not returned again when they still match the current file contents. Set force to true to return an unchanged range again.
 - JPEG, PNG, GIF, and WebP images are returned as image content attached to the tool result. PDFs and Jupyter notebooks are not supported.
 - Read accepts files, not directories. Use Glob to inspect directory contents.`,
   input_schema: {
@@ -35,6 +35,7 @@ Usage:
       file_path: { type: "string", description: "File path, absolute or relative to the session current working directory." },
       offset: { type: "integer", minimum: 1, description: "1-based line number to start reading from." },
       limit: { type: "integer", minimum: 1, maximum: MAX_LINES_TO_READ, description: "Maximum lines to read." },
+      force: { type: "boolean", description: "Return the requested content even if the unchanged range was returned earlier. Defaults to false." },
     },
     required: ["file_path"],
     additionalProperties: false,
@@ -47,7 +48,7 @@ export const WRITE_TOOL: ToolDefinition = {
 
 Usage:
 - This tool overwrites an existing file completely.
-- Existing files must first be fully read once with Read so their contents are available in conversation context; repeated Reads are unnecessary.
+- Existing files must first be fully read with Read and must not have changed since then. If the file changed, Read it again before writing.
 - Prefer Edit for modifying existing files because it sends only the replacement. Use Write for new files or complete rewrites.
 - A successful Write invalidates cached Read coverage for this file, so a later inspection may Read it once again.`,
   input_schema: {
@@ -67,7 +68,7 @@ export const EDIT_TOOL: ToolDefinition = {
 
 Usage:
 - Prefer editing existing files instead of creating new ones unless a new file is required.
-- Before editing, Read the file or at least every line covered by old_string. A full-file Read always qualifies; do not repeatedly Read it before editing.
+- Before editing, Read the file or at least every line covered by old_string. The file must not have changed since that Read.
 - Preserve the exact indentation returned by Read. Never include Read's line-number prefix in old_string.
 - The edit fails when old_string is not unique. Include more surrounding context to make it unique, or set replace_all to replace every occurrence.
 - Use replace_all for renaming a value throughout a file.
@@ -167,8 +168,9 @@ async function readTextFile(
   signal?: AbortSignal,
 ): Promise<FileToolResult> {
   const requestedPath = resolvedFilePath(input.file_path, currentDirectory);
+  const force = optionalBoolean(input.force, "Read force");
   if (IMAGE_READ_EXTENSIONS.has(extname(requestedPath).toLowerCase())) {
-    return readImageFile(requestedPath, allowedDirectories, session, signal);
+    return readImageFile(requestedPath, allowedDirectories, session, force, signal);
   }
   assertSupportedTextPath(requestedPath, "read");
   if (isBlockedDevice(requestedPath)) throw new Error(`Cannot read '${requestedPath}': this device file would block or produce infinite output.`);
@@ -180,19 +182,26 @@ async function readTextFile(
   const offset = integer(input.offset, "offset", 1, Number.MAX_SAFE_INTEGER, 1);
   const limit = integer(input.limit, "limit", 1, MAX_LINES_TO_READ, MAX_LINES_TO_READ);
   const prior = session.fileReadState?.[filePath];
-  if (readRangeCovered(prior, offset, limit)) {
-    const endLine = Math.min(prior?.totalLines ?? offset + limit - 1, offset + limit - 1);
-    return {
-      filePath,
-      output: "Cached Read · reused earlier context",
-      resultText: `<system-reminder>Lines ${offset}-${Math.max(offset, endLine)} of ${filePath} were already returned by an earlier Read and remain available in the active conversation context. Reuse that content. Do not call Read again for this range unless Write or Edit changes the file.</system-reminder>`,
-      readRange: { startLine: offset, endLine: Math.max(offset, endLine), totalLines: prior?.totalLines ?? endLine },
-    };
+  let buffer: Buffer | undefined;
+  if (!force && readRangeCovered(prior, offset, limit)) {
+    buffer = await readFile(filePath, { signal });
+    throwIfAborted(signal);
+    if (cachedContentMatches(prior, buffer, metadata.size)) {
+      refreshCachedMetadata(session, filePath, prior!, metadata.mtimeMs, metadata.size);
+      const endLine = Math.min(prior?.totalLines ?? offset + limit - 1, offset + limit - 1);
+      return {
+        filePath,
+        output: "Cached Read · content unchanged",
+        resultText: `Read cache hit: lines ${offset}-${Math.max(offset, endLine)} of ${filePath} match the current file contents and were not returned again.`,
+        readRange: { startLine: offset, endLine: Math.max(offset, endLine), totalLines: prior?.totalLines ?? endLine },
+      };
+    }
+    if (session.fileReadState) delete session.fileReadState[filePath];
   }
   if (metadata.size > MAX_READ_BYTES && input.limit === undefined) {
     throw new Error(`File is too large to read (${metadata.size.toLocaleString()} bytes). Use offset and limit to read a specific portion.`);
   }
-  const buffer = await readFile(filePath, { signal });
+  buffer ??= await readFile(filePath, { signal });
   throwIfAborted(signal);
   if (buffer.includes(0)) throw new Error("Read only supports text files in this version of AMBER");
   const content = buffer.toString("utf8").replaceAll("\r\n", "\n");
@@ -220,11 +229,32 @@ async function readTextFile(
   };
 }
 
+function optionalBoolean(value: unknown, name: string): boolean {
+  if (value === undefined) return false;
+  if (typeof value !== "boolean") throw new Error(`${name} must be a boolean`);
+  return value;
+}
+
+function cachedContentMatches(prior: FileReadState | undefined, buffer: Buffer, size: number): boolean {
+  return prior !== undefined && prior.size === size && prior.hash === hash(buffer);
+}
+
+function refreshCachedMetadata(
+  session: Session,
+  filePath: string,
+  prior: FileReadState,
+  mtimeMs: number,
+  size: number,
+): void {
+  (session.fileReadState ??= {})[filePath] = { ...prior, mtimeMs, size };
+}
+
 /** Reads an image file and returns its bytes as a real image on the tool result. */
 async function readImageFile(
   requestedPath: string,
   allowedDirectories: string[],
   session: Session,
+  force: boolean,
   signal?: AbortSignal,
 ): Promise<FileToolResult> {
   if (isBlockedDevice(requestedPath)) throw new Error(`Cannot read '${requestedPath}': this device file would block or produce infinite output.`);
@@ -234,16 +264,13 @@ async function readImageFile(
   if (!metadata.isFile()) throw new Error(`Read only supports files, not directories: ${filePath}`);
   const prior = session.fileReadState?.[filePath];
   const priorImage = prior?.full && prior.hasRead && prior.totalLines === undefined ? prior : undefined;
-  if (priorImage && priorImage.mtimeMs === metadata.mtimeMs && priorImage.size === metadata.size) {
-    return cachedImageRead(filePath);
-  }
   if (metadata.size > MAX_IMAGE_BYTES) {
     throw new Error(`Image is too large to read (${metadata.size.toLocaleString()} bytes; the limit is ${MAX_IMAGE_BYTES.toLocaleString()}).`);
   }
   const buffer = await readFile(filePath, { signal });
   throwIfAborted(signal);
-  if (priorImage?.hash === hash(buffer)) {
-    (session.fileReadState ??= {})[filePath] = { ...readState(buffer, metadata.mtimeMs, true), hasRead: true };
+  if (!force && cachedContentMatches(priorImage, buffer, metadata.size)) {
+    refreshCachedMetadata(session, filePath, priorImage!, metadata.mtimeMs, metadata.size);
     return cachedImageRead(filePath);
   }
   const mediaType = sniffImageMediaType(buffer);
@@ -256,8 +283,8 @@ async function readImageFile(
 function cachedImageRead(filePath: string): FileToolResult {
   return {
     filePath,
-    output: "Cached Read · reused earlier context",
-    resultText: `<system-reminder>The image ${filePath} was already returned by an earlier Read and remains available in the active conversation context. Reuse that image. Do not call Read again unless the file changes.</system-reminder>`,
+    output: "Cached Read · content unchanged",
+    resultText: `Read cache hit: the image ${filePath} matches the current file contents and was not attached again.`,
   };
 }
 
@@ -277,11 +304,13 @@ async function writeTextFile(
   assertSupportedTextPath(requestedPath, "write");
   if (typeof input.content !== "string") throw new Error("Write requires string content");
   const { filePath, existing } = await resolveWritePath(requestedPath, allowedDirectories);
+  let oldBuffer: Buffer | undefined;
   if (existing) {
     if (!(await stat(filePath)).isFile()) throw new Error(`Write only supports files: ${filePath}`);
-    requireFullRead(filePath, session);
+    oldBuffer = await readFile(filePath);
+    requireFullRead(filePath, session, oldBuffer);
   }
-  const oldContent = existing ? await readFile(filePath, "utf8") : "";
+  const oldContent = oldBuffer?.toString("utf8") ?? "";
   await atomicWrite(filePath, input.content);
   await updateWrittenFileState(filePath, session);
   return {
@@ -347,9 +376,13 @@ async function editTextFile(
   };
 }
 
-function requireFullRead(filePath: string, session: Session): void {
+function requireFullRead(filePath: string, session: Session, currentBuffer: Buffer): void {
   const prior = session.fileReadState?.[filePath];
   if (!prior?.full) throw new Error("File has not been fully read yet. Read it first before writing to it.");
+  if (prior.hash !== hash(currentBuffer)) {
+    delete session.fileReadState?.[filePath];
+    throw new Error(`File has changed since it was last read: ${filePath}. Read it again before writing.`);
+  }
 }
 
 function requireEditReadCoverage(
@@ -361,10 +394,14 @@ function requireEditReadCoverage(
   replaceAll: boolean,
 ): void {
   const prior = session.fileReadState?.[filePath];
-  if (prior?.full) return;
-  if (!prior || prior.hash !== hash(rawBuffer)) {
+  if (!prior) {
     throw new Error("File has not been fully read yet. Read it first before writing to it.");
   }
+  if (prior.hash !== hash(rawBuffer)) {
+    delete session.fileReadState?.[filePath];
+    throw new Error(`File has changed since it was last read: ${filePath}. Read it again before editing.`);
+  }
+  if (prior.full) return;
   for (const span of editLineSpans(original, oldString, replaceAll)) {
     if (!rangesCoverLines(prior, span.startLine, span.endLine)) {
       throw new Error(
