@@ -9,6 +9,7 @@ import {
   executeTaskStop,
   parseTaskOutputInput,
   parseTaskStopInput,
+  TASK_OUTPUT_TOOL,
   type BackgroundAgentSource,
   type BackgroundAgentTask,
 } from "../src/task-tools.js";
@@ -175,6 +176,8 @@ test("task listing includes only active tasks for the session, newest first", as
 });
 
 test("task tool parsers use Claude Code argument conventions", () => {
+  assert.match(TASK_OUTPUT_TOOL.description, /retrieval status, task status, and exit-code metadata/);
+  assert.match(TASK_OUTPUT_TOOL.description, /foreground Bash.*direct Bash result/);
   assert.deepEqual(parseTaskOutputInput({ task_id: "b123", block: false, timeout: 500 }), {
     taskId: "b123", block: false, timeoutMs: 500,
   });

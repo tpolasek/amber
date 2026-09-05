@@ -31,7 +31,7 @@ export const TASK_OUTPUT_TOOL: ToolDefinition = {
   description: `Retrieves output from a running or completed background shell or agent task.
 
 - task_id identifies the task returned by a background Agent or Bash call.
-- Returns the task output together with status information.
+- For background Bash, returns the command output together with retrieval status, task status, and exit-code metadata when the process has exited. This differs from foreground Bash, which returns its direct Bash result without requiring TaskOutput.
 - Background Bash output preserves stdout and stderr in the order Amber receives them.
 - Use block=true (the default) to wait for completion.
 - Use block=false for a non-blocking check of the current status.
