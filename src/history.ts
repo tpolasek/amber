@@ -2,7 +2,7 @@ import type { Message, ProviderMessage, SessionCompaction, SessionInvokedSkill }
 import { compactedSkillInstructions } from "./skill-tool.js";
 import { imageBlock } from "./message-images.js";
 
-const SUMMARY_PREFIX = "The following is a generated summary of the earlier conversation. Use it as user-provided context when continuing the session.\n\n";
+const SUMMARY_PREFIX = "The following is a generated summary of the earlier conversation. Use it to continue the session, but prefer newer user messages if they conflict with it.\n\n";
 
 export function isModelMessage(message: Message): boolean {
   return message.kind === undefined || message.kind === "chat";

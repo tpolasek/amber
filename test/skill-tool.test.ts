@@ -385,7 +385,7 @@ test("validates invocations and rejects unusable skills", async () => {
   }
 });
 
-test("renders the exact empty reminder and a budgeted listing otherwise", async () => {
+test("omits an empty reminder and renders a budgeted listing otherwise", async () => {
   const fx = await fixture();
   try {
     await write(join(fx.project, ".amber", "skills", "one", "SKILL.md"), "---\ndescription: first skill\n---\n");
@@ -393,10 +393,7 @@ test("renders the exact empty reminder and a budgeted listing otherwise", async 
     const skills = await discovery(fx);
     assert.deepEqual(invocableSkills(skills), skills);
 
-    assert.equal(
-      renderSkillReminder([]),
-      "<system-reminder>\nThe following skills are available for use with the Skill tool:\n\n</system-reminder>\n",
-    );
+    assert.equal(renderSkillReminder([]), undefined);
     const reminder = renderSkillReminder(skills);
     assert.equal(
       reminder,
@@ -439,6 +436,7 @@ test("caps long descriptions and measures CJK width as two columns", () => {
   assert.equal(truncateToWidth("abc", 4), "abc");
 
   const reminder = renderSkillReminder([listed("long", "d".repeat(300))]);
+  assert.ok(reminder);
   assert.match(reminder, new RegExp(`- long: d{249}…`));
 });
 

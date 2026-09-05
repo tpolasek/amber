@@ -51,7 +51,7 @@ import {
   type SkillDefinition,
   type SkillDiscoveryContext,
 } from "./skill-tool.js";
-import { clearImageReadCache, executeFileTool, FILE_TOOLS } from "./file-tools.js";
+import { clearReadCache, executeFileTool, FILE_TOOLS } from "./file-tools.js";
 import { executeGrep, GREP_TOOL, parseGrepInput } from "./grep-tool.js";
 import { executeGlob, GLOB_TOOL, parseGlobInput } from "./glob-tool.js";
 import { completeDirectories, completeDirectoryRoots, completeFiles } from "./directory-completion.js";
@@ -1034,7 +1034,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             const started = Date.now();
             try {
               if (!approvalCapable || session.agentType) throw new Error("ExitPlanMode is unavailable in this session");
-              const { allowedPrompts } = parseExitPlanModeInput(call.input);
+              parseExitPlanModeInput(call.input);
               if (!session.planMode?.active) throw new Error("ExitPlanMode can only be used while plan mode is active");
               const plan = await readPlanSnapshot(session.planMode.planFilePath);
               call.status = "running";
@@ -1053,7 +1053,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                 kind: "exit",
                 plan,
                 planFilePath: session.planMode.planFilePath,
-                allowedPrompts,
               });
               const decision = await decisionPromise;
               if (decision.approved && !decision.newSession) {
@@ -2055,7 +2054,7 @@ async function compactSession(
     buildProviderHistory(session.messages, undefined, compaction, session.invokedSkills),
   );
   session.compaction = compaction;
-  clearImageReadCache(session);
+  clearReadCache(session);
   session.contextTokens = afterTokens;
   session.messages.push({
     id: randomUUID(),
@@ -2537,12 +2536,11 @@ async function sessionSnapshot(session: Session): Promise<Record<string, unknown
     const toolCall = session.messages
       .flatMap((message) => message.toolCalls ?? [])
       .find((call) => call.id === pendingPlan.toolUseId);
-    const { allowedPrompts } = parseExitPlanModeInput(toolCall?.input ?? {});
+    parseExitPlanModeInput(toolCall?.input ?? {});
     planModeRequest = {
       ...pendingPlan,
       plan: await readPlanSnapshot(session.planMode.planFilePath),
       planFilePath: session.planMode.planFilePath,
-      allowedPrompts,
     };
   }
   const compaction = compactionRuns.get(session.id);

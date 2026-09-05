@@ -86,10 +86,9 @@ interface AskUserQuestionOption { label: string; description: string; preview?: 
 interface AskUserQuestion { question: string; header: string; options: AskUserQuestionOption[]; multiSelect: boolean }
 interface AskUserQuestionRequest { toolUseId: string; questions: AskUserQuestion[] }
 interface SessionPlanMode { active: boolean; planFilePath: string }
-interface AllowedPlanPrompt { tool: "Bash"; prompt: string }
 type PlanModeRequest =
   | { toolUseId: string; kind: "enter" }
-  | { toolUseId: string; kind: "exit"; plan: string; planFilePath: string; allowedPrompts: AllowedPlanPrompt[] };
+  | { toolUseId: string; kind: "exit"; plan: string; planFilePath: string };
 interface SessionSnapshot {
   session: Session;
   active: boolean;
@@ -3159,23 +3158,6 @@ function openPlanModeDialog(request: PlanModeRequest): void {
       link.rel = "noopener noreferrer";
     });
     elements.planModeDialogBody.append(metadata, plan);
-
-    if (request.allowedPrompts.length > 0) {
-      const permissions = document.createElement("section");
-      permissions.className = "plan-mode-prompts";
-      const title = document.createElement("strong");
-      title.textContent = "REQUESTED BASH CATEGORIES · INFORMATIONAL ONLY";
-      const list = document.createElement("ul");
-      for (const allowed of request.allowedPrompts) {
-        const item = document.createElement("li");
-        const tool = document.createElement("code");
-        tool.textContent = allowed.tool;
-        item.append(tool, document.createTextNode(` · ${allowed.prompt}`));
-        list.append(item);
-      }
-      permissions.append(title, list);
-      elements.planModeDialogBody.append(permissions);
-    }
 
     const feedback = document.createElement("label");
     feedback.className = "plan-mode-feedback";

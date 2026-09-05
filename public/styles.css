@@ -509,10 +509,6 @@ button { color: inherit; }
 .plan-mode-review-markdown h2 { margin-top: 22px; font-size: 16px; }
 .plan-mode-review-markdown h3 { font-size: 14px; }
 .plan-mode-review-markdown li + li { margin-top: 5px; }
-.plan-mode-prompts { margin: 0 clamp(18px, 4vw, 40px) 20px; padding: 13px 15px; border: 1px solid var(--accent-a18); background: var(--accent-a035); color: var(--fg-plan); font-size: 11px; }
-.plan-mode-prompts > strong { color: var(--fg-label); font-size: 10px; letter-spacing: .08em; }
-.plan-mode-prompts ul { margin: 9px 0 0; padding-left: 20px; }
-.plan-mode-prompts code { color: var(--amber); }
 .plan-mode-feedback { display: grid; gap: 7px; margin: 0 clamp(18px, 4vw, 40px) 24px; color: var(--fg-label); font-size: 10px; font-weight: 600; letter-spacing: .08em; }
 .plan-mode-feedback textarea { width: 100%; resize: vertical; padding: 9px 10px; border: 1px solid var(--accent-a22); outline: 0; background: var(--bg-input); color: var(--amber-hot); font: 12px/1.45 var(--mono); letter-spacing: 0; }
 .plan-mode-feedback textarea:focus { border-color: var(--amber); }

@@ -27,7 +27,7 @@ IMPORTANT: Avoid using this tool to run \`find\`, \`grep\`, \`cat\`, \`head\`, \
 - Prefer absolute paths or working_directory over changing directories inside the command.
 - Commands run in the foreground by default and time out after 120000 ms. timeout may be at most 600000 ms.
 - Set run_in_background when the result is not needed immediately. The call returns a task ID; use TaskOutput to inspect or wait for it, or TaskStop to terminate it. Do not append \`&\` when using run_in_background.
-- When independent commands can run in parallel, make multiple Bash calls in one response. Chain dependent commands with \`&&\`; use \`;\` only when later commands should run after a failure.
+- You may issue separate Bash calls for independent commands, but foreground calls execute one at a time. Chain dependent commands with \`&&\`; use \`;\` only when later commands should run after a failure.
 - Avoid unnecessary sleeps and retry loops. Diagnose failures, and use TaskOutput rather than polling background work.
 - Foreground Bash calls execute one at a time within this session.`,
   input_schema: {

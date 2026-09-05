@@ -10,28 +10,11 @@ import type { ThinkingLevel, ToolDefinition } from "./types.js";
 
 export const SKILL_TOOL_NAME = "Skill";
 
-const SKILL_TOOL_DESCRIPTION = `Execute a skill within the main conversation
+const SKILL_TOOL_DESCRIPTION = `Load a listed skill into the main conversation.
 
-When users ask you to perform tasks, check if any of the available skills match. Skills provide specialized capabilities and domain knowledge.
+Available skills and their invocation names appear in an injected system-reminder. When one clearly matches the user's request, loading it before responding to the task is a BLOCKING REQUIREMENT. If the user enters a slash command that exactly matches a listed skill, invoke that skill and pass any remaining text as args.
 
-When users reference a "slash command" or "/<something>" (e.g., "/commit", "/review-pr"), they are referring to a skill. Use this tool to invoke it.
-
-How to invoke:
-- Use this tool with the skill name and optional arguments
-- Examples:
-  - \`skill: "pdf"\` - invoke the pdf skill
-  - \`skill: "commit", args: "-m 'Fix bug'"\` - invoke with arguments
-  - \`skill: "review-pr", args: "123"\` - invoke with arguments
-  - \`skill: "ms-office-suite:pdf"\` - invoke using fully qualified name
-
-Important:
-- Available skills are listed in system-reminder messages in the conversation
-- When a skill matches the user's request, this is a BLOCKING REQUIREMENT: invoke the relevant Skill tool BEFORE generating any other response about the task
-- NEVER mention a skill without actually calling this tool
-- Do not invoke a skill that is already running
-- Do not use this tool for built-in CLI commands (like /help, /clear, etc.)
-- If you see a <command-name> tag in the current conversation turn, the skill has ALREADY been loaded - follow the instructions directly instead of calling this tool again
-`;
+Use only names from the reminder; never guess a skill name or invoke built-in Amber commands such as /help or /clear. If the current turn already contains a <command-name> tag, the skill has been loaded—follow its instructions without invoking it again. Do not invoke a skill that is already running.`;
 
 export const SKILL_TOOL: ToolDefinition = {
   name: SKILL_TOOL_NAME,
@@ -39,7 +22,7 @@ export const SKILL_TOOL: ToolDefinition = {
   input_schema: {
     type: "object",
     properties: {
-      skill: { type: "string", description: 'The skill name. E.g., "commit", "review-pr", or "pdf"' },
+      skill: { type: "string", description: "The skill name exactly as listed in the skills reminder" },
       args: { type: "string", description: "Optional arguments for the skill" },
     },
     required: ["skill"],
@@ -807,17 +790,14 @@ function limitShellOutput(output: string): string {
 /* Skill listing reminder                                              */
 /* ------------------------------------------------------------------ */
 
-const EMPTY_SKILL_LISTING = "<system-reminder>\nThe following skills are available for use with the Skill tool:\n\n</system-reminder>\n";
-
 /**
- * Renders the skill listing block injected into conversation context. Preserves
- * the exact empty form when no skills are available.
+ * Renders the skill listing block injected into conversation context.
  */
 export function renderSkillReminder(
   skills: readonly SkillDefinition[],
   contextTokens?: number,
-): string {
-  if (skills.length === 0) return EMPTY_SKILL_LISTING;
+): string | undefined {
+  if (skills.length === 0) return undefined;
   const listing = formatSkillsWithinBudget(skills, contextTokens);
   return `<system-reminder>\nThe following skills are available for use with the Skill tool:\n\n${listing}\n</system-reminder>\n`;
 }

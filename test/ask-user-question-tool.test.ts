@@ -32,8 +32,8 @@ const questions: AskUserQuestion[] = [
 
 test("defines the complete AskUserQuestion contract and parses valid questions", () => {
   assert.equal(ASK_USER_QUESTION_TOOL.name, "AskUserQuestion");
-  assert.match(ASK_USER_QUESTION_TOOL.description, /Users will always be able to select "Other"/);
-  assert.match(ASK_USER_QUESTION_TOOL.description, /side-by-side layout/);
+  assert.match(ASK_USER_QUESTION_TOOL.description, /Other choice automatically/);
+  assert.match(ASK_USER_QUESTION_TOOL.description, /renders Markdown beside single-select options/);
   assert.deepEqual(ASK_USER_QUESTION_TOOL.input_schema.required, ["questions"]);
   assert.deepEqual(parseAskUserQuestionInput({ questions }), { questions });
 });

@@ -22,6 +22,8 @@ export interface AgentDefinition {
 
 export const AGENT_TOOL_NAME = "Agent";
 
+const WRITABLE_AGENT_TOOLS = "Bash, Edit, Glob, Grep, Read, Skill, TaskCreate, TaskGet, TaskList, TaskUpdate, Write";
+
 export function createAgentTool(definitions: readonly AgentDefinition[]): ToolDefinition {
   const defaultAgentType = definitions[0]?.type;
   if (!defaultAgentType) throw new Error("At least one agent must be configured");
@@ -33,10 +35,10 @@ export function createAgentTool(definitions: readonly AgentDefinition[]): ToolDe
       `The Agent tool launches a specialized agent in a persisted Amber sub-session. Each invocation starts fresh and returns one final message. If subagent_type is omitted, ${defaultAgentType} is used.`,
       "",
       "Available agent types and the tools they have access to:",
-      ...definitions.map((agent) => `- ${agent.type}: ${agent.whenToUse} (Tools: ${agent.readOnly ? "Bash, Glob, Grep, Read, Skill" : "All tools"})`),
+      ...definitions.map((agent) => `- ${agent.type}: ${agent.whenToUse} (Tools: ${agent.readOnly ? "Bash, Glob, Grep, Read, Skill" : WRITABLE_AGENT_TOOLS})`),
       "",
       "Always include a short description (3-5 words). Brief the agent like a smart colleague who has not seen this conversation, and clearly say whether it should write code or only research.",
-      "Launch multiple agents concurrently whenever possible by returning multiple Agent tool uses in a single response. Amber starts all Agent calls from that response in parallel.",
+      "When two or more substantial tasks are independent, you may launch their agents in one response; Amber starts same-response Agent calls in parallel. Do not delegate routine work or duplicate work already assigned to an agent.",
       "Set run_in_background to true for independent work that should continue while you proceed. The launch returns immediately with the linked sub-session's ID; use TaskOutput with that ID to check its status or wait for its result, which is also injected into your next model turn after it finishes.",
     ].join("\n"),
     input_schema: {

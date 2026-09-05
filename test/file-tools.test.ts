@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { clearImageReadCache, executeFileTool, FILE_TOOLS } from "../src/file-tools.js";
+import { clearReadCache, executeFileTool, FILE_TOOLS } from "../src/file-tools.js";
 import type { Session } from "../src/types.js";
 
 function session(): Session {
@@ -374,7 +374,7 @@ test("Read returns image bytes as an image on the tool result", async () => {
   await assert.rejects(executeFileTool("Read", { file_path: pdfPath }, [directory], current), /Read does not support PDFs/);
 });
 
-test("compaction invalidates image Read cache without discarding text coverage", () => {
+test("compaction invalidates all Read coverage removed from active context", () => {
   const current = session();
   current.fileReadState = {
     "/tmp/pic.png": { mtimeMs: 1, size: 10, hash: "image", full: true, hasRead: true },
@@ -384,10 +384,9 @@ test("compaction invalidates image Read cache without discarding text coverage",
     },
   };
 
-  clearImageReadCache(current);
+  clearReadCache(current);
 
-  assert.equal(current.fileReadState["/tmp/pic.png"], undefined);
-  assert.equal(current.fileReadState["/tmp/code.ts"]?.full, true);
+  assert.equal(current.fileReadState, undefined);
 });
 
 test("plan mode permits only its plan file through Write and Edit", async () => {

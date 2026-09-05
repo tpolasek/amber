@@ -25,7 +25,7 @@ export const READ_TOOL: ToolDefinition = {
 
 Usage:
 - By default, reads up to ${MAX_LINES_TO_READ} lines starting at line 1. Use offset and limit for large files, but prefer reading the whole file when practical.
-- Results use cat -n style line numbering.
+- Text results use \`LINE→content\` numbering.
 - Previously returned ranges remain in conversation context; do not reread them. A redundant Read returns only a short cache reminder.
 - JPEG, PNG, GIF, and WebP images are returned as image content attached to the tool result. PDFs and Jupyter notebooks are not supported.
 - Read accepts files, not directories. Use Glob to inspect directory contents.`,
@@ -49,8 +49,6 @@ Usage:
 - This tool overwrites an existing file completely.
 - Existing files must first be fully read once with Read so their contents are available in conversation context; repeated Reads are unnecessary.
 - Prefer Edit for modifying existing files because it sends only the replacement. Use Write for new files or complete rewrites.
-- Do not create documentation or README files unless the user explicitly requests them.
-- Only add emojis to files when the user explicitly requests them.
 - A successful Write invalidates cached Read coverage for this file, so a later inspection may Read it once again.`,
   input_schema: {
     type: "object",
@@ -73,7 +71,6 @@ Usage:
 - Preserve the exact indentation returned by Read. Never include Read's line-number prefix in old_string.
 - The edit fails when old_string is not unique. Include more surrounding context to make it unique, or set replace_all to replace every occurrence.
 - Use replace_all for renaming a value throughout a file.
-- Only add emojis to files when the user explicitly requests them.
 - A successful Edit invalidates cached Read coverage for this file, so a later inspection may Read it once again.`,
   input_schema: {
     type: "object",
@@ -102,11 +99,8 @@ export interface FileToolPolicy {
   onlyMutationPath?: string;
 }
 
-export function clearImageReadCache(session: Session): void {
-  if (!session.fileReadState) return;
-  for (const [filePath, state] of Object.entries(session.fileReadState)) {
-    if (state.hasRead && state.totalLines === undefined) delete session.fileReadState[filePath];
-  }
+export function clearReadCache(session: Session): void {
+  delete session.fileReadState;
 }
 
 export async function executeFileTool(

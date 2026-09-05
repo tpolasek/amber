@@ -22,7 +22,7 @@ import {
 } from "../src/plan-mode.js";
 import { PlanHandoffDispatcher } from "../src/plan-handoff.js";
 
-test("defines strict Claude-compatible plan mode tool contracts", () => {
+test("defines strict plan mode tool contracts", () => {
   assert.equal(ENTER_PLAN_MODE_TOOL.name, "EnterPlanMode");
   assert.deepEqual(ENTER_PLAN_MODE_TOOL.input_schema, {
     type: "object",
@@ -30,28 +30,18 @@ test("defines strict Claude-compatible plan mode tool contracts", () => {
     additionalProperties: false,
   });
   assert.equal(EXIT_PLAN_MODE_TOOL.name, "ExitPlanMode");
-  assert.deepEqual(EXIT_PLAN_MODE_TOOL.input_schema.required, undefined);
-  assert.equal(EXIT_PLAN_MODE_TOOL.input_schema.additionalProperties, false);
-  const allowedPrompts = EXIT_PLAN_MODE_TOOL.input_schema.properties.allowedPrompts as {
-    items: { required: string[]; additionalProperties: boolean; properties: { tool: { enum: string[] } } };
-  };
-  assert.deepEqual(allowedPrompts.items.required, ["tool", "prompt"]);
-  assert.deepEqual(allowedPrompts.items.properties.tool.enum, ["Bash"]);
-  assert.equal(allowedPrompts.items.additionalProperties, false);
-  assert.match(EXIT_PLAN_MODE_TOOL.description, /informational/);
+  assert.deepEqual(EXIT_PLAN_MODE_TOOL.input_schema, {
+    type: "object",
+    properties: {},
+    additionalProperties: false,
+  });
 });
 
-test("strictly parses entry and optional exit allowed prompts", () => {
+test("strictly parses empty plan-mode inputs", () => {
   assert.deepEqual(parseEnterPlanModeInput({}), {});
   assert.throws(() => parseEnterPlanModeInput({ unexpected: true }), /empty object/);
-  assert.deepEqual(parseExitPlanModeInput({}), { allowedPrompts: [] });
-  assert.deepEqual(parseExitPlanModeInput({
-    allowedPrompts: [{ tool: "Bash", prompt: "Run unit tests" }],
-  }), { allowedPrompts: [{ tool: "Bash", prompt: "Run unit tests" }] });
-  assert.throws(() => parseExitPlanModeInput({ extra: true }), /only the optional/);
-  assert.throws(() => parseExitPlanModeInput({ allowedPrompts: [{ tool: "Write", prompt: "Change files" }] }), /must be "Bash"/);
-  assert.throws(() => parseExitPlanModeInput({ allowedPrompts: [{ tool: "Bash", prompt: "" }] }), /non-empty/);
-  assert.throws(() => parseExitPlanModeInput({ allowedPrompts: [{ tool: "Bash", prompt: "Test", extra: true }] }), /unknown field/);
+  assert.deepEqual(parseExitPlanModeInput({}), {});
+  assert.throws(() => parseExitPlanModeInput({ unexpected: true }), /empty object/);
   assert.throws(() => parsePlanModeDecision({ approved: true, extra: true }), /unknown field/);
   assert.deepEqual(parsePlanModeDecision({ approved: false, cancelled: true }), {
     approved: false,
