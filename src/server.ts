@@ -128,6 +128,7 @@ if (cliCommand.kind === "unknown") {
 }
 
 const clientScript = join(sourceDirectory, "client.js");
+const screensaverScript = join(sourceDirectory, "screensaver.js");
 const clientFormattersScript = join(sourceDirectory, "client-formatters.js");
 const builtInCommandsScript = join(sourceDirectory, "built-in-commands.js");
 const streamingThinkingScript = join(sourceDirectory, "streaming-thinking.js");
@@ -669,6 +670,9 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
 
   if (method === "GET" && url.pathname === "/app.js") {
     return serveFile(response, clientScript, "text/javascript; charset=utf-8", "no-cache");
+  }
+  if (method === "GET" && url.pathname === "/screensaver.js") {
+    return serveFile(response, screensaverScript, "text/javascript; charset=utf-8", "no-cache");
   }
   if (method === "GET" && url.pathname === "/client-formatters.js") {
     return serveFile(response, clientFormattersScript, "text/javascript; charset=utf-8", "no-cache");

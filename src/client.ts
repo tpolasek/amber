@@ -32,6 +32,7 @@ import {
   toolStatusLabel,
   toolSubject,
 } from "./tool-display.js";
+import { ComposerScreensaver } from "./screensaver.js";
 
 interface TokenUsage { input: number; output: number }
 type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
@@ -299,6 +300,13 @@ const elements = {
   planModeNewSession: required<HTMLButtonElement>("plan-mode-new-session"),
   toast: required<HTMLElement>("toast"),
 };
+
+const composerScreensaver = new ComposerScreensaver(
+  elements.composer,
+  elements.prompt,
+  { isEnabled: () => Boolean(state.session) },
+);
+composerScreensaver.restartIdle();
 
 void initialize();
 window.setInterval(updateElapsedToolStatuses, 1_000);
