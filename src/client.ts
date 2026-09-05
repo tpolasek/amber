@@ -81,7 +81,7 @@ type AuthLoginStart =
   | { id: string; method: "browser"; authorizationUrl: string; redirectUri: string; callbackAvailable: boolean }
   | { id: string; method: "device_code"; userCode: string; verificationUri: string; expiresInSeconds: number };
 interface ActiveAuthLogin { start: AuthLoginStart; status: AuthLoginStatus }
-interface BackgroundTask { id: string; type: "local_bash"; command: string; description: string; workingDirectory: string; status: "running" | "completed" | "failed" | "timed_out" | "killed"; stdout: string; stderr: string; exitCode: number | null; startedAt: string; completedAt?: string; durationMs?: number }
+interface BackgroundTask { id: string; type: "local_bash"; command: string; description: string; workingDirectory: string; status: "running" | "completed" | "failed" | "timed_out" | "killed"; stdout: string; stderr: string; combinedOutput: string; exitCode: number | null; startedAt: string; completedAt?: string; durationMs?: number }
 interface AskUserQuestionOption { label: string; description: string; preview?: string }
 interface AskUserQuestion { question: string; header: string; options: AskUserQuestionOption[]; multiSelect: boolean }
 interface AskUserQuestionRequest { toolUseId: string; questions: AskUserQuestion[] }
@@ -3496,10 +3496,7 @@ function renderTaskDetail(task: BackgroundTask): void {
   outputLabel.textContent = "Output";
   const output = document.createElement("pre");
   output.className = "tasks-detail-output";
-  output.textContent = [
-    ...(task.stdout ? [task.stdout] : []),
-    ...(task.stderr ? [`stderr:\n${task.stderr}`] : []),
-  ].join("\n") || "(no output yet)";
+  output.textContent = task.combinedOutput || "(no output yet)";
   detail.append(outputLabel, output);
   elements.tasksDialogBody.append(detail);
   output.scrollTop = output.scrollHeight;

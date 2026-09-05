@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import type { BashInput } from "./bash-tool.js";
-import { bashChildEnvironment, resolveBashWorkingDirectory } from "./bash-tool.js";
+import { appendBashOutput, bashChildEnvironment, resolveBashWorkingDirectory } from "./bash-tool.js";
 
 const TASK_ID_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
 const MAX_TASK_STREAM_CHARACTERS = 200_000;
@@ -18,6 +18,7 @@ export interface BackgroundTask {
   status: BackgroundTaskStatus;
   stdout: string;
   stderr: string;
+  combinedOutput: string;
   exitCode: number | null;
   startedAt: string;
   completedAt?: string;
@@ -69,6 +70,7 @@ export class BackgroundTaskManager {
       status: "running",
       stdout: "",
       stderr: "",
+      combinedOutput: "",
       exitCode: null,
       startedAt: startedAt.toISOString(),
       child,
@@ -83,13 +85,18 @@ export class BackgroundTaskManager {
     this.#tasks.set(id, task);
 
     child.stdout?.on("data", (chunk: Buffer | string) => {
-      task.stdout = appendTaskOutput(task.stdout, chunk.toString());
+      const text = chunk.toString();
+      task.stdout = appendTaskOutput(task.stdout, text);
+      task.combinedOutput = appendBashOutput(task.combinedOutput, text).output;
     });
     child.stderr?.on("data", (chunk: Buffer | string) => {
-      task.stderr = appendTaskOutput(task.stderr, chunk.toString());
+      const text = chunk.toString();
+      task.stderr = appendTaskOutput(task.stderr, text);
+      task.combinedOutput = appendBashOutput(task.combinedOutput, text).output;
     });
     child.once("error", (error) => {
       task.stderr = appendTaskOutput(task.stderr, error.message);
+      task.combinedOutput = appendBashOutput(task.combinedOutput, error.message).output;
       if (task.status === "running") task.status = "failed";
       this.#finish(task, null, startedAt);
     });
@@ -207,6 +214,7 @@ function publicTask(task: ManagedTask): BackgroundTask {
     status: task.status,
     stdout: task.stdout,
     stderr: task.stderr,
+    combinedOutput: task.combinedOutput,
     exitCode: task.exitCode,
     startedAt: task.startedAt,
     ...(task.completedAt ? { completedAt: task.completedAt } : {}),

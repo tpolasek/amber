@@ -39,11 +39,11 @@ function runningAgent(overrides: Partial<BackgroundAgentTask> = {}): BackgroundA
   };
 }
 
-test("background Bash returns immediately and TaskOutput waits for stdout and stderr", async () => {
+test("background Bash returns immediately and TaskOutput preserves stdout and stderr arrival order", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-task-"));
   const manager = new BackgroundTaskManager();
   const task = await manager.start("session-one", {
-    command: "sleep 0.1; printf out; printf err >&2",
+    command: "printf 'out-1\\n'; sleep 0.05; printf 'err-1\\n' >&2; sleep 0.05; printf 'out-2\\n'",
     description: "Emit task output",
     timeoutMs: 2_000,
     runInBackground: true,
@@ -61,12 +61,16 @@ test("background Bash returns immediately and TaskOutput waits for stdout and st
     taskId: task.id, block: true, timeoutMs: 2_000,
   });
   assert.match(result.output, /status: completed/);
-  assert.match(result.output, /stdout:\nout/);
-  assert.match(result.output, /stderr:\nerr/);
+  assert.match(result.output, /output:\nout-1\nerr-1\nout-2/);
+  assert.doesNotMatch(result.output, /stdout:|stderr:/);
   assert.match(result.resultText, /<retrieval_status>success<\/retrieval_status>/);
   assert.match(result.resultText, /<task_type>local_bash<\/task_type>/);
   assert.match(result.resultText, /<exit_code>0<\/exit_code>/);
-  assert.match(result.resultText, /<output>\nout\nerr\n<\/output>/);
+  assert.match(result.resultText, /<output>\nout-1\nerr-1\nout-2\n<\/output>/);
+  const completed = manager.get("session-one", task.id);
+  assert.equal(completed?.stdout, "out-1\nout-2\n");
+  assert.equal(completed?.stderr, "err-1\n");
+  assert.equal(completed?.combinedOutput, "out-1\nerr-1\nout-2\n");
 });
 
 test("TaskOutput times out without stopping a task", async () => {

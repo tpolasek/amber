@@ -32,6 +32,7 @@ export const TASK_OUTPUT_TOOL: ToolDefinition = {
 
 - task_id identifies the task returned by a background Agent or Bash call.
 - Returns the task output together with status information.
+- Background Bash output preserves stdout and stderr in the order Amber receives them.
 - Use block=true (the default) to wait for completion.
 - Use block=false for a non-blocking check of the current status.
 - timeout controls how long a blocking request waits and does not stop the task.`,
@@ -194,21 +195,19 @@ function formatVisibleOutput(task: BackgroundTask): string {
   const sections = [
     `status: ${task.status}`,
     ...(task.exitCode !== null ? [`exit code: ${task.exitCode}`] : []),
-    ...(task.stdout ? [`stdout:\n${task.stdout}`] : []),
-    ...(task.stderr ? [`stderr:\n${task.stderr}`] : []),
+    ...(task.combinedOutput ? [`output:\n${task.combinedOutput}`] : []),
   ];
   return sections.join("\n\n");
 }
 
 function formatTaskOutputResult(retrievalStatus: "success" | "timeout" | "not_ready", task: BackgroundTask): string {
-  const output = [task.stdout, task.stderr].filter(Boolean).join("\n");
   const parts = [
     `<retrieval_status>${retrievalStatus}</retrieval_status>`,
     `<task_id>${task.id}</task_id>`,
     `<task_type>${task.type}</task_type>`,
     `<status>${task.status}</status>`,
     ...(task.exitCode !== null ? [`<exit_code>${task.exitCode}</exit_code>`] : []),
-    ...(output.trim() ? [`<output>\n${output.trimEnd()}\n</output>`] : []),
+    ...(task.combinedOutput.trim() ? [`<output>\n${task.combinedOutput.trimEnd()}\n</output>`] : []),
   ];
   return parts.join("\n\n");
 }

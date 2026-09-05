@@ -11,6 +11,7 @@ function quoteShellArgument(value: string): string {
 
 test("defines the Bash tool and parses its input with the default timeout", () => {
   assert.equal(BASH_TOOL.name, "Bash");
+  assert.match(BASH_TOOL.description, /preserve stdout and stderr in the order Amber receives them/);
   assert.deepEqual(parseBashInput({ command: "  pwd  " }), {
     command: "pwd", timeoutMs: 120_000, runInBackground: false,
   });
@@ -21,6 +22,21 @@ test("defines the Bash tool and parses its input with the default timeout", () =
   });
   assert.throws(() => parseBashInput({ command: "pwd", timeout: 50 }), /timeout/);
   assert.throws(() => parseBashInput({ command: "" }), /non-empty command/);
+});
+
+test("preserves stdout and stderr arrival order", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-bash-"));
+  const output = await new BashExecutor().run(
+    {
+      command: "printf 'out-1\\n'; sleep 0.05; printf 'err-1\\n' >&2; sleep 0.05; printf 'out-2\\n'",
+      timeoutMs: 2_000,
+    },
+    [directory],
+    new AbortController().signal,
+    { onRunning: () => undefined, onOutput: () => undefined },
+  );
+  assert.equal(output.output, "out-1\nerr-1\nout-2\n");
+  assert.equal(output.resultText, "out-1\nerr-1\nout-2");
 });
 
 test("runs Bash in an allowed directory and captures output", async () => {

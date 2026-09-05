@@ -27,6 +27,7 @@ IMPORTANT: Avoid using this tool to run \`find\`, \`grep\`, \`cat\`, \`head\`, \
 - Prefer absolute paths or working_directory over changing directories inside the command.
 - Commands run in the foreground by default and time out after 120000 ms. timeout may be at most 600000 ms.
 - Set run_in_background when the result is not needed immediately. The call returns a task ID; use TaskOutput to inspect or wait for it, or TaskStop to terminate it. Do not append \`&\` when using run_in_background.
+- Foreground Bash and background TaskOutput preserve stdout and stderr in the order Amber receives them.
 - You may issue separate Bash calls for independent commands, but foreground calls execute one at a time. Chain dependent commands with \`&&\`; use \`;\` only when later commands should run after a failure.
 - Avoid unnecessary sleeps and retry loops. Diagnose failures, and use TaskOutput rather than polling background work.
 - Foreground Bash calls execute one at a time within this session.`,
@@ -76,6 +77,21 @@ export interface BashResult {
 export interface BashHooks {
   onRunning: (workingDirectory: string, statusDisplay: ToolStatusDisplay) => unknown;
   onOutput: (chunk: string) => void;
+}
+
+export interface AppendedBashOutput {
+  output: string;
+  appended: string;
+}
+
+// Foreground and background Bash share this bounded accumulator so their merged
+// stdout/stderr streams have identical ordering and truncation behavior.
+export function appendBashOutput(current: string, chunk: string): AppendedBashOutput {
+  if (current.length >= MAX_OUTPUT_CHARACTERS) return { output: current, appended: "" };
+  const available = MAX_OUTPUT_CHARACTERS - current.length;
+  if (chunk.length <= available) return { output: current + chunk, appended: chunk };
+  const appended = `${chunk.slice(0, available)}\n[output truncated]\n`;
+  return { output: current + appended, appended };
 }
 
 export function bashChildEnvironment(): NodeJS.ProcessEnv {
@@ -174,16 +190,9 @@ function executeBash(
 
     const append = (chunk: Buffer | string) => {
       const text = chunk.toString();
-      if (visibleOutput.length >= MAX_OUTPUT_CHARACTERS) return;
-      const available = MAX_OUTPUT_CHARACTERS - visibleOutput.length;
-      const visible = text.slice(0, available);
-      visibleOutput += visible;
-      onOutput(visible);
-      if (text.length > available) {
-        const notice = "\n[output truncated]\n";
-        visibleOutput += notice;
-        onOutput(notice);
-      }
+      const next = appendBashOutput(visibleOutput, text);
+      visibleOutput = next.output;
+      if (next.appended) onOutput(next.appended);
     };
 
     child.stdout.on("data", append);
