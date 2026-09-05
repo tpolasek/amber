@@ -9,6 +9,7 @@ import {
   executeGrep,
   expandBracePattern,
   GREP_TOOL,
+  invalidRegularExpressionError,
   isPermissionOnlyRipgrepStderr,
   isRipgrepAvailable,
   parseGrepInput,
@@ -23,6 +24,14 @@ async function fixture(): Promise<string> {
 
 test("defines the Grep tool and parses its input with defaults", () => {
   assert.equal(GREP_TOOL.name, "Grep");
+  const documentation = `${GREP_TOOL.description}\n${JSON.stringify(GREP_TOOL.input_schema)}`;
+  assert.doesNotMatch(documentation, /head -N|tail -n/);
+  assert.match(documentation, /Number of entries to skip/);
+  assert.match(documentation, /Showing results with pagination/);
+  assert.match(documentation, /Request the next page/);
+  assert.match(documentation, /relative to the session working directory/);
+  assert.match(documentation, /single-file.*may omit the filename/i);
+  assert.match(documentation, /one path:count row per file/);
   assert.deepEqual(Object.keys(GREP_TOOL.input_schema.properties ?? {}), [
     "pattern", "path", "glob", "output_mode", "-B", "-A", "-C", "context", "-n", "-i", "type", "head_limit", "offset", "multiline",
   ]);
@@ -172,11 +181,50 @@ test("count mode reports per-file counts and totals", async () => {
   assert.match(result.resultText, /one\.txt:2/);
   assert.match(result.resultText, /two\.txt:1/);
   assert.match(result.resultText, /Found 3 total occurrences across 2 files\.$/);
+  const paginated = await executeGrep(
+    parseGrepInput({ pattern: "hit", output_mode: "count", head_limit: 1 }),
+    [directory], directory, signal(),
+  );
+  assert.match(paginated.resultText, /Shown [12] occurrences? across 1 file with pagination = limit: 1\.$/);
+  assert.doesNotMatch(paginated.resultText, /\btotal\b/i);
   const single = await executeGrep(
     parseGrepInput({ pattern: "hit", output_mode: "count" }),
     [join(directory, "one.txt")], join(directory, "one.txt"), signal(),
   );
   assert.equal(single.resultText, "2\n\nFound 2 total occurrences across 1 file.");
+});
+
+test("normalizes invalid regular expression errors across search backends", async () => {
+  assert.equal(
+    invalidRegularExpressionError("rg", "regex parse error:\n    (?:[)\n       ^\nerror: unclosed character class"),
+    "Invalid regular expression: unclosed character class",
+  );
+  assert.equal(
+    invalidRegularExpressionError("grep", "grep: Unmatched ( or \\("),
+    "Invalid regular expression: Unmatched ( or \\(",
+  );
+  assert.equal(invalidRegularExpressionError("grep", "grep: Invalid regular expression"), "Invalid regular expression");
+  assert.equal(invalidRegularExpressionError("rg", "rg: path: Permission denied"), undefined);
+
+  const directory = await fixture();
+  await writeFile(join(directory, "sample.txt"), "value\n");
+  const backends: Array<"rg" | "grep"> = ["grep"];
+  if (await isRipgrepAvailable()) backends.push("rg");
+  for (const backend of backends) {
+    await assert.rejects(
+      executeGrep(
+        parseGrepInput({ pattern: "[", output_mode: "content" }),
+        [directory], directory, signal(), backend,
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /^Invalid regular expression(?:: [^\n]+)?$/);
+        assert.doesNotMatch(error.message, /(?:rg|grep) failed|exit \d|regex parse error/i);
+        return true;
+      },
+      `${backend} should use the stable regex error`,
+    );
+  }
 });
 
 test("head_limit and offset paginate content and file results", async () => {

@@ -31,7 +31,10 @@ export const GREP_TOOL: ToolDefinition = {
     "  - Prefer Grep to `grep` or `rg` in Bash. It applies Amber's directory boundaries and output limits.",
     '  - Supports full regex syntax (e.g., "log.*Error", "function\\s+\\w+")',
     '  - Filter files with glob parameter (e.g., "*.js", "**/*.tsx") or type parameter (e.g., "js", "py", "rust")',
-    '  - Output modes: "content" shows matching lines, "files_with_matches" shows only file paths (default), "count" shows matching lines per file',
+    '  - Output modes keep mode-specific wrappers: "content" returns matching/context lines; "files_with_matches" returns a "Found N files" header followed by one path per line (default); "count" returns one path:count row per file followed by a blank line and a summary',
+    "  - Matching paths are relative to the session working directory when possible, even when path is absolute. Paths outside it remain absolute. A single-file content or count search may omit the filename.",
+    "  - Pagination skips offset entries, then returns at most head_limit entries. Content entries are output lines (including context); files_with_matches and count entries are files.",
+    '  - Truncated content ends with "[Showing results with pagination = limit: N, offset: M]" (offset is omitted when zero). Request the next page with the same head_limit and offset set to M + N.',
     "  - Use Agent tool for open-ended searches requiring multiple rounds",
     "  - Pattern syntax: Uses ripgrep (not grep) - literal braces need escaping (use `interface\\{\\}` to find `interface{}` in Go code)",
     "  - Multiline matching: By default patterns match within single lines only. For cross-line patterns like `struct \\{[\\s\\S]*?field`, use `multiline: true`",
@@ -41,12 +44,12 @@ export const GREP_TOOL: ToolDefinition = {
     type: "object",
     properties: {
       pattern: { type: "string", description: "The regular expression pattern to search for in file contents" },
-      path: { type: "string", description: "File or directory to search in (rg PATH). Defaults to current working directory." },
+      path: { type: "string", description: "File or directory to search. Defaults to the session working directory. Matching paths are returned relative to the session working directory when possible, even when this value is absolute; paths outside it remain absolute. Single-file content and count output may omit the filename." },
       glob: { type: "string", description: 'Glob pattern to filter files (e.g. "*.js", "*.{ts,tsx}") - maps to rg --glob' },
       output_mode: {
         type: "string",
         enum: ["content", "files_with_matches", "count"],
-        description: 'Output mode: "content" shows matching lines (supports -A/-B/-C context, -n line numbers, head_limit), "files_with_matches" shows file paths (supports head_limit), "count" shows matching lines per file (supports head_limit). Defaults to "files_with_matches".',
+        description: 'Output mode. "content" returns matching/context lines directly, normally as path:line:text (a single-file search may omit path), plus a blank line and bracketed footer when paginated. "files_with_matches" returns a first line of "Found N file(s)" with optional inline "limit: L, offset: O" metadata, then one path per line. "count" returns one path:count row per file (or a bare count for one file), a blank line, then either "Found T total occurrence(s) across F file(s)." or the paginated "Shown T occurrence(s) across F file(s) with pagination = ..." summary. Defaults to "files_with_matches".',
       },
       "-B": { type: "integer", minimum: 0, description: 'Number of lines to show before each match (rg -B). Requires output_mode: "content", ignored otherwise.' },
       "-A": { type: "integer", minimum: 0, description: 'Number of lines to show after each match (rg -A). Requires output_mode: "content", ignored otherwise.' },
@@ -61,9 +64,9 @@ export const GREP_TOOL: ToolDefinition = {
       head_limit: {
         type: "integer",
         minimum: 0,
-        description: "Limit output to first N matches/entries, equivalent to \"| head -N\". Works across all output modes: content (limits output lines), files_with_matches (limits file paths), count (limits count entries). Defaults to 250 when unspecified. Pass 0 for unlimited (use sparingly — large result sets waste context).",
+        description: "Return at most N entries after offset. In content mode an entry is an output line, including context lines; in files_with_matches and count modes an entry is one file. Defaults to 250 when unspecified. Pass 0 for unlimited (use sparingly — large result sets waste context). Truncated content includes a pagination footer; request the next page with the same head_limit and offset increased by the number of entries returned.",
       },
-      offset: { type: "integer", minimum: 0, description: "Skip first N matches/entries before applying head_limit, equivalent to \"| tail -n +N | head -N\". Works across all output modes. Defaults to 0." },
+      offset: { type: "integer", minimum: 0, description: "Number of entries to skip before applying head_limit. Entry meaning depends on output_mode: content lines (including context), matching file paths, or per-file count rows. Defaults to 0. For the next page, add the number of entries returned to the current offset." },
       multiline: { type: "boolean", description: "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false." },
     },
     required: ["pattern"],
@@ -92,6 +95,8 @@ export interface GrepResult {
   resultText: string;
   workingDirectory: string;
 }
+
+export type GrepBackend = "rg" | "grep";
 
 // Models occasionally quote numbers and booleans ("head_limit":"3", "-i":"true").
 // Coerce those string literals like xude's semanticNumber/semanticBoolean before
@@ -460,6 +465,25 @@ export function isPermissionOnlyRipgrepStderr(stderr: string): boolean {
   return lines.every((line) => PERMISSION_ERROR.test(line));
 }
 
+// Both backends phrase parse failures differently and may include implementation
+// details such as command names, exit codes, source excerpts, and caret markers.
+// Reduce those to one stable, single-line error while retaining the useful reason.
+export function invalidRegularExpressionError(command: GrepBackend, stderr: string): string | undefined {
+  const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (command === "rg") {
+    if (!lines.some((line) => /regex parse error|error parsing regex/i.test(line))) return undefined;
+    const reason = [...lines].reverse().find((line) => /^error:\s*\S/i.test(line))?.replace(/^error:\s*/i, "");
+    return reason ? `Invalid regular expression: ${reason}` : "Invalid regular expression";
+  }
+
+  const diagnostic = lines.find((line) => /invalid regular expression|unmatched|trailing backslash|invalid back reference|invalid range|repetition-operator|regular expression.*too (?:big|large)/i.test(line));
+  if (!diagnostic) return undefined;
+  const reason = diagnostic.replace(/^grep(?:\s*:\s*|:\s*)/i, "").trim();
+  return /^invalid regular expression$/i.test(reason)
+    ? "Invalid regular expression"
+    : `Invalid regular expression: ${reason}`;
+}
+
 function applyHeadLimit<T>(items: T[], limit: number | undefined, offset: number): { items: T[]; appliedLimit?: number } {
   // Explicit 0 = unlimited escape hatch.
   if (limit === 0) return { items: items.slice(offset) };
@@ -507,12 +531,13 @@ export async function executeGrep(
   allowedDirectories: string[],
   currentDirectory: string,
   signal?: AbortSignal,
+  backend?: GrepBackend,
 ): Promise<GrepResult> {
   throwIfAborted(signal);
   if (!currentDirectory) throw new Error("No current working directory is configured");
   const searchPath = await resolveSearchPath(input.path, allowedDirectories, currentDirectory);
   throwIfAborted(signal);
-  const command: "rg" | "grep" = (await isRipgrepAvailable()) ? "rg" : "grep";
+  const command: GrepBackend = backend ?? ((await isRipgrepAvailable()) ? "rg" : "grep");
   if (command === "grep") {
     if (input.multiline) throw new Error("multiline search requires ripgrep (rg), which was not found on PATH");
     // rg rejects the "\\n" escape outside multiline mode; reject it here too, since grep
@@ -536,6 +561,8 @@ export async function executeGrep(
   // failures on individual directories should not hide readable matches.
   const permissionOnly = run.exitCode !== null && run.exitCode >= 2 && isPermissionOnlyRipgrepStderr(run.stderr);
   if (run.exitCode !== null && run.exitCode >= 2 && !permissionOnly) {
+    const regexError = invalidRegularExpressionError(command, run.stderr);
+    if (regexError) throw new Error(regexError);
     throw new Error(`${command} failed (exit ${run.exitCode}): ${run.stderr.trim() || "unknown error"}`);
   }
   if (run.exitCode === null) throw new Error(`${command} terminated unexpectedly`);
@@ -576,7 +603,9 @@ export async function executeGrep(
     }
     const limitInfo = formatLimitInfo(appliedLimit, input.offset);
     if (finalLines.length === 0) return noMatches(searchPath, warning);
-    const summary = `\n\nFound ${totalMatches} total ${plural(totalMatches, "occurrence")} across ${fileCount} ${plural(fileCount, "file")}.${limitInfo ? ` with pagination = ${limitInfo}` : ""}`;
+    const summary = limitInfo
+      ? `\n\nShown ${totalMatches} ${plural(totalMatches, "occurrence")} across ${fileCount} ${plural(fileCount, "file")} with pagination = ${limitInfo}.`
+      : `\n\nFound ${totalMatches} total ${plural(totalMatches, "occurrence")} across ${fileCount} ${plural(fileCount, "file")}.`;
     const resultText = `${finalLines.join("\n")}${summary}`;
     return { output: resultText + warning, resultText: resultText + warning, workingDirectory: searchPath };
   }
