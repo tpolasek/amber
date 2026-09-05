@@ -13,7 +13,7 @@ export const BASH_TOOL: ToolDefinition = {
 
 Each call starts in the session current working directory unless working_directory selects another authorized directory for that call. Shell state does not persist between calls. The shell environment is initialized from the user's profile.
 
-IMPORTANT: Avoid using this tool to run \`find\`, \`grep\`, \`cat\`, \`head\`, \`tail\`, \`sed\`, \`awk\`, or \`echo\` commands unless explicitly instructed or a dedicated tool cannot accomplish the task. Instead use:
+IMPORTANT: Avoid using this tool to run \`find\`, \`grep\`, \`cat\`, \`head\`, \`tail\`, \`sed\`, or \`awk\` commands unless explicitly instructed or a dedicated tool cannot accomplish the task. Instead use:
 
 - File search: Glob
 - Content search: Grep

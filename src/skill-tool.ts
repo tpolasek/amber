@@ -14,7 +14,7 @@ const SKILL_TOOL_DESCRIPTION = `Load a listed skill into the main conversation.
 
 Available skills and their invocation names appear in an injected system-reminder. When one clearly matches the user's request, loading it before responding to the task is a BLOCKING REQUIREMENT. If the user enters a slash command that exactly matches a listed skill, invoke that skill and pass any remaining text as args.
 
-Use only names from the reminder; never guess a skill name or invoke built-in Amber commands such as /help or /clear. If the current turn already contains a <command-name> tag, the skill has been loaded—follow its instructions without invoking it again. Do not invoke a skill that is already running.`;
+Use only names from the reminder; never guess a skill name or invoke built-in Amber commands such as /help or /clear. Do not invoke a skill that is already running.`;
 
 export const SKILL_TOOL: ToolDefinition = {
   name: SKILL_TOOL_NAME,

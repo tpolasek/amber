@@ -1810,7 +1810,7 @@ async function executeAgentCall(
         { type: "text", text: resultText },
         {
           type: "text",
-          text: `agentId: ${child.id} (use SendMessage with to: '${child.id}' to continue this agent)\n`
+          text: `agentId: ${child.id}\n`
             + `<usage>total_tokens: ${stats.totalTokens}\ntool_uses: ${stats.toolUses}\nduration_ms: ${Date.now() - started}</usage>`,
         },
       ];
