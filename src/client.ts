@@ -18,6 +18,49 @@ import {
   taskRuntime,
   type PromptFileReference,
 } from "./client-formatters.js";
+import {
+  api,
+  authMutation,
+  notify,
+  readEventStream,
+  required,
+  requiredWithin,
+  responseError,
+  setAuthActionTokenProvider,
+  settingsMutation,
+} from "./client-api.js";
+import {
+  PLANNING_TASK_STATUS_LABELS,
+  type ActiveAuthLogin,
+  type AgentSessionSummary,
+  type AmberTheme,
+  type AskUserQuestion,
+  type AskUserQuestionRequest,
+  type AuthLoginStart,
+  type AuthLoginStatus,
+  type AuthProviderStatus,
+  type AvailableModel,
+  type BackgroundTask,
+  type Config,
+  type DirectoryCompletion,
+  type EditableAgentSettings,
+  type EditableModelSettings,
+  type EditableProviderSettings,
+  type EditableSettings,
+  type MarkdownRenderer,
+  type Message,
+  type MessageImage,
+  type PlanModeRequest,
+  type PlanningTask,
+  type QuestionSelection,
+  type SavedSettings,
+  type Session,
+  type SessionPlanMode,
+  type SessionSnapshot,
+  type SettingsDocument,
+  type Summary,
+  type ToolCall,
+} from "./client-types.js";
 import { BUILT_IN_COMMANDS, builtInCommand, type BuiltInCommand } from "./built-in-commands.js";
 import { nextThinkingLevel, type ThinkingLevel } from "./thinking-level.js";
 import { PlanHandoffDispatcher } from "./plan-handoff.js";
@@ -33,72 +76,6 @@ import {
   toolSubject,
 } from "./tool-display.js";
 
-interface TokenUsage { input: number; output: number }
-type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
-interface ToolStatusDisplay { text: string; appendElapsed?: boolean }
-interface ToolReadRange { startLine: number; endLine: number; totalLines: number }
-interface MessageImage { mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; data: string }
-interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string; readRange?: ToolReadRange; statusDisplay?: ToolStatusDisplay; agentSessionId?: string; agentType?: string; agentModel?: string; agentThinkingLevel?: ThinkingLevel; agentNotificationDeliveredAt?: string; skillModel?: string; skillEffort?: string; images?: MessageImage[] }
-interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; thinkingProvider?: "anthropic" | "openai"; streamingThinking?: boolean; resyncedThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result" | "skill" | "agent-notification"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean; skillName?: string; images?: MessageImage[] }
-interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
-type PlanningTaskStatus = "pending" | "in_progress" | "completed";
-const PLANNING_TASK_STATUS_LABELS: Record<PlanningTaskStatus, string> = {
-  pending: "WAIT",
-  in_progress: "WORK",
-  completed: "DONE",
-};
-interface PlanningTask { id: string; subject: string; description: string; activeForm: string; status: PlanningTaskStatus; owner: string; blocks: string[]; blockedBy: string[]; metadata: Record<string, unknown> }
-interface InvokedSkill { name: string; path: string; content: string; invokedAt: string }
-interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; model?: string; thinkingLevel?: ThinkingLevel; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error" | "stopped"; planningTasks?: PlanningTask[]; planningTaskArchiveHighWaterMark?: number; contextTokens?: number; planMode?: SessionPlanMode; skillRoots?: string[]; skillTouchedPaths?: string[]; invokedSkills?: InvokedSkill[] }
-interface AgentSessionSummary { id: string; description: string; status: NonNullable<Session["agentStatus"]> }
-interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
-interface AvailableModel { key: string; provider: string; api: "anthropic" | "openai"; model: string; displayName: string; thinkingLevel: ThinkingLevel; compactTokens?: number }
-interface Config { configured: boolean; authenticationRequired: boolean; configurationError?: string; provider: string; model: string; defaultModel: string; models: AvailableModel[]; mode: "live"; homeDirectory: string; workspaceRoot: string; authActionToken: string; theme: "dark" | "light" | "light+" | "hacker" }
-type AmberTheme = Config["theme"];
-interface EditableModelSettings { thinking_level?: ThinkingLevel; compact_tokens?: number }
-interface EditableProviderSettings extends EditableModelSettings {
-  api: "anthropic" | "openai";
-  auth?: "openai-codex";
-  auth_key?: string;
-  auth_url?: string;
-  default_model?: string;
-  models: Record<string, EditableModelSettings>;
-}
-interface EditableAgentSettings { type: string; whenToUse: string; systemPrompt: string; readOnly: boolean; compact?: boolean; model?: string; thinking_level?: ThinkingLevel }
-interface EditableSettings {
-  theme: AmberTheme;
-  default_provider?: string;
-  default_agent_provider?: string;
-  default_agent_model?: string;
-  providers: Record<string, EditableProviderSettings>;
-  agents: EditableAgentSettings[];
-}
-interface SettingsDocument { settings: EditableSettings; path: string; error?: string }
-interface SavedSettings extends SettingsDocument { config: Config }
-interface AuthProviderStatus { id: "openai-codex"; name: string; authName: string; configured: boolean; providerConfigured: boolean }
-type AuthLoginStatus = { status: "pending" } | { status: "complete" } | { status: "failed"; error: string } | { status: "cancelled" };
-type AuthLoginStart =
-  | { id: string; method: "browser"; authorizationUrl: string; redirectUri: string; callbackAvailable: boolean }
-  | { id: string; method: "device_code"; userCode: string; verificationUri: string; expiresInSeconds: number };
-interface ActiveAuthLogin { start: AuthLoginStart; status: AuthLoginStatus }
-interface BackgroundTask { id: string; type: "local_bash"; command: string; description: string; workingDirectory: string; status: "running" | "completed" | "failed" | "timed_out" | "killed"; stdout: string; stderr: string; combinedOutput: string; exitCode: number | null; startedAt: string; completedAt?: string; durationMs?: number }
-interface AskUserQuestionOption { label: string; description: string; preview?: string }
-interface AskUserQuestion { question: string; header: string; options: AskUserQuestionOption[]; multiSelect: boolean }
-interface AskUserQuestionRequest { toolUseId: string; questions: AskUserQuestion[] }
-interface SessionPlanMode { active: boolean; planFilePath: string }
-type PlanModeRequest =
-  | { toolUseId: string; kind: "enter" }
-  | { toolUseId: string; kind: "exit"; plan: string; planFilePath: string };
-interface SessionSnapshot {
-  session: Session;
-  active: boolean;
-  compaction?: { generatedCharacters: number };
-  questionRequest?: AskUserQuestionRequest;
-  planModeRequest?: PlanModeRequest;
-}
-interface QuestionSelection { labels: Set<string>; other: string; otherSelected: boolean; focusIndex: number }
-interface DirectoryCompletion { value: string; absolutePath: string; kind?: "directory" | "file" }
-interface MarkdownRenderer { render(source: string): string }
 declare const markdownit: (options: { html: boolean; linkify: boolean; breaks: boolean; typographer: boolean }) => MarkdownRenderer;
 
 const commands = BUILT_IN_COMMANDS;
@@ -187,6 +164,9 @@ const state: { session: Session | null; config: Config | null; streaming: boolea
   aborting: false,
   controller: null,
 };
+
+// Privileged settings/auth mutations read their token from the loaded config.
+setAuthActionTokenProvider(() => state.config?.authActionToken);
 
 // Deferred until the current response finishes (or immediately when it already
 // has): the decision response and the end of the run's event stream race.
@@ -4442,63 +4422,6 @@ function setBusy(busy: boolean): void {
   renderPlanMode();
 }
 
-async function readEventStream(stream: ReadableStream<Uint8Array>, onEvent: (event: string, data: unknown) => void): Promise<void> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const frames = buffer.split("\n\n");
-    buffer = frames.pop() ?? "";
-    for (const frame of frames) {
-      let event = "message";
-      let data = "";
-      for (const line of frame.split("\n")) {
-        if (line.startsWith("event:")) event = line.slice(6).trim();
-        if (line.startsWith("data:")) data += line.slice(5).trim();
-      }
-      if (data) onEvent(event, JSON.parse(data));
-    }
-  }
-}
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, { ...init, headers: { "content-type": "application/json", ...init?.headers } });
-  if (!response.ok) throw new Error(await responseError(response));
-  return response.json() as Promise<T>;
-}
-
-async function authMutation<T = unknown>(path: string, init: RequestInit): Promise<T> {
-  const token = state.config?.authActionToken;
-  if (!token) throw new Error("Authentication settings are not initialized");
-  return api<T>(path, {
-    ...init,
-    headers: { ...init.headers, "x-amber-auth-action-token": token },
-  });
-}
-
-async function settingsMutation<T = unknown>(path: string, init: RequestInit): Promise<T> {
-  const token = state.config?.authActionToken;
-  if (!token) throw new Error("Settings are not initialized");
-  return api<T>(path, {
-    ...init,
-    headers: { ...init.headers, "x-amber-auth-action-token": token },
-  });
-}
-
-async function responseError(response: Response): Promise<string> {
-  try { return ((await response.json()) as { error?: string }).error ?? `Request failed (${response.status})`; }
-  catch { return `Request failed (${response.status})`; }
-}
-
-function notify(message: string): void {
-  elements.toast.textContent = message;
-  elements.toast.classList.add("visible");
-  window.setTimeout(() => elements.toast.classList.remove("visible"), 4200);
-}
-
 function resizePrompt(): void {
   elements.prompt.style.height = "auto";
   elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 180)}px`;
@@ -4833,16 +4756,4 @@ function scrollTranscriptToBottom(): void {
 function stickScrollToBottom(): void {
   transcriptScrollPin.reset();
   scrollTranscriptToBottom();
-}
-
-function required<T extends HTMLElement>(id: string): T {
-  const element = document.getElementById(id);
-  if (!element) throw new Error(`Missing #${id}`);
-  return element as T;
-}
-
-function requiredWithin(parent: ParentNode, selector: string): HTMLElement {
-  const element = parent.querySelector<HTMLElement>(selector);
-  if (!element) throw new Error(`Missing ${selector}`);
-  return element;
 }
