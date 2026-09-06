@@ -128,12 +128,9 @@ if (cliCommand.kind === "unknown") {
 }
 
 const clientScript = join(sourceDirectory, "client.js");
-const clientFormattersScript = join(sourceDirectory, "client-formatters.js");
-const builtInCommandsScript = join(sourceDirectory, "built-in-commands.js");
-const streamingThinkingScript = join(sourceDirectory, "streaming-thinking.js");
-const toolDisplayScript = join(sourceDirectory, "tool-display.js");
-const thinkingLevelScript = join(sourceDirectory, "thinking-level.js");
-const planHandoffScript = join(sourceDirectory, "plan-handoff.js");
+// Browser-loaded ES modules served straight from the compiled output. The
+// pattern only admits known module names, so it cannot traverse paths.
+const clientModulePattern = /^\/(client(?:-[a-z0-9-]+)?|built-in-commands|streaming-thinking|tool-display|thinking-level|plan-handoff)\.js$/;
 const markdownScript = join(projectRoot, "node_modules", "markdown-it", "dist", "browser", "markdown-it.umd.min.js");
 const amberDirectory = join(homedir(), ".amber");
 const defaultDataDirectory = join(amberDirectory, "data", "sessions");
@@ -670,23 +667,8 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   if (method === "GET" && url.pathname === "/app.js") {
     return serveFile(response, clientScript, "text/javascript; charset=utf-8", "no-cache");
   }
-  if (method === "GET" && url.pathname === "/client-formatters.js") {
-    return serveFile(response, clientFormattersScript, "text/javascript; charset=utf-8", "no-cache");
-  }
-  if (method === "GET" && url.pathname === "/built-in-commands.js") {
-    return serveFile(response, builtInCommandsScript, "text/javascript; charset=utf-8", "no-cache");
-  }
-  if (method === "GET" && url.pathname === "/streaming-thinking.js") {
-    return serveFile(response, streamingThinkingScript, "text/javascript; charset=utf-8", "no-cache");
-  }
-  if (method === "GET" && url.pathname === "/tool-display.js") {
-    return serveFile(response, toolDisplayScript, "text/javascript; charset=utf-8", "no-cache");
-  }
-  if (method === "GET" && url.pathname === "/thinking-level.js") {
-    return serveFile(response, thinkingLevelScript, "text/javascript; charset=utf-8", "no-cache");
-  }
-  if (method === "GET" && url.pathname === "/plan-handoff.js") {
-    return serveFile(response, planHandoffScript, "text/javascript; charset=utf-8", "no-cache");
+  if (method === "GET" && clientModulePattern.test(url.pathname)) {
+    return serveFile(response, join(sourceDirectory, url.pathname.slice(1)), "text/javascript; charset=utf-8", "no-cache");
   }
   if (method === "GET" && url.pathname === "/vendor/markdown-it.js") {
     return serveFile(response, markdownScript, "text/javascript; charset=utf-8", "public, max-age=31536000, immutable");
