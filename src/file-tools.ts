@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { chmod, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { createTwoFilesPatch, FILE_HEADERS_ONLY } from "diff";
+import { bashSpillDirectory } from "./bash-tool.js";
 import { MAX_IMAGE_BYTES, sniffImageMediaType } from "./message-images.js";
 import type { FileReadState, MessageImage, Session, ToolDefinition, ToolReadRange } from "./types.js";
 
@@ -17,7 +18,7 @@ const BLOCKED_DEVICE_PATHS = new Set([
 ]);
 const IMAGE_READ_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 const UNSUPPORTED_READ_EXTENSIONS = new Set([".pdf", ".ipynb"]);
-const STATIC_READ_DIRECTORIES = [join(homedir(), ".amber", "plans")];
+const STATIC_READ_DIRECTORIES = [join(homedir(), ".amber", "plans"), bashSpillDirectory()];
 
 export const READ_TOOL: ToolDefinition = {
   name: "Read",

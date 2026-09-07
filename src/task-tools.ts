@@ -39,7 +39,8 @@ export const TASK_OUTPUT_TOOL: ToolDefinition = {
 - Background Bash output preserves stdout and stderr in the order Amber receives them.
 - Use block=true (the default) to wait for completion.
 - Use block=false for a non-blocking check of the current status.
-- timeout controls how long a blocking request waits and does not stop the task.`,
+- timeout controls how long a blocking request waits and does not stop the task.
+- When output is truncated a <spill_file> tag reports the temp file holding the full output so you can read it with the Read tool.`,
   input_schema: {
     type: "object",
     properties: {
@@ -201,6 +202,7 @@ function formatVisibleOutput(task: BackgroundTask): string {
     `status: ${task.status}`,
     ...(task.exitCode !== null ? [`exit code: ${task.exitCode}`] : []),
     ...(task.combinedOutput ? [`output:\n${task.combinedOutput}`] : []),
+    ...(task.spillPath ? [`spill file: ${task.spillPath}`] : []),
   ];
   return sections.join("\n\n");
 }
@@ -213,6 +215,7 @@ function formatTaskOutputResult(retrievalStatus: "success" | "timeout" | "not_re
     `<status>${task.status}</status>`,
     ...(task.exitCode !== null ? [`<exit_code>${task.exitCode}</exit_code>`] : []),
     ...(task.combinedOutput.trim() ? [`<output>\n${task.combinedOutput.trimEnd()}\n</output>`] : []),
+    ...(task.spillPath ? [`<spill_file>${task.spillPath}</spill_file>`] : []),
   ];
   return parts.join("\n\n");
 }

@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BackgroundTaskManager } from "../src/background-tasks.js";
+import { MAX_OUTPUT_CHARACTERS } from "../src/bash-tool.js";
 import {
   executeTaskOutput,
   executeTaskStop,
@@ -314,4 +315,25 @@ test("background agent IDs cannot cross sessions and unknown IDs fail", async ()
     () => executeTaskStop(manager, "session-one", agent.id),
     { message: "No task found with ID: girl.desert.grand.6bbl8fx5" },
   );
+});
+
+test("spills truncated background output and exposes the spill path via TaskOutput", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-task-"));
+  const manager = new BackgroundTaskManager();
+  const task = await manager.start("session-one", {
+    command: `seq 1 ${MAX_OUTPUT_CHARACTERS + 500}`,
+    timeoutMs: 5_000,
+    runInBackground: true,
+  }, [directory]);
+  const result = await executeTaskOutput(manager, NO_AGENTS, "session-one", {
+    taskId: task.id, block: true, timeoutMs: 5_000,
+  });
+  assert.match(result.output, /spill file: /);
+  assert.match(result.resultText, /<spill_file>.*<\/spill_file>/);
+  const completed = manager.get("session-one", task.id);
+  assert.ok(completed?.spillPath, "completed task reports a spill path");
+  assert.ok(completed?.combinedOutput.includes("[output truncated]"));
+  const spilled = await readFile(completed!.spillPath!, "utf8");
+  assert.ok(spilled.length > 0);
+  await rm(completed!.spillPath!, { force: true });
 });

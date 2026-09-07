@@ -1,11 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import type { BashInput } from "./bash-tool.js";
-import { appendBashOutput, bashChildEnvironment, resolveBashWorkingDirectory } from "./bash-tool.js";
+import { BashOutputBuffer, bashChildEnvironment, resolveBashWorkingDirectory } from "./bash-tool.js";
 import { taskNotFoundError } from "./task-errors.js";
 
 const TASK_ID_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
-const MAX_TASK_STREAM_CHARACTERS = 200_000;
+const MAX_TASK_STREAM_CHARACTERS = 20_000;
 
 export type BackgroundTaskStatus = "running" | "completed" | "failed" | "timed_out" | "killed";
 
@@ -24,6 +24,7 @@ export interface BackgroundTask {
   startedAt: string;
   completedAt?: string;
   durationMs?: number;
+  spillPath?: string;
 }
 
 interface ManagedTask extends BackgroundTask {
@@ -32,6 +33,7 @@ interface ManagedTask extends BackgroundTask {
   forceKillHandle?: NodeJS.Timeout;
   completion: Promise<void>;
   resolveCompletion: () => void;
+  combinedBuffer: BashOutputBuffer;
 }
 
 export interface TaskRetrieval {
@@ -61,6 +63,7 @@ export class BackgroundTaskManager {
     });
     let resolveCompletion: () => void = () => undefined;
     const completion = new Promise<void>((resolve) => { resolveCompletion = resolve; });
+    const combinedBuffer = new BashOutputBuffer({ name: "task" });
     const task: ManagedTask = {
       id,
       type: "local_bash",
@@ -82,28 +85,33 @@ export class BackgroundTaskManager {
       }, input.timeoutMs),
       completion,
       resolveCompletion,
+      combinedBuffer,
     };
     this.#tasks.set(id, task);
 
+    const appendCombined = (text: string) => {
+      task.combinedBuffer.append(text);
+      task.combinedOutput = task.combinedBuffer.output;
+    };
     child.stdout?.on("data", (chunk: Buffer | string) => {
       const text = chunk.toString();
       task.stdout = appendTaskOutput(task.stdout, text);
-      task.combinedOutput = appendBashOutput(task.combinedOutput, text).output;
+      appendCombined(text);
     });
     child.stderr?.on("data", (chunk: Buffer | string) => {
       const text = chunk.toString();
       task.stderr = appendTaskOutput(task.stderr, text);
-      task.combinedOutput = appendBashOutput(task.combinedOutput, text).output;
+      appendCombined(text);
     });
     child.once("error", (error) => {
       task.stderr = appendTaskOutput(task.stderr, error.message);
-      task.combinedOutput = appendBashOutput(task.combinedOutput, error.message).output;
+      appendCombined(error.message);
       if (task.status === "running") task.status = "failed";
-      this.#finish(task, null, startedAt);
+      void this.#finish(task, null, startedAt);
     });
     child.once("close", (exitCode) => {
       if (task.status === "running") task.status = exitCode === 0 ? "completed" : "failed";
-      this.#finish(task, exitCode, startedAt);
+      void this.#finish(task, exitCode, startedAt);
     });
     return publicTask(task);
   }
@@ -180,13 +188,20 @@ export class BackgroundTaskManager {
     task.forceKillHandle ??= setTimeout(() => killChild(task.child, "SIGKILL"), 1_000);
   }
 
-  #finish(task: ManagedTask, exitCode: number | null, startedAt: Date): void {
+  async #finish(task: ManagedTask, exitCode: number | null, startedAt: Date): Promise<void> {
     if (task.completedAt) return;
+    // Mark finished and assign metadata synchronously so a concurrent observer never
+    // sees a finished task with missing exit code or spill path.
+    task.completedAt = new Date().toISOString();
+    task.exitCode = exitCode;
+    task.durationMs = Date.now() - startedAt.getTime();
+    if (task.combinedBuffer.truncated && !task.combinedBuffer.hasSpillError) {
+      const spillPath = task.combinedBuffer.spillPath;
+      if (spillPath) task.spillPath = spillPath;
+    }
     clearTimeout(task.timeoutHandle);
     if (task.forceKillHandle) clearTimeout(task.forceKillHandle);
-    task.exitCode = exitCode;
-    task.completedAt = new Date().toISOString();
-    task.durationMs = Date.now() - startedAt.getTime();
+    await task.combinedBuffer.finalize();
     task.resolveCompletion();
   }
 }
@@ -220,6 +235,7 @@ function publicTask(task: ManagedTask): BackgroundTask {
     startedAt: task.startedAt,
     ...(task.completedAt ? { completedAt: task.completedAt } : {}),
     ...(task.durationMs !== undefined ? { durationMs: task.durationMs } : {}),
+    ...(task.spillPath ? { spillPath: task.spillPath } : {}),
   };
 }
 

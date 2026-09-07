@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearReadCache, executeFileTool, FILE_TOOLS } from "../src/file-tools.js";
+import { bashSpillDirectory } from "../src/bash-tool.js";
 import type { Session } from "../src/types.js";
 
 function session(): Session {
@@ -383,6 +384,18 @@ test("file tools resolve relative paths from CWD and reject binary and outside p
     /Images can be read but not written/,
   );
   await assert.rejects(executeFileTool("Read", { file_path: outsidePath }, [directory], current), /outside the project/);
+});
+
+test("Read opens spilled Bash output in the system temp spill directory", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-files-"));
+  const spilledPath = join(bashSpillDirectory(), "file-tools-test.log");
+  await mkdir(bashSpillDirectory(), { recursive: true });
+  await writeFile(spilledPath, "spilled\noutput\n", "utf8");
+  const current = session();
+  const result = await executeFileTool("Read", { file_path: spilledPath }, [directory], current);
+  assert.equal(result.filePath, spilledPath);
+  assert.equal(result.resultText, "     1→spilled\n     2→output");
+  await rm(spilledPath, { force: true });
 });
 
 test("Read returns image bytes as an image on the tool result", async () => {

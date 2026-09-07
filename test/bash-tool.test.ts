@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, realpath, stat, symlink } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BashExecutor, BASH_TOOL, parseBashInput } from "../src/bash-tool.js";
+import { BashExecutor, BASH_TOOL, bashSpillDirectory, MAX_OUTPUT_CHARACTERS, parseBashInput } from "../src/bash-tool.js";
 
 function quoteShellArgument(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
@@ -234,4 +234,38 @@ test("rejects a working directory outside the allowed roots", async () => {
     ),
     /outside the project and added directories/,
   );
+});
+
+test("spills truncated foreground output to a temp file and reports its path", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-bash-"));
+  const command = `seq 1 ${MAX_OUTPUT_CHARACTERS + 1_000}`;
+  const result = await new BashExecutor().run(
+    { command, timeoutMs: 5_000 },
+    [directory],
+    new AbortController().signal,
+    { onRunning: () => undefined, onOutput: () => undefined },
+  );
+  const marker = "[output truncated]";
+  // Visible output is bounded by the cap plus the truncation marker.
+  assert.ok(result.output.length <= MAX_OUTPUT_CHARACTERS + marker.length + 2, "visible output must stay under the cap plus marker");
+  assert.ok(result.output.includes(marker));
+  assert.ok(result.spillPath, "spilled output must report a path");
+  assert.equal(result.spillPath?.startsWith(bashSpillDirectory()), true);
+  const spilled = await readFile(result.spillPath!, "utf8");
+  assert.ok(spilled.length > 0, "spill file must contain the overflow");
+  await rm(result.spillPath!, { force: true });
+});
+
+test("streams overflow to the spill file while surfacing the truncation marker", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-bash-"));
+  const result = await new BashExecutor().run(
+    { command: `seq 1 ${MAX_OUTPUT_CHARACTERS + 100}`, timeoutMs: 5_000 },
+    [directory],
+    new AbortController().signal,
+    { onRunning: () => undefined, onOutput: () => undefined },
+  );
+  assert.match(result.resultText, /\[output truncated: full output spilled to \S+\]/);
+  const spilled = await readFile(result.spillPath!, "utf8");
+  assert.ok(spilled.length >= 100);
+  await rm(result.spillPath!, { force: true });
 });
