@@ -2,6 +2,8 @@ import type { ToolDefinition } from "./types.js";
 import type { BackgroundTask, BackgroundTaskManager } from "./background-tasks.js";
 import { taskNotFoundError } from "./task-errors.js";
 
+const MAX_TASK_OUTPUT_WAIT_MS = 290_000;
+
 export {
   PLANNING_TASK_TOOLS,
   TASK_CREATE_TOOL,
@@ -43,7 +45,7 @@ export const TASK_OUTPUT_TOOL: ToolDefinition = {
     properties: {
       task_id: { type: "string", description: "A b-prefixed background Bash ID or linked background-agent session ID. Numeric planning task IDs are not accepted." },
       block: { type: "boolean", default: true, description: "Whether to wait for completion. Defaults to true." },
-      timeout: { type: "integer", minimum: 0, maximum: 600_000, default: 30_000, description: "Maximum wait time in milliseconds. Defaults to 30000." },
+      timeout: { type: "integer", minimum: 0, maximum: MAX_TASK_OUTPUT_WAIT_MS, default: 30_000, description: "Maximum wait time in milliseconds. Defaults to 30000." },
     },
     required: ["task_id"],
     additionalProperties: false,
@@ -95,8 +97,8 @@ export function parseTaskOutputInput(input: Record<string, unknown>): TaskOutput
   if (typeof input.task_id !== "string" || !input.task_id.trim()) throw new Error("TaskOutput task_id is required");
   if (input.block !== undefined && typeof input.block !== "boolean") throw new Error("TaskOutput block must be a boolean");
   const timeout = input.timeout ?? 30_000;
-  if (!Number.isInteger(timeout) || (timeout as number) < 0 || (timeout as number) > 600_000) {
-    throw new Error("TaskOutput timeout must be an integer from 0 to 600000");
+  if (!Number.isInteger(timeout) || (timeout as number) < 0 || (timeout as number) > MAX_TASK_OUTPUT_WAIT_MS) {
+    throw new Error(`TaskOutput timeout must be an integer from 0 to ${MAX_TASK_OUTPUT_WAIT_MS}`);
   }
   return { taskId: input.task_id.trim(), block: input.block !== false, timeoutMs: timeout as number };
 }

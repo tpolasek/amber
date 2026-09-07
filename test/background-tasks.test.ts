@@ -195,6 +195,7 @@ test("task tool parsers use Claude Code argument conventions", () => {
   assert.equal(parseTaskStopInput({ task_id: "b123" }), "b123");
   assert.equal(parseTaskStopInput({ shell_id: "legacy" }), "legacy");
   assert.throws(() => parseTaskOutputInput({ task_id: "b123", timeout: -1 }), /timeout/);
+  assert.throws(() => parseTaskOutputInput({ task_id: "b123", timeout: 290_001 }), /from 0 to 290000/);
   assert.throws(() => parseTaskStopInput({}), /task_id/);
 });
 

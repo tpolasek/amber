@@ -5,6 +5,7 @@ import type { ToolDefinition, ToolStatus, ToolStatusDisplay } from "./types.js";
 
 export const DEFAULT_BASH_TIMEOUT_MS = 120_000;
 export const MAX_BASH_TIMEOUT_MS = 600_000;
+export const MAX_FOREGROUND_BASH_TIMEOUT_MS = 290_000;
 const MAX_OUTPUT_CHARACTERS = 200_000;
 
 export const BASH_TOOL: ToolDefinition = {
@@ -25,7 +26,7 @@ IMPORTANT: Avoid using this tool to run \`find\`, \`grep\`, \`cat\`, \`head\`, \
 # Instructions
 - Always quote file paths that contain spaces.
 - Prefer absolute paths or working_directory over changing directories inside the command.
-- Commands run in the foreground by default and time out after 120000 ms. Foreground calls wait for completion and return the command output directly in Bash's normal result format. timeout may be at most 600000 ms.
+- Commands run in the foreground by default and time out after 120000 ms. Foreground calls wait for completion and return the command output directly in Bash's normal result format. Foreground timeout may be at most ${MAX_FOREGROUND_BASH_TIMEOUT_MS} ms; background timeout may be at most ${MAX_BASH_TIMEOUT_MS} ms.
 - Set run_in_background when the result is not needed immediately. A background Bash call returns a b-prefixed task ID instead of the command's final output. Pass that ID to TaskOutput to retrieve the output together with task status and exit-code metadata, or to TaskStop to terminate it. Do not append \`&\` when using run_in_background.
 - Foreground Bash and background TaskOutput preserve stdout and stderr in the order Amber receives them.
 - You may issue separate Bash calls for independent commands, but foreground calls execute one at a time. Chain dependent commands with \`&&\`; use \`;\` only when later commands should run after a failure.
@@ -40,7 +41,7 @@ IMPORTANT: Avoid using this tool to run \`find\`, \`grep\`, \`cat\`, \`head\`, \
         type: "integer",
         minimum: 100,
         maximum: MAX_BASH_TIMEOUT_MS,
-        description: `Timeout in milliseconds. Defaults to ${DEFAULT_BASH_TIMEOUT_MS}.`,
+        description: `Timeout in milliseconds. Defaults to ${DEFAULT_BASH_TIMEOUT_MS}. Foreground calls cap at ${MAX_FOREGROUND_BASH_TIMEOUT_MS}; background calls may go up to ${MAX_BASH_TIMEOUT_MS}.`,
       },
       description: {
         type: "string",
@@ -128,8 +129,10 @@ export function parseBashInput(input: Record<string, unknown>): BashInput {
   if (command.length > 32_000) throw new Error("Bash command must be 32,000 characters or fewer");
 
   const timeout = input.timeout ?? input.timeout_ms ?? DEFAULT_BASH_TIMEOUT_MS;
-  if (!Number.isInteger(timeout) || (timeout as number) < 100 || (timeout as number) > MAX_BASH_TIMEOUT_MS) {
-    throw new Error(`Bash timeout must be an integer from 100 to ${MAX_BASH_TIMEOUT_MS}`);
+  const runInBackground = input.run_in_background === true;
+  const maximum = runInBackground ? MAX_BASH_TIMEOUT_MS : MAX_FOREGROUND_BASH_TIMEOUT_MS;
+  if (!Number.isInteger(timeout) || (timeout as number) < 100 || (timeout as number) > maximum) {
+    throw new Error(`Bash timeout must be an integer from 100 to ${maximum}`);
   }
   if (input.working_directory !== undefined && typeof input.working_directory !== "string") {
     throw new Error("Bash working_directory must be a string");
@@ -144,7 +147,7 @@ export function parseBashInput(input: Record<string, unknown>): BashInput {
   return {
     command,
     timeoutMs: timeout as number,
-    runInBackground: input.run_in_background === true,
+    runInBackground,
     ...(typeof input.working_directory === "string" && input.working_directory.trim()
       ? { workingDirectory: input.working_directory.trim() }
       : {}),

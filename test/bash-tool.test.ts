@@ -31,6 +31,16 @@ test("defines the Bash tool and parses its input with the default timeout", () =
   assert.throws(() => parseBashInput({ command: "" }), /non-empty command/);
 });
 
+test("caps foreground Bash timeout below the read-cache TTL while allowing long background runs", () => {
+  assert.throws(() => parseBashInput({ command: "pwd", timeout: 290_001 }), /from 100 to 290000/);
+  assert.deepEqual(parseBashInput({ command: "pwd", timeout: 290_000 }), {
+    command: "pwd", timeoutMs: 290_000, runInBackground: false,
+  });
+  assert.deepEqual(parseBashInput({ command: "pwd", timeout: 600_000, run_in_background: true }), {
+    command: "pwd", timeoutMs: 600_000, runInBackground: true,
+  });
+});
+
 test("preserves stdout and stderr arrival order", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-bash-"));
   const output = await new BashExecutor().run(
