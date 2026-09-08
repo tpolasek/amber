@@ -203,6 +203,10 @@ test("normalizes invalid regular expression errors across search backends", asyn
     invalidRegularExpressionError("grep", "grep: Unmatched ( or \\("),
     "Invalid regular expression: Unmatched ( or \\(",
   );
+  assert.equal(
+    invalidRegularExpressionError("grep", "grep: brackets ([ ]) not balanced"),
+    "Invalid regular expression: brackets ([ ]) not balanced",
+  );
   assert.equal(invalidRegularExpressionError("grep", "grep: Invalid regular expression"), "Invalid regular expression");
   assert.equal(invalidRegularExpressionError("rg", "rg: path: Permission denied"), undefined);
 

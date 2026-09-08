@@ -393,7 +393,7 @@ test("Read opens spilled Bash output in the system temp spill directory", async 
   await writeFile(spilledPath, "spilled\noutput\n", "utf8");
   const current = session();
   const result = await executeFileTool("Read", { file_path: spilledPath }, [directory], current);
-  assert.equal(result.filePath, spilledPath);
+  assert.equal(result.filePath, await realpath(spilledPath));
   assert.equal(result.resultText, "     1→spilled\n     2→output");
   await rm(spilledPath, { force: true });
 });

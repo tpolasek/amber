@@ -476,7 +476,7 @@ export function invalidRegularExpressionError(command: GrepBackend, stderr: stri
     return reason ? `Invalid regular expression: ${reason}` : "Invalid regular expression";
   }
 
-  const diagnostic = lines.find((line) => /invalid regular expression|unmatched|trailing backslash|invalid back reference|invalid range|repetition-operator|regular expression.*too (?:big|large)/i.test(line));
+  const diagnostic = lines.find((line) => /invalid regular expression|unmatched|trailing backslash|invalid back reference|invalid range|repetition-operator|brackets.*not balanced|regular expression.*too (?:big|large)/i.test(line));
   if (!diagnostic) return undefined;
   const reason = diagnostic.replace(/^grep(?:\s*:\s*|:\s*)/i, "").trim();
   return /^invalid regular expression$/i.test(reason)
