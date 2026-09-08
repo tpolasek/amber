@@ -18,7 +18,7 @@ test("streams OpenAI Responses text, reasoning, tools, and usage", async (contex
 
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.write('event: response.reasoning_summary_text.delta\r\ndata: {"type":"response.reasoning_summary_text.delta","output_index":0,"delta":"Checking the repository"}\r\n\r\n');
-    response.write('event: response.output_item.done\r\ndata: {"type":"response.output_item.done","output_index":0,"item":{"id":"rs-new","type":"reasoning","encrypted_content":"encrypted-new","summary":[]}}\r\n\r\n');
+    response.write('event: response.output_item.done\r\ndata: {"type":"response.output_item.done","output_index":0,"item":{"id":"rs_new","type":"reasoning","encrypted_content":"encrypted-new","summary":[]}}\r\n\r\n');
     response.write('event: response.output_text.delta\r\ndata: {"type":"response.output_text.delta","output_index":1,"delta":"I found it."}\r\n\r\n');
     response.write('event: response.output_item.added\r\ndata: {"type":"response.output_item.added","output_index":2,"item":{"id":"fc-new","type":"function_call","call_id":"call-new","name":"Read","arguments":""}}\r\n\r\n');
     response.write('event: response.function_call_arguments.delta\r\ndata: {"type":"response.function_call_arguments.delta","output_index":2,"delta":"{\\"file_path\\":\\"README.md\\"}"}\r\n\r\n');
@@ -37,7 +37,7 @@ test("streams OpenAI Responses text, reasoning, tools, and usage", async (contex
     model: "gpt-test",
     thinkingLevel: "high",
   });
-  const oldReasoning = 'openai-reasoning:{"type":"reasoning","id":"rs-old","encrypted_content":"encrypted-old","summary":[]}\n';
+  const oldReasoning = 'openai-reasoning:{"type":"reasoning","id":"rs_old","encrypted_content":"encrypted-old","summary":[]}\n';
   const messages: ProviderMessage[] = [
     { role: "user", content: "Inspect the README" },
     {
@@ -93,7 +93,7 @@ test("streams OpenAI Responses text, reasoning, tools, and usage", async (contex
   }]);
   assert.deepEqual(requestBody.input, [
     { role: "user", content: "Inspect the README" },
-    { type: "reasoning", id: "rs-old", encrypted_content: "encrypted-old", summary: [] },
+    { type: "reasoning", id: "rs_old", encrypted_content: "encrypted-old", summary: [] },
     { role: "assistant", content: "I'll read it." },
     { type: "function_call", call_id: "call-old", name: "Read", arguments: '{"file_path":"README.md"}' },
     { type: "function_call_output", call_id: "call-old", output: "README contents" },
@@ -102,7 +102,7 @@ test("streams OpenAI Responses text, reasoning, tools, and usage", async (contex
     { type: "thinking_delta", thinking: "Checking the repository" },
     {
       type: "thinking_signature_delta",
-      signature: 'openai-reasoning:{"type":"reasoning","id":"rs-new","encrypted_content":"encrypted-new","summary":[]}\n',
+      signature: 'openai-reasoning:{"type":"reasoning","id":"rs_new","encrypted_content":"encrypted-new","summary":[]}\n',
     },
     { type: "delta", text: "I found it." },
     { type: "tool_use_start", index: 2, id: "call-new", name: "Read" },
@@ -183,6 +183,52 @@ test("sends user images and image tool results as Responses API parts", async (c
       ],
     },
     { type: "function_call_output", call_id: "call-text", output: "Plain text result" },
+  ]);
+});
+
+test("drops stale UUID reasoning ids when replaying a stored session", async (context) => {
+  let requestBody: Record<string, unknown> = {};
+  const gateway = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    requestBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end('data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n\n');
+  });
+  gateway.listen(0, "127.0.0.1");
+  await once(gateway, "listening");
+  context.after(() => gateway.close());
+  const address = gateway.address();
+  assert(address && typeof address === "object");
+
+  const provider = new OpenAIProvider({
+    apiKey: "key",
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    model: "gpt-test",
+    thinkingLevel: "high",
+  });
+  // A stale reasoning item whose id is a UUID (not "rs_" prefixed) must not be
+  // replayed to the Responses API, which rejects such ids with a 400. A valid
+  // rs_ item alongside it is preserved.
+  const staleReasoning = 'openai-reasoning:{"type":"reasoning","id":"231fab1b-cc9d-4f48-aa8e-9947745cc4a7","encrypted_content":"synthetic-0","summary":[]}\n';
+  const validReasoning = 'openai-reasoning:{"type":"reasoning","id":"rs_0a8841d4","encrypted_content":"encrypted","summary":[]}\n';
+  const messages: ProviderMessage[] = [
+    { role: "user", content: "Continue" },
+    {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "stale", signature: staleReasoning, provider: "openai" },
+        { type: "thinking", thinking: "valid", signature: validReasoning, provider: "openai" },
+        { type: "text", text: "On it." },
+      ],
+    },
+  ];
+  for await (const _event of provider.stream(messages, new AbortController().signal)) { /* consume */ }
+
+  assert.deepEqual(requestBody.input, [
+    { role: "user", content: "Continue" },
+    { type: "reasoning", id: "rs_0a8841d4", encrypted_content: "encrypted", summary: [] },
+    { role: "assistant", content: "On it." },
   ]);
 });
 

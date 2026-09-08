@@ -61,7 +61,7 @@ Open Settings with the gear beside the selected model. The modal is the primary 
 
 - Theme and default provider/agent model selection
 - Editable API provider and per-model override lists
-- Editable agent definitions, prompts, permissions, model/thinking overrides, and compaction
+- Editable agent definitions, prompts, tool access, model/thinking overrides, and compaction
 - OpenAI Codex login and connection status
 
 The UI regenerates the TOML file, so hand-written formatting and comments are not preserved. Every save is validated and written atomically before Amber reloads its theme, provider catalog, model defaults, and agents. If startup configuration is invalid, the modal remains open until a working configuration is saved (and a default Codex provider is connected).

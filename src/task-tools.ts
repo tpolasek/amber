@@ -1,5 +1,8 @@
 import type { ToolDefinition } from "./types.js";
 import type { BackgroundTask, BackgroundTaskManager } from "./background-tasks.js";
+import { taskNotFoundError } from "./task-errors.js";
+
+const MAX_TASK_OUTPUT_WAIT_MS = 290_000;
 
 export {
   PLANNING_TASK_TOOLS,
@@ -28,13 +31,22 @@ export type {
 
 export const TASK_OUTPUT_TOOL: ToolDefinition = {
   name: "TaskOutput",
-  description: "Retrieve output and status from a background task. Use block=true to wait for completion or block=false to check its current state.",
+  description: `Retrieves output from a running or completed background shell or agent task.
+
+- TaskOutput accepts two ID namespaces: b-prefixed IDs returned by background Bash calls, and linked session IDs returned by background Agent calls.
+- Numeric-string planning task IDs belong to TaskGet and TaskUpdate and are not accepted here.
+- For background Bash, returns the command output together with retrieval status, task status, and exit-code metadata when the process has exited. This differs from foreground Bash, which returns its direct Bash result without requiring TaskOutput.
+- Background Bash output preserves stdout and stderr in the order Amber receives them.
+- Use block=true (the default) to wait for completion.
+- Use block=false for a non-blocking check of the current status.
+- timeout controls how long a blocking request waits and does not stop the task.
+- When output is truncated a <spill_file> tag reports the temp file holding the full output so you can read it with the Read tool.`,
   input_schema: {
     type: "object",
     properties: {
-      task_id: { type: "string", description: "The task ID to get output from." },
+      task_id: { type: "string", description: "A b-prefixed background Bash ID or linked background-agent session ID. Numeric planning task IDs are not accepted." },
       block: { type: "boolean", default: true, description: "Whether to wait for completion. Defaults to true." },
-      timeout: { type: "integer", minimum: 0, maximum: 600_000, default: 30_000, description: "Maximum wait time in milliseconds. Defaults to 30000." },
+      timeout: { type: "integer", minimum: 0, maximum: MAX_TASK_OUTPUT_WAIT_MS, default: 30_000, description: "Maximum wait time in milliseconds. Defaults to 30000." },
     },
     required: ["task_id"],
     additionalProperties: false,
@@ -43,12 +55,17 @@ export const TASK_OUTPUT_TOOL: ToolDefinition = {
 
 export const TASK_STOP_TOOL: ToolDefinition = {
   name: "TaskStop",
-  description: "Stop a running background task by ID.",
+  description: `Stops a running background Bash task by its ID.
+
+- TaskStop accepts only b-prefixed IDs returned by background Bash calls.
+- It does not accept numeric planning task IDs or linked background-agent session IDs. TaskOutput can inspect both background Bash and background-agent tasks, but TaskStop cannot stop agents.
+- Returns a success or failure status.
+- Use this tool to terminate a background Bash task that should no longer continue.`,
   input_schema: {
     type: "object",
     properties: {
-      task_id: { type: "string", description: "The ID of the background task to stop." },
-      shell_id: { type: "string", description: "Deprecated: use task_id instead." },
+      task_id: { type: "string", description: "The b-prefixed ID of a background Bash task to stop." },
+      shell_id: { type: "string", description: "Deprecated alias for a background Bash task ID; use task_id instead." },
     },
     additionalProperties: false,
   },
@@ -81,8 +98,8 @@ export function parseTaskOutputInput(input: Record<string, unknown>): TaskOutput
   if (typeof input.task_id !== "string" || !input.task_id.trim()) throw new Error("TaskOutput task_id is required");
   if (input.block !== undefined && typeof input.block !== "boolean") throw new Error("TaskOutput block must be a boolean");
   const timeout = input.timeout ?? 30_000;
-  if (!Number.isInteger(timeout) || (timeout as number) < 0 || (timeout as number) > 600_000) {
-    throw new Error("TaskOutput timeout must be an integer from 0 to 600000");
+  if (!Number.isInteger(timeout) || (timeout as number) < 0 || (timeout as number) > MAX_TASK_OUTPUT_WAIT_MS) {
+    throw new Error(`TaskOutput timeout must be an integer from 0 to ${MAX_TASK_OUTPUT_WAIT_MS}`);
   }
   return { taskId: input.task_id.trim(), block: input.block !== false, timeoutMs: timeout as number };
 }
@@ -115,7 +132,7 @@ export async function executeTaskOutput(
       resultText: formatAgentTaskOutputResult(agent.retrievalStatus, agent.task),
     };
   }
-  throw new Error(`No task found with ID: ${input.taskId}`);
+  throw taskNotFoundError(input.taskId);
 }
 
 interface AgentTaskRetrieval {
@@ -184,21 +201,21 @@ function formatVisibleOutput(task: BackgroundTask): string {
   const sections = [
     `status: ${task.status}`,
     ...(task.exitCode !== null ? [`exit code: ${task.exitCode}`] : []),
-    ...(task.stdout ? [`stdout:\n${task.stdout}`] : []),
-    ...(task.stderr ? [`stderr:\n${task.stderr}`] : []),
+    ...(task.combinedOutput ? [`output:\n${task.combinedOutput}`] : []),
+    ...(task.spillPath ? [`spill file: ${task.spillPath}`] : []),
   ];
   return sections.join("\n\n");
 }
 
 function formatTaskOutputResult(retrievalStatus: "success" | "timeout" | "not_ready", task: BackgroundTask): string {
-  const output = [task.stdout, task.stderr].filter(Boolean).join("\n");
   const parts = [
     `<retrieval_status>${retrievalStatus}</retrieval_status>`,
     `<task_id>${task.id}</task_id>`,
     `<task_type>${task.type}</task_type>`,
     `<status>${task.status}</status>`,
     ...(task.exitCode !== null ? [`<exit_code>${task.exitCode}</exit_code>`] : []),
-    ...(output.trim() ? [`<output>\n${output.trimEnd()}\n</output>`] : []),
+    ...(task.combinedOutput.trim() ? [`<output>\n${task.combinedOutput.trimEnd()}\n</output>`] : []),
+    ...(task.spillPath ? [`<spill_file>${task.spillPath}</spill_file>`] : []),
   ];
   return parts.join("\n\n");
 }

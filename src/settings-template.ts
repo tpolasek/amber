@@ -1,6 +1,6 @@
 import { stringify } from "smol-toml";
 
-const SHARED_AGENT_PREFIX = "You are an agent for Claude Code, Anthropic's official CLI for Claude. Given the user's message, you should use the tools available to complete the task. Complete the task fully—don't gold-plate, but don't leave it half-done.";
+const SHARED_AGENT_PREFIX = "You are a specialized agent in an Amber session. Use the available tools to complete the assigned task fully within its stated scope. Do not gold-plate the result or leave the task half-done.";
 
 const SHARED_AGENT_GUIDELINES = `Your strengths:
 - Searching for code, configurations, and patterns across large codebases
@@ -32,7 +32,7 @@ export const SETTINGS_TEMPLATE = {
   agents: [
     {
       type: "general-purpose",
-      whenToUse: "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few times use this agent to perform the search.",
+      whenToUse: "Research complex questions, explore unfamiliar parts of a codebase, or execute a substantial self-contained task. Use it when the work requires several rounds of investigation, not for a known file or a routine search.",
       systemPrompt: `${SHARED_AGENT_PREFIX} When you complete the task, respond with a concise report covering what was done and any key findings — the caller will relay this to the user, so it only needs the essentials.
 
 ${SHARED_AGENT_GUIDELINES}`,

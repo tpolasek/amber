@@ -1,14 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BackgroundTaskManager } from "../src/background-tasks.js";
+import { MAX_OUTPUT_CHARACTERS } from "../src/bash-tool.js";
 import {
   executeTaskOutput,
   executeTaskStop,
   parseTaskOutputInput,
   parseTaskStopInput,
+  TASK_OUTPUT_TOOL,
+  TASK_STOP_TOOL,
   type BackgroundAgentSource,
   type BackgroundAgentTask,
 } from "../src/task-tools.js";
@@ -39,11 +42,11 @@ function runningAgent(overrides: Partial<BackgroundAgentTask> = {}): BackgroundA
   };
 }
 
-test("background Bash returns immediately and TaskOutput waits for stdout and stderr", async () => {
+test("background Bash returns immediately and TaskOutput preserves stdout and stderr arrival order", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-task-"));
   const manager = new BackgroundTaskManager();
   const task = await manager.start("session-one", {
-    command: "sleep 0.1; printf out; printf err >&2",
+    command: "printf 'out-1\\n'; sleep 0.05; printf 'err-1\\n' >&2; sleep 0.05; printf 'out-2\\n'",
     description: "Emit task output",
     timeoutMs: 2_000,
     runInBackground: true,
@@ -61,12 +64,16 @@ test("background Bash returns immediately and TaskOutput waits for stdout and st
     taskId: task.id, block: true, timeoutMs: 2_000,
   });
   assert.match(result.output, /status: completed/);
-  assert.match(result.output, /stdout:\nout/);
-  assert.match(result.output, /stderr:\nerr/);
+  assert.match(result.output, /output:\nout-1\nerr-1\nout-2/);
+  assert.doesNotMatch(result.output, /stdout:|stderr:/);
   assert.match(result.resultText, /<retrieval_status>success<\/retrieval_status>/);
   assert.match(result.resultText, /<task_type>local_bash<\/task_type>/);
   assert.match(result.resultText, /<exit_code>0<\/exit_code>/);
-  assert.match(result.resultText, /<output>\nout\nerr\n<\/output>/);
+  assert.match(result.resultText, /<output>\nout-1\nerr-1\nout-2\n<\/output>/);
+  const completed = manager.get("session-one", task.id);
+  assert.equal(completed?.stdout, "out-1\nout-2\n");
+  assert.equal(completed?.stderr, "err-1\n");
+  assert.equal(completed?.combinedOutput, "out-1\nerr-1\nout-2\n");
 });
 
 test("TaskOutput times out without stopping a task", async () => {
@@ -132,7 +139,10 @@ test("TaskStop kills a task and task IDs cannot cross sessions", async () => {
   }, [directory]);
 
   assert.equal(manager.get("session-two", task.id), null);
-  await assert.rejects(manager.output("session-two", task.id, false, 0), /No task found/);
+  await assert.rejects(
+    manager.output("session-two", task.id, false, 0),
+    { message: `No task found with ID: ${task.id}` },
+  );
   const stopped = executeTaskStop(manager, "session-one", task.id);
   assert.match(stopped.resultText, /Successfully stopped task/);
   assert.equal(manager.get("session-one", task.id)?.status, "killed");
@@ -171,6 +181,12 @@ test("task listing includes only active tasks for the session, newest first", as
 });
 
 test("task tool parsers use Claude Code argument conventions", () => {
+  assert.match(TASK_OUTPUT_TOOL.description, /retrieval status, task status, and exit-code metadata/);
+  assert.match(TASK_OUTPUT_TOOL.description, /foreground Bash.*direct Bash result/);
+  assert.match(TASK_OUTPUT_TOOL.description, /b-prefixed IDs.*linked session IDs/);
+  assert.match(TASK_OUTPUT_TOOL.description, /Numeric-string planning task IDs.*not accepted/);
+  assert.match(TASK_STOP_TOOL.description, /accepts only b-prefixed IDs/);
+  assert.match(TASK_STOP_TOOL.description, /TaskStop cannot stop agents/);
   assert.deepEqual(parseTaskOutputInput({ task_id: "b123", block: false, timeout: 500 }), {
     taskId: "b123", block: false, timeoutMs: 500,
   });
@@ -180,6 +196,7 @@ test("task tool parsers use Claude Code argument conventions", () => {
   assert.equal(parseTaskStopInput({ task_id: "b123" }), "b123");
   assert.equal(parseTaskStopInput({ shell_id: "legacy" }), "legacy");
   assert.throws(() => parseTaskOutputInput({ task_id: "b123", timeout: -1 }), /timeout/);
+  assert.throws(() => parseTaskOutputInput({ task_id: "b123", timeout: 290_001 }), /from 0 to 290000/);
   assert.throws(() => parseTaskStopInput({}), /task_id/);
 });
 
@@ -288,10 +305,35 @@ test("background agent IDs cannot cross sessions and unknown IDs fail", async ()
   const source = agentSource("session-one", agent);
   await assert.rejects(
     executeTaskOutput(manager, source, "session-two", { taskId: agent.id, block: false, timeoutMs: 0 }),
-    /No task found with ID: girl\.desert\.grand\.6bbl8fx5/,
+    { message: "No task found with ID: girl.desert.grand.6bbl8fx5" },
   );
   await assert.rejects(
     executeTaskOutput(manager, NO_AGENTS, "session-one", { taskId: "b00000000", block: false, timeoutMs: 0 }),
-    /No task found with ID: b00000000/,
+    { message: "No task found with ID: b00000000" },
   );
+  assert.throws(
+    () => executeTaskStop(manager, "session-one", agent.id),
+    { message: "No task found with ID: girl.desert.grand.6bbl8fx5" },
+  );
+});
+
+test("spills truncated background output and exposes the spill path via TaskOutput", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-task-"));
+  const manager = new BackgroundTaskManager();
+  const task = await manager.start("session-one", {
+    command: `seq 1 ${MAX_OUTPUT_CHARACTERS + 500}`,
+    timeoutMs: 5_000,
+    runInBackground: true,
+  }, [directory]);
+  const result = await executeTaskOutput(manager, NO_AGENTS, "session-one", {
+    taskId: task.id, block: true, timeoutMs: 5_000,
+  });
+  assert.match(result.output, /spill file: /);
+  assert.match(result.resultText, /<spill_file>.*<\/spill_file>/);
+  const completed = manager.get("session-one", task.id);
+  assert.ok(completed?.spillPath, "completed task reports a spill path");
+  assert.ok(completed?.combinedOutput.includes("[output truncated]"));
+  const spilled = await readFile(completed!.spillPath!, "utf8");
+  assert.ok(spilled.length > 0);
+  await rm(completed!.spillPath!, { force: true });
 });

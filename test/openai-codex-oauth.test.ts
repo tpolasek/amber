@@ -64,6 +64,9 @@ test("browser login uses OpenAI Codex PKCE with originator=amber and persists ca
   const callback = new URL(login.redirectUri);
   callback.searchParams.set("code", "browser-code");
   callback.searchParams.set("state", authorizeUrl.searchParams.get("state")!);
+  // The callback server binds IPv4 by default, while Node 18 may resolve localhost
+  // to IPv6 without falling back. Connect to the address the harness actually bound.
+  callback.hostname = "127.0.0.1";
   const callbackResponse = await fetch(callback);
   assert.equal(callbackResponse.status, 200);
 

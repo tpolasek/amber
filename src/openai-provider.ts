@@ -419,12 +419,24 @@ function parseReasoningItems(signature: string): unknown[] {
     if (!line.startsWith(REASONING_STATE_PREFIX)) continue;
     try {
       const item = JSON.parse(line.slice(REASONING_STATE_PREFIX.length)) as unknown;
-      if (item && typeof item === "object" && !Array.isArray(item)) items.push(item);
+      // The Responses API requires reasoning item ids to begin with "rs_".
+      // Older or placeholder state may carry a UUID id (often with a synthetic
+      // encrypted_content); replaying those is rejected with a 400 and the state
+      // is unusable anyway, so drop them to keep the visible conversation intact.
+      if (item && typeof item === "object" && !Array.isArray(item)
+        && isReplayableReasoningItem(item)) {
+        items.push(item);
+      }
     } catch {
       // Ignore corrupt opaque state while retaining the visible conversation.
     }
   }
   return items;
+}
+
+function isReplayableReasoningItem(item: unknown): item is Record<string, unknown> {
+  const id = (item as Record<string, unknown>).id;
+  return typeof id === "string" && id.startsWith("rs_");
 }
 
 function mapUsage(usage: OpenAIUsage): Partial<TokenUsage> {

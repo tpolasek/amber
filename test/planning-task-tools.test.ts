@@ -9,6 +9,10 @@ import {
   parseTaskGetInput,
   parseTaskListInput,
   parseTaskUpdateInput,
+  TASK_CREATE_TOOL,
+  TASK_GET_TOOL,
+  TASK_LIST_TOOL,
+  TASK_UPDATE_TOOL,
 } from "../src/planning-task-tools.js";
 import type { Session } from "../src/types.js";
 
@@ -52,7 +56,18 @@ test("TaskCreate applies defaults and allocates ascending string IDs", () => {
   assert.equal(first.resultText, JSON.stringify(first.data));
 });
 
-test("TaskGet returns full details and a benign not-found result", () => {
+test("planning task tools document their numeric ID namespace", () => {
+  assert.match(TASK_CREATE_TOOL.description, /numeric-string IDs/);
+  assert.match(TASK_GET_TOOL.description, /accepts planning task IDs only/);
+  assert.match(TASK_LIST_TOOL.description, /numeric-string IDs/);
+  assert.match(TASK_UPDATE_TOOL.description, /accepts numeric-string planning task IDs only/);
+  assert.match(
+    (TASK_GET_TOOL.input_schema.properties as Record<string, { description?: string }>).taskId?.description ?? "",
+    /Numeric-string planning task ID/,
+  );
+});
+
+test("TaskGet returns full details and throws the standard missing-ID error", () => {
   const current = session();
   executeTaskCreate(current, parseTaskCreateInput({ subject: "Inspect task", description: "Read every field" }));
 
@@ -66,11 +81,7 @@ test("TaskGet returns full details and a benign not-found result", () => {
     blockedBy: [],
     metadata: {},
   });
-  assert.deepEqual(executeTaskGet(current, "999"), {
-    data: null,
-    output: "Task not found",
-    resultText: "Task not found",
-  });
+  assert.throws(() => executeTaskGet(current, "999"), { message: "No task found with ID: 999" });
 });
 
 test("TaskUpdate merges fields and creates reciprocal dependencies", () => {
@@ -109,6 +120,13 @@ test("TaskUpdate merges fields and creates reciprocal dependencies", () => {
   });
 });
 
+test("TaskUpdate throws the standard missing-ID error", () => {
+  assert.throws(
+    () => executeTaskUpdate(session(), parseTaskUpdateInput({ taskId: "999", status: "completed" })),
+    { message: "No task found with ID: 999" },
+  );
+});
+
 test("TaskList is ID-sorted, summarized, and excludes completed blockers", () => {
   const current = session();
   executeTaskCreate(current, parseTaskCreateInput({ subject: "First", description: "First task" }));
@@ -131,7 +149,7 @@ test("TaskUpdate deletion removes dependencies and never reuses an ID", () => {
 
   const deleted = executeTaskUpdate(current, parseTaskUpdateInput({ taskId: "1", status: "deleted" }));
   assert.equal(deleted.data?.status, "deleted");
-  assert.equal(executeTaskGet(current, "1").data, null);
+  assert.throws(() => executeTaskGet(current, "1"), { message: "No task found with ID: 1" });
   assert.deepEqual(executeTaskGet(current, "2").data?.blockedBy, []);
 
   const next = executeTaskCreate(current, parseTaskCreateInput({ subject: "Replacement", description: "New work" }));

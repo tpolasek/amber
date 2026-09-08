@@ -28,6 +28,10 @@ test("uses the Claude Code Agent wire name and core input fields", () => {
     "model",
     "run_in_background",
   ]);
+  assert.match(agentTool.description, /foreground Agent result.*one final response first/);
+  assert.match(agentTool.description, /agentId line.*<usage> block/);
+  assert.match(agentTool.description, /total_tokens, tool_uses, and duration_ms/);
+  assert.match(agentTool.description, /agentId links the persisted sub-session.*usage fields support diagnostics/);
 });
 
 test("defaults Agent calls to general-purpose and accepts code-review", () => {
@@ -50,6 +54,8 @@ test("defaults Agent calls to general-purpose and accepts code-review", () => {
   }, AGENTS).runInBackground, true);
   assert.equal(getAgentDefinition(AGENTS, "code-review").readOnly, true);
   assert.match(createAgentTool(AGENTS).description, /Tools: Bash, Glob, Grep, Read, Skill/);
+  assert.match(createAgentTool(AGENTS).description, /linked sub-session's ID.*TaskOutput/);
+  assert.match(createAgentTool(AGENTS).description, /TaskStop does not accept background-agent session IDs/);
 });
 
 test("supports custom configured agent types and defaults to the first", () => {
