@@ -16,9 +16,9 @@ export interface ComposerScreensaverOptions {
  *
  * When the prompt has been left empty and untouched for IDLE_MS, a canvas fills
  * the composer and animates balls bouncing off the composer border. A ball–ball
- * collision splits the two colliding balls plus a newly spawned third ball into
- * a pinwheel of three directions exactly 120 degrees apart, so the field grows
- * over time (up to MAX_BALLS). Once it reaches the ceiling creation stops but
+ * collision bounces the pair apart elastically and, with a SPAWN_CHANCE coin
+ * flip, also emits a fresh ball from the impact point, so the field grows over
+ * time (up to MAX_BALLS). Once it reaches the ceiling creation stops but
  * collisions continue, and a RESET_S countdown restarts the field at
  * START_BALLS with fresh random velocities and positions. Any interaction with
  * the composer hides the overlay and restarts the idle timer. Balls use the
@@ -29,10 +29,13 @@ export interface ComposerScreensaverOptions {
  * cheap at MAX_BALLS instead of the brute-force O(n^2) pair scan.
  */
 export class ComposerScreensaver {
-  private static readonly IDLE_MS = 15_000;
+  private static readonly IDLE_MS = 600_000; // 10 minutes of inactivity
   private static readonly MAX_BALLS = 1_000;
   private static readonly RESET_S = 5;
   private static readonly START_BALLS = 2;
+  // Probability that a single collision also emits a new ball; the other half
+  // of collisions just bounce the two existing balls off each other.
+  private static readonly SPAWN_CHANCE = 0.5;
   private static readonly MIN_BALL_RADIUS = 2;
   private static readonly MAX_BALL_RADIUS = 3;
   private static readonly MIN_SPEED = 45;
@@ -259,36 +262,36 @@ export class ComposerScreensaver {
     const ny = dy / dist;
     // Only act when the pair is actually approaching; once resolved and
     // flying apart they must not be re-processed or they would re-collide.
-    if ((a.vx - b.vx) * nx + (a.vy - b.vy) * ny <= 0) return;
-    // Splits the two colliding balls plus a spawned third ball into a pinwheel
-    // of three directions exactly 120 degrees apart (centered on the outward
-    // normal so the collided pair genuinely separates), while the trio flies
-    // symmetrically away from the impact point.
+    const vn = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+    if (vn <= 0) return;
     const cx = (a.x + b.x) / 2;
     const cy = (a.y + b.y) / 2;
-    const baseAngle = Math.atan2(ny, nx);
-    const outAngle = baseAngle + Math.PI;
+    // Equal-mass elastic bounce: swap the normal velocity components so the
+    // pair separates, then push the centers out of the overlap so they do not
+    // re-collide on the very next frame.
+    a.vx -= vn * nx;
+    a.vy -= vn * ny;
+    b.vx += vn * nx;
+    b.vy += vn * ny;
+    const separation = (combinedRadius - dist) / 2;
+    a.x -= nx * separation;
+    a.y -= ny * separation;
+    b.x += nx * separation;
+    b.y += ny * separation;
+    // SPAWN_CHANCE of collisions also emit one fresh ball off the side of the
+    // impact point; the rest just keep the two bouncing balls.
+    if (Math.random() >= ComposerScreensaver.SPAWN_CHANCE) return;
+    const side = Math.random() < 0.5 ? 1 : -1;
+    const tx = -ny * side;
+    const ty = nx * side;
+    const angle = Math.atan2(ty, tx);
+    const third = this.spawnBallAt(cx, cy, angle);
+    if (!third) return;
     const speed = this.ballSpeed();
-    const aAngle = outAngle;                  // a lies on -n and flies out along -n
-    const bAngle = outAngle + (2 * Math.PI / 3);
-    const thirdAngle = outAngle - (2 * Math.PI / 3);
-    a.vx = Math.cos(aAngle) * speed;
-    a.vy = Math.sin(aAngle) * speed;
-    b.vx = Math.cos(bAngle) * speed;
-    b.vy = Math.sin(bAngle) * speed;
-    const third = this.spawnBallAt(cx, cy, thirdAngle);
-    if (third) {
-      third.vx = Math.cos(thirdAngle) * speed;
-      third.vy = Math.sin(thirdAngle) * speed;
-      third.x = cx + Math.cos(thirdAngle) * third.r;
-      third.y = cy + Math.sin(thirdAngle) * third.r;
-    }
-    // Push the two colliding balls onto their rays so they start separated
-    // and moving away from the impact point.
-    a.x = cx + Math.cos(aAngle) * a.r;
-    a.y = cy + Math.sin(aAngle) * a.r;
-    b.x = cx + Math.cos(bAngle) * b.r;
-    b.y = cy + Math.sin(bAngle) * b.r;
+    third.vx = Math.cos(angle) * speed;
+    third.vy = Math.sin(angle) * speed;
+    third.x = cx + tx * (combinedRadius / 2 + third.r);
+    third.y = cy + ty * (combinedRadius / 2 + third.r);
   }
 
   private draw(): void {
