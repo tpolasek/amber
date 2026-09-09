@@ -33,14 +33,13 @@ export function createAgentTool(definitions: readonly AgentDefinition[]): ToolDe
       "Launch a new agent to handle complex, multi-step tasks autonomously.",
       "",
       `The Agent tool launches a specialized agent in a persisted Amber sub-session. Each invocation starts fresh. If subagent_type is omitted, ${defaultAgentType} is used.`,
-      "A foreground Agent result contains the agent's one final response first, followed by Amber metadata: an agentId line and a <usage> block containing total_tokens, tool_uses, and duration_ms. The agentId links the persisted sub-session, and the usage fields support diagnostics.",
+      "Agent launches always run in the background. Each launch returns immediately with the linked sub-session's ID; the agent's result is delivered as a task notification once it finishes. Use TaskOutput with that ID to check its status or wait for its result. TaskStop does not accept background-agent session IDs.",
       "",
       "Available agent types and the tools they have access to:",
       ...definitions.map((agent) => `- ${agent.type}: ${agent.whenToUse} (Tools: ${agent.readOnly ? "Bash, Glob, Grep, Read, Skill" : WRITABLE_AGENT_TOOLS})`),
       "",
       "Always include a short description (3-5 words). Brief the agent like a smart colleague who has not seen this conversation, and clearly say whether it should write code or only research.",
       "When two or more substantial tasks are independent, you may launch their agents in one response; Amber starts same-response Agent calls in parallel. Do not delegate routine work or duplicate work already assigned to an agent.",
-      "Set run_in_background to true for independent work that should continue while you proceed. The launch returns immediately with the linked sub-session's ID; use TaskOutput with that ID to check its status or wait for its result, which is also injected into your next model turn after it finishes. TaskStop does not accept background-agent session IDs.",
     ].join("\n"),
     input_schema: {
       type: "object",
@@ -56,10 +55,6 @@ export function createAgentTool(definitions: readonly AgentDefinition[]): ToolDe
           type: "string",
           enum: ["sonnet", "opus", "haiku"],
           description: "Optional model override for this agent. Takes precedence over the agent definition's model frontmatter. If omitted, uses the agent definition's model, or inherits from the parent.",
-        },
-        run_in_background: {
-          type: "boolean",
-          description: "Set to true to run this agent in the background and return immediately with its linked sub-session ID. That ID is accepted by TaskOutput, not TaskStop.",
         },
       },
       required: ["description", "prompt"],
@@ -83,15 +78,12 @@ export function parseAgentInput(input: Record<string, unknown>, definitions: rea
   if (model !== undefined && model !== "sonnet" && model !== "opus" && model !== "haiku") {
     throw new Error("Agent model must be sonnet, opus, or haiku");
   }
-  if (input.run_in_background !== undefined && typeof input.run_in_background !== "boolean") {
-    throw new Error("Agent run_in_background must be a boolean");
-  }
   return {
     description,
     prompt,
     subagentType,
     ...(model ? { model } : {}),
-    runInBackground: input.run_in_background === true,
+    runInBackground: true,
   };
 }
 

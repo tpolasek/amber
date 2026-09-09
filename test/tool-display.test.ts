@@ -86,7 +86,6 @@ test("keeps completed background agent launches labeled as background", () => {
     input: {
       description: "Independent review",
       prompt: "Review the change.",
-      run_in_background: true,
     },
     status: "complete",
     output: "Agent running in background",

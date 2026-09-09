@@ -1874,7 +1874,6 @@ async function completedBackgroundAgentNotifications(session: Session): Promise<
   const notifications: Message[] = [];
   for (const call of session.messages.flatMap((message) => message.toolCalls ?? [])) {
     if (call.name !== AGENT_TOOL_NAME
-      || call.input.run_in_background !== true
       || !call.agentSessionId
       || call.agentNotificationDeliveredAt) continue;
     const child = await store.get(call.agentSessionId);

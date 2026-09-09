@@ -26,12 +26,10 @@ test("uses the Claude Code Agent wire name and core input fields", () => {
     "prompt",
     "subagent_type",
     "model",
-    "run_in_background",
   ]);
-  assert.match(agentTool.description, /foreground Agent result.*one final response first/);
-  assert.match(agentTool.description, /agentId line.*<usage> block/);
-  assert.match(agentTool.description, /total_tokens, tool_uses, and duration_ms/);
-  assert.match(agentTool.description, /agentId links the persisted sub-session.*usage fields support diagnostics/);
+  assert.match(agentTool.description, /always run in the background/);
+  assert.match(agentTool.description, /linked sub-session's ID.*task notification/);
+  assert.match(agentTool.description, /TaskStop does not accept background-agent session IDs/);
 });
 
 test("defaults Agent calls to general-purpose and accepts code-review", () => {
@@ -39,7 +37,7 @@ test("defaults Agent calls to general-purpose and accepts code-review", () => {
     description: "Trace the flow",
     prompt: "Inspect the request flow.",
     subagentType: "general-purpose",
-    runInBackground: false,
+    runInBackground: true,
   });
   assert.equal(parseAgentInput({
     description: "Review latest diff",
@@ -50,7 +48,7 @@ test("defaults Agent calls to general-purpose and accepts code-review", () => {
     description: "Review in background",
     prompt: "Review git diff.",
     subagent_type: "code-review",
-    run_in_background: true,
+    run_in_background: false,
   }, AGENTS).runInBackground, true);
   assert.equal(getAgentDefinition(AGENTS, "code-review").readOnly, true);
   assert.match(createAgentTool(AGENTS).description, /Tools: Bash, Glob, Grep, Read, Skill/);
