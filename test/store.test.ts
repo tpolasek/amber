@@ -6,6 +6,10 @@ import { tmpdir } from "node:os";
 import { SessionStore } from "../src/store.js";
 import { BASIC_ENGLISH_2000 } from "../src/basic-english-2000.js";
 
+function userMessage(id: string, content: string): import("../src/types.js").Message {
+  return { id, role: "user", content, createdAt: new Date().toISOString(), status: "complete" };
+}
+
 test("creates, persists, and lists sessions newest first", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-store-"));
   const store = new SessionStore(directory);
@@ -157,8 +161,12 @@ test("forks a session with independent history and a provenance banner", async (
   assert.equal(original.messages[0]?.content, "Keep me");
   assert.equal(original.compaction.summary, "The user asked to be kept.");
   assert.equal(original.invokedSkills?.[0]?.content, "commit instructions");
-  assert.deepEqual((await store.get(fork.id))?.messages, [original.messages[0], banner]);
-  assert.equal((await store.get(fork.id))?.compaction?.summary, "The user asked to be kept.");
+  // The cached fork object carries the unsaved edits; a fresh store proves the
+  // persisted fork is independent of both the original and those edits.
+  const reopened = new SessionStore(directory);
+  await reopened.initialize();
+  assert.deepEqual((await reopened.get(fork.id))?.messages, [original.messages[0], banner]);
+  assert.equal((await reopened.get(fork.id))?.compaction?.summary, "The user asked to be kept.");
 });
 
 test("rejects invalid session identifiers", async () => {
@@ -319,4 +327,121 @@ test("creates a linked plan implementation session with fresh history", async ()
   assert.equal(source.messages.length, 1);
   assert.deepEqual((await store.get(implementation.id))?.messages, [banner]);
   assert.deepEqual(new Set((await store.list()).map((session) => session.id)), new Set([implementation.id, source.id]));
+});
+
+test("appends, updates, and inserts replay in order for a fresh process", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-ops-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const session = await store.create();
+
+  const user = userMessage("user-1", "Hello");
+  const assistant: import("../src/types.js").Message = { id: "assistant-1", role: "assistant", content: "", createdAt: new Date().toISOString(), status: "streaming" };
+  session.messages.push(user, assistant);
+  await store.appendMessages(session, [user, assistant]);
+
+  assistant.content = "Working on it";
+  assistant.status = "complete";
+  await store.updateMessage(session, assistant);
+
+  session.title = "Renamed";
+  await store.saveMeta(session);
+
+  const notification = { ...userMessage("notification-1", "<task-notification>done</task-notification>"), kind: "agent-notification" as const };
+  session.messages.splice(1, 0, notification); // insert before the assistant message
+  await store.insertMessages(session, assistant.id, [notification]);
+
+  const followUp = userMessage("user-2", "Thanks");
+  session.messages.push(followUp);
+  await store.appendMessages(session, [followUp]);
+
+  // A second store instance is a server restart: the log must replay exactly.
+  const restarted = new SessionStore(directory);
+  await restarted.initialize();
+  const loaded = await restarted.get(session.id);
+  assert.deepEqual(loaded?.messages.map((message) => message.id), ["user-1", "notification-1", "assistant-1", "user-2"]);
+  assert.equal(loaded?.messages[2]?.content, "Working on it");
+  assert.equal(loaded?.messages[2]?.status, "complete");
+  assert.equal(loaded?.title, "Renamed");
+  assert.deepEqual(await restarted.list().then((entries) => entries[0]?.preview), "Thanks");
+});
+
+test("keeps a bounded cache and returns the live object on repeated gets", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-cache-"));
+  const store = new SessionStore(directory, undefined, 2);
+  await store.initialize();
+  const first = await store.create();
+  const second = await store.create();
+  const third = await store.create();
+  // Creating third evicted first (the least recently used) from the cache.
+
+  assert.equal(await store.get(third.id), third);
+  const reloadedFirst = await store.get(first.id);
+  assert.notEqual(reloadedFirst, first);
+  assert.deepEqual(reloadedFirst?.messages, first.messages);
+  // The reloaded copy is now cached and stable across gets.
+  assert.equal(await store.get(first.id), reloadedFirst);
+  // Accessing first evicted second; it reloads from disk identically.
+  const reloadedSecond = await store.get(second.id);
+  assert.notEqual(reloadedSecond, second);
+  assert.equal(reloadedSecond?.id, second.id);
+});
+
+test("collapses a log swollen by streaming checkpoints", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-compaction-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const session = await store.create();
+  const user = userMessage("user-1", "Stream something long");
+  const assistant: import("../src/types.js").Message = { id: "assistant-1", role: "assistant", content: "", createdAt: new Date().toISOString(), status: "streaming" };
+  session.messages.push(user, assistant);
+  await store.appendMessages(session, [user, assistant]);
+
+  for (let index = 0; index < 600; index += 1) {
+    assistant.content = `progress ${index}`;
+    await store.updateMessage(session, assistant);
+  }
+  const logPath = join(directory, `${session.id}.log.jsonl`);
+  const compacted = (await readFile(logPath, "utf8")).trim().split("\n");
+  assert.ok(compacted.length < 100, `expected the log to be compacted, got ${compacted.length} lines`);
+
+  const restarted = new SessionStore(directory);
+  await restarted.initialize();
+  const loaded = await restarted.get(session.id);
+  assert.equal(loaded?.messages[1]?.content, "progress 599");
+});
+
+test("tolerates a torn final log line from a crash mid-append", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-torn-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const session = await store.create();
+  const user = userMessage("user-1", "Survivor");
+  session.messages.push(user);
+  await store.appendMessages(session, [user]);
+
+  const logPath = join(directory, `${session.id}.log.jsonl`);
+  await writeFile(logPath, `${await readFile(logPath, "utf8")}\n{"op":"add","message":{"id":"torn"`, "utf8");
+
+  const restarted = new SessionStore(directory);
+  await restarted.initialize();
+  const loaded = await restarted.get(session.id);
+  assert.deepEqual(loaded?.messages.map((message) => message.id), ["user-1"]);
+});
+
+test("stores metadata and messages in separate files", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-files-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const session = await store.create();
+  const user = userMessage("user-1", "Split storage");
+  session.messages.push(user);
+  await store.appendMessages(session, [user]);
+
+  const metadata = JSON.parse(await readFile(join(directory, `${session.id}.meta.json`), "utf8")) as Record<string, unknown>;
+  assert.equal("messages" in metadata, false);
+  assert.equal(metadata.messageCount, 1);
+  assert.equal(metadata.preview, "Split storage");
+  const log = await readFile(join(directory, `${session.id}.log.jsonl`), "utf8");
+  assert.match(log, /^\{"op":"add","message":\{"id":"user-1"/);
 });

@@ -1,7 +1,7 @@
-import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomInt, randomUUID } from "node:crypto";
-import type { AgentSessionSummary, Message, Session, SessionSummary, ThinkingLevel } from "./types.js";
+import type { AgentSessionSummary, Message, Session, SessionSummary } from "./types.js";
 import { BASIC_ENGLISH_2000 } from "./basic-english-2000.js";
 
 const SESSION_ID = /^(?:[a-f0-9-]{36}|[a-z]+(?:\.[a-z]+){2})(?:\.[2-9]\d*)?(?:\.[a-z0-9]{8})*$/;
@@ -12,13 +12,42 @@ const SESSION_WORDS = [...new Set(
     .filter(Boolean),
 )];
 
+// Session storage is split per session: a small `<id>.meta.json` document with
+// everything except messages (plus denormalized messageCount/preview so the
+// session list never loads message logs), and an append-only `<id>.log.jsonl`
+// of message operations. Appending one operation replaces rewriting the whole
+// document, and replaying the log replaces re-parsing it after the first load.
+const META_SUFFIX = ".meta.json";
+const LOG_SUFFIX = ".log.jsonl";
+
+/** Sessions kept fully materialized in memory; the least recently used is evicted. */
+const CACHE_LIMIT_DEFAULT = 10;
+
+type MessageLogOperation =
+  | { op: "add"; message: Message }
+  | { op: "insert"; before: string | null; messages: Message[] }
+  | { op: "update"; message: Message }
+  | { op: "reset"; messages: Message[] };
+
+interface SessionMetadata {
+  /** Session fields as stored flat in `<id>.meta.json`, without messages. */
+  session: Omit<Session, "messages">;
+  messageCount: number;
+  preview: string;
+}
+
 export class SessionStore {
   readonly #directory: string;
   readonly #planDirectory: string;
+  readonly #cacheLimit: number;
+  readonly #cache = new Map<string, Session>();
+  readonly #writeChains = new Map<string, Promise<void>>();
+  readonly #logLines = new Map<string, number>();
 
-  constructor(directory: string, planDirectory = join(dirname(directory), "plans")) {
+  constructor(directory: string, planDirectory = join(dirname(directory), "plans"), cacheLimit = CACHE_LIMIT_DEFAULT) {
     this.#directory = directory;
     this.#planDirectory = planDirectory;
+    this.#cacheLimit = cacheLimit;
   }
 
   async initialize(): Promise<void> {
@@ -40,7 +69,7 @@ export class SessionStore {
     agentType: string,
     description: string,
     model?: string,
-    thinkingLevel?: ThinkingLevel,
+    thinkingLevel?: Session["thinkingLevel"],
   ): Promise<Session> {
     let id = "";
     do id = `${parent.id}.${randomShortId()}`;
@@ -94,17 +123,21 @@ export class SessionStore {
 
   async rename(session: Session, title: string): Promise<Session> {
     session.title = title;
-    await this.save(session);
+    await this.saveMeta(session);
     return session;
   }
 
   async remove(id: string): Promise<boolean> {
     if (!SESSION_ID.test(id)) return false;
     try {
-      await unlink(this.#path(id));
+      await unlink(this.#metaPath(id));
+      await unlink(this.#logPath(id)).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      });
       await unlink(this.#planPath(id)).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== "ENOENT") throw error;
       });
+      this.#cache.delete(id);
       return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
@@ -180,92 +213,120 @@ export class SessionStore {
     return implementation;
   }
 
-  async #createWithId(id: string): Promise<Session> {
-    const now = new Date().toISOString();
-    const session: Session = {
-      id,
-      title: id,
-      createdAt: now,
-      updatedAt: now,
-      messages: [],
-    };
-    await this.save(session);
+  /**
+   * Returns the session, materialized once and kept in a bounded in-memory
+   * cache. Mutating the returned session and persisting through the
+   * incremental methods (appendMessages/updateMessage/...) never re-reads the
+   * message log; a cache hit is a plain object lookup.
+   */
+  async get(id: string): Promise<Session | null> {
+    if (!SESSION_ID.test(id)) return null;
+    const cached = this.#cache.get(id);
+    if (cached) {
+      this.#cache.delete(id);
+      this.#cache.set(id, cached);
+      return cached;
+    }
+    const metadata = await this.#readMetadata(id);
+    if (!metadata) return null;
+    const { messages, lines } = await this.#readLog(id);
+    const session: Session = { ...metadata.session, messages };
+    this.#cacheSession(session);
+    this.#logLines.set(id, lines);
+    // Log growth is bounded at write time (#appendOperations collapses a log
+    // that dwarfs the conversation), so a load never needs to rewrite one —
+    // rewriting from this snapshot could also race a queued append.
     return session;
   }
 
-  async get(id: string): Promise<Session | null> {
-    if (!SESSION_ID.test(id)) return null;
-    try {
-      const contents = await readFile(this.#path(id), "utf8");
-      return JSON.parse(contents) as Session;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    }
-  }
-
+  /** Persists metadata and rewrites the message log canonically (one add per message). */
   async save(session: Session): Promise<void> {
     if (!SESSION_ID.test(session.id)) throw new Error("Invalid session id");
+    this.#cacheSession(session);
     session.updatedAt = new Date().toISOString();
-    const path = this.#path(session.id);
-    const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(session, null, 2)}\n`, "utf8");
-    await rename(temporary, path);
+    const metaPath = this.#metaPath(session.id);
+    const metaTemporary = `${metaPath}.${process.pid}.${randomUUID()}.tmp`;
+    const meta = `${JSON.stringify(this.#metadataOf(session), null, 2)}\n`;
+    await this.#enqueue(session.id, async () => {
+      await writeFile(metaTemporary, meta, "utf8");
+      await rename(metaTemporary, metaPath);
+      await this.#rewriteLog(session);
+    });
+  }
+
+  /** Persists metadata only, for changes that do not touch messages. */
+  async saveMeta(session: Session): Promise<void> {
+    if (!SESSION_ID.test(session.id)) throw new Error("Invalid session id");
+    this.#cacheSession(session);
+    session.updatedAt = new Date().toISOString();
+    const metaPath = this.#metaPath(session.id);
+    const metaTemporary = `${metaPath}.${process.pid}.${randomUUID()}.tmp`;
+    const meta = `${JSON.stringify(this.#metadataOf(session), null, 2)}\n`;
+    await this.#enqueue(session.id, async () => {
+      await writeFile(metaTemporary, meta, "utf8");
+      await rename(metaTemporary, metaPath);
+    });
+  }
+
+  /** Appends new messages that were pushed onto the end of `session.messages`. */
+  async appendMessages(session: Session, messages: Message[]): Promise<void> {
+    if (messages.length === 0) return;
+    await this.#appendOperations(
+      session,
+      messages.map((message) => ({ op: "add", message } as const)),
+      messages.length,
+    );
+  }
+
+  /** Records messages inserted before an existing message (null appends). */
+  async insertMessages(session: Session, before: string | null, messages: Message[]): Promise<void> {
+    if (messages.length === 0) return;
+    await this.#appendOperations(session, [{ op: "insert", before, messages }], 1);
+  }
+
+  /** Records the latest state of messages that were mutated in place. */
+  async updateMessage(session: Session, message: Message): Promise<void> {
+    await this.updateMessages(session, [message]);
+  }
+
+  async updateMessages(session: Session, messages: Message[]): Promise<void> {
+    if (messages.length === 0) return;
+    await this.#appendOperations(
+      session,
+      messages.map((message) => ({ op: "update", message } as const)),
+      messages.length,
+    );
   }
 
   async list(limit = 30): Promise<SessionSummary[]> {
-    const entries = await readdir(this.#directory, { withFileTypes: true });
-    const sessions = await Promise.all(
-      entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-        .map((entry) => this.get(entry.name.slice(0, -5))),
-    );
-
-    return sessions
-      .filter((session): session is Session => session !== null)
-      .filter((session) => !session.parentSessionId)
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    const entries = await this.#readMetadataEntries();
+    return entries
+      .filter((metadata) => !metadata.session.parentSessionId)
+      .sort((left, right) => right.session.updatedAt.localeCompare(left.session.updatedAt))
       .slice(0, limit)
-      .map((session) => {
-        const visibleMessages = session.messages.filter((message) =>
-          message.kind !== "tool-result" && message.kind !== "skill" && message.kind !== "agent-notification"
-        );
-        const last = visibleMessages.at(-1);
-        return {
-          id: session.id,
-          title: session.title,
-          createdAt: session.createdAt,
-          updatedAt: session.updatedAt,
-          messageCount: visibleMessages.length,
-          preview: last?.content.slice(0, 120)
-            || (last?.images?.length ? "[image message]" : "")
-            || "No messages yet",
-        };
-      });
+      .map((metadata) => ({
+        id: metadata.session.id,
+        title: metadata.session.title,
+        createdAt: metadata.session.createdAt,
+        updatedAt: metadata.session.updatedAt,
+        messageCount: metadata.messageCount,
+        preview: metadata.preview,
+      }));
   }
 
   async listAgents(parentSessionId: string): Promise<AgentSessionSummary[]> {
     if (!SESSION_ID.test(parentSessionId)) return [];
-    const entries = await readdir(this.#directory, { withFileTypes: true });
-    const sessions = await Promise.all(
-      entries
-        .filter((entry) =>
-          entry.isFile()
-          && entry.name.startsWith(`${parentSessionId}.`)
-          && entry.name.endsWith(".json")
-        )
-        .map((entry) => this.get(entry.name.slice(0, -5))),
-    );
-
-    return sessions
-      .filter((session): session is Session =>
-        session?.parentSessionId === parentSessionId && session.agentStatus !== undefined
+    const entries = await this.#readMetadataEntries(parentSessionId);
+    return entries
+      .filter((metadata) =>
+        metadata.session.parentSessionId === parentSessionId
+        && metadata.session.agentStatus !== undefined
       )
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-      .map((session) => ({
-        id: session.id,
-        description: session.agentDescription ?? session.title,
-        status: session.agentStatus!,
+      .sort((left, right) => right.session.createdAt.localeCompare(left.session.createdAt))
+      .map((metadata) => ({
+        id: metadata.session.id,
+        description: metadata.session.agentDescription ?? metadata.session.title,
+        status: metadata.session.agentStatus!,
       }));
   }
 
@@ -280,31 +341,213 @@ export class SessionStore {
       ancestors.add(root.id);
     }
 
-    const entries = await readdir(this.#directory, { withFileTypes: true });
-    const sessions = (await Promise.all(entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-      .map((entry) => this.get(entry.name.slice(0, -5)))))
-      .filter((session): session is Session => session !== null);
+    const entries = await this.#readMetadataEntries();
     const familyIds = new Set([root.id]);
     let foundDescendant = true;
     while (foundDescendant) {
       foundDescendant = false;
-      for (const session of sessions) {
-        if (session.parentSessionId && familyIds.has(session.parentSessionId) && !familyIds.has(session.id)) {
-          familyIds.add(session.id);
+      for (const metadata of entries) {
+        const parentId = metadata.session.parentSessionId;
+        if (parentId && familyIds.has(parentId) && !familyIds.has(metadata.session.id)) {
+          familyIds.add(metadata.session.id);
           foundDescendant = true;
         }
       }
     }
-    return [root, ...sessions.filter((session) => session.id !== root.id && familyIds.has(session.id))];
+    const family: Session[] = [root];
+    for (const memberId of familyIds) {
+      if (memberId === root.id) continue;
+      const member = await this.get(memberId);
+      if (member) family.push(member);
+    }
+    return family;
   }
 
-  #path(id: string): string {
-    return join(this.#directory, `${id}.json`);
+  async #createWithId(id: string): Promise<Session> {
+    const now = new Date().toISOString();
+    const session: Session = {
+      id,
+      title: id,
+      createdAt: now,
+      updatedAt: now,
+      messages: [],
+    };
+    await this.save(session);
+    return session;
+  }
+
+  async #appendOperations(session: Session, operations: MessageLogOperation[], lineCount: number): Promise<void> {
+    if (!SESSION_ID.test(session.id)) throw new Error("Invalid session id");
+    this.#cacheSession(session);
+    session.updatedAt = new Date().toISOString();
+    const logPath = this.#logPath(session.id);
+    // Serialized synchronously so later mutations of the live session cannot
+    // tear a write that is queued behind the session's write chain.
+    const lines = `${operations.map((operation) => JSON.stringify(operation)).join("\n")}\n`;
+    const metaPath = this.#metaPath(session.id);
+    const metaTemporary = `${metaPath}.${process.pid}.${randomUUID()}.tmp`;
+    const meta = `${JSON.stringify(this.#metadataOf(session), null, 2)}\n`;
+    const id = session.id;
+    await this.#enqueue(id, async () => {
+      await appendFile(logPath, lines);
+      await writeFile(metaTemporary, meta, "utf8");
+      await rename(metaTemporary, metaPath);
+      const lines_ = (this.#logLines.get(id) ?? 0) + lineCount;
+      this.#logLines.set(id, lines_);
+      if (lines_ > this.#compactionThreshold(session.messages.length)) {
+        await this.#rewriteLog(session);
+      }
+    });
+  }
+
+  /** Serializes per-session writes so appended operations keep their order. */
+  #enqueue(id: string, write: () => Promise<void>): Promise<void> {
+    const previous = this.#writeChains.get(id) ?? Promise.resolve();
+    const chained = previous.then(write, write);
+    this.#writeChains.set(id, chained.catch(() => undefined));
+    return chained;
+  }
+
+  #compactionThreshold(messageCount: number): number {
+    return messageCount * 4 + 256;
+  }
+
+  async #rewriteLog(session: Session): Promise<void> {
+    const logPath = this.#logPath(session.id);
+    const temporary = `${logPath}.${process.pid}.${randomUUID()}.tmp`;
+    const canonical = session.messages.length
+      ? `${session.messages.map((message) => JSON.stringify({ op: "add", message })).join("\n")}\n`
+      : "";
+    await writeFile(temporary, canonical, "utf8");
+    await rename(temporary, logPath);
+    this.#logLines.set(session.id, session.messages.length);
+  }
+
+  #cacheSession(session: Session): void {
+    this.#cache.delete(session.id);
+    this.#cache.set(session.id, session);
+    while (this.#cache.size > this.#cacheLimit) {
+      const oldest = this.#cache.keys().next().value;
+      if (oldest === undefined) break;
+      this.#cache.delete(oldest);
+    }
+  }
+
+  async #readMetadata(id: string): Promise<SessionMetadata | null> {
+    let contents: string;
+    try {
+      contents = await readFile(this.#metaPath(id), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    const parsed = JSON.parse(contents) as Partial<SessionMetadata["session"]> & {
+      messageCount?: unknown;
+      preview?: unknown;
+    };
+    if (typeof parsed.id !== "string") return null;
+    const { messageCount, preview, ...session } = parsed;
+    return {
+      session: { ...session, id: parsed.id } as Omit<Session, "messages">,
+      messageCount: typeof messageCount === "number" ? messageCount : 0,
+      preview: typeof preview === "string" ? preview : "No messages yet",
+    };
+  }
+
+  async #readMetadataEntries(prefix?: string): Promise<SessionMetadata[]> {
+    const entries = await readdir(this.#directory, { withFileTypes: true });
+    const names = entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(META_SUFFIX))
+      .filter((entry) => prefix === undefined || entry.name.startsWith(`${prefix}.`))
+      .map((entry) => entry.name.slice(0, -META_SUFFIX.length))
+      .filter((id) => SESSION_ID.test(id));
+    const metadata = await Promise.all(names.map((id) => this.#readMetadata(id)));
+    return metadata.filter((entry): entry is SessionMetadata => entry !== null);
+  }
+
+  async #readLog(id: string): Promise<{ messages: Message[]; lines: number }> {
+    let contents: string;
+    try {
+      contents = await readFile(this.#logPath(id), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { messages: [], lines: 0 };
+      throw error;
+    }
+    // A Map preserves insertion order, and re-setting an existing key replaces
+    // it in place, which is exactly the update-in-place replay semantic.
+    const replayed = new Map<string, Message>();
+    let lines = 0;
+    for (const line of contents.split("\n")) {
+      if (!line) continue;
+      lines += 1;
+      let operation: MessageLogOperation;
+      try {
+        operation = JSON.parse(line) as MessageLogOperation;
+      } catch {
+        // A crash mid-append can leave a torn final line; skip it.
+        continue;
+      }
+      applyOperation(replayed, operation);
+    }
+    return { messages: [...replayed.values()], lines };
+  }
+
+  /** The flat `<id>.meta.json` document: session fields plus list summaries. */
+  #metadataOf(session: Session): Omit<Session, "messages"> & { messageCount: number; preview: string } {
+    const { messages, ...sessionFields } = session;
+    let messageCount = 0;
+    let lastVisible: Message | undefined;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (!message || message.kind === "tool-result" || message.kind === "skill" || message.kind === "agent-notification") continue;
+      messageCount += 1;
+      lastVisible ??= message;
+    }
+    return {
+      ...sessionFields,
+      messageCount,
+      preview: lastVisible?.content.slice(0, 120)
+        || (lastVisible?.images?.length ? "[image message]" : "")
+        || "No messages yet",
+    };
+  }
+
+  #metaPath(id: string): string {
+    return join(this.#directory, `${id}${META_SUFFIX}`);
+  }
+
+  #logPath(id: string): string {
+    return join(this.#directory, `${id}${LOG_SUFFIX}`);
   }
 
   #planPath(id: string): string {
     return join(this.#planDirectory, `${id}.md`);
+  }
+}
+
+function applyOperation(replayed: Map<string, Message>, operation: MessageLogOperation): void {
+  if (operation.op === "add" || operation.op === "update") {
+    replayed.set(operation.message.id, operation.message);
+    return;
+  }
+  if (operation.op === "insert") {
+    const anchor = operation.before !== null && replayed.has(operation.before) ? operation.before : null;
+    if (anchor === null) {
+      for (const message of operation.messages) replayed.set(message.id, message);
+      return;
+    }
+    const rebuilt = new Map<string, Message>();
+    for (const [id, message] of replayed) {
+      if (id === anchor) for (const inserted of operation.messages) rebuilt.set(inserted.id, inserted);
+      rebuilt.set(id, message);
+    }
+    replayed.clear();
+    for (const [id, message] of rebuilt) replayed.set(id, message);
+    return;
+  }
+  if (operation.op === "reset") {
+    replayed.clear();
+    for (const message of operation.messages) replayed.set(message.id, message);
   }
 }
 

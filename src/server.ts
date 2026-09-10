@@ -370,7 +370,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       if (directory !== workspaceRoot) session.directories = [directory];
       session.cwd = directory;
       session.addDirInitialized = true;
-      await store.save(session);
+      await store.saveMeta(session);
       return json(response, 201, { session });
     } catch (error) {
       return json(response, 400, { error: `Could not add directory: ${errorMessage(error)}` });
@@ -414,7 +414,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     const model = typeof body.model === "string" ? body.model.trim() : "";
     if (!catalog.has(model)) return json(response, 400, { error: `Model '${model}' is not configured` });
     session.model = model;
-    await store.save(session);
+    await store.saveMeta(session);
     return json(response, 200, { session });
   }
 
@@ -428,7 +428,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
     try {
       session.thinkingLevel = parseThinkingLevel((await readJson(request)).thinkingLevel);
-      await store.save(session);
+      await store.saveMeta(session);
       return json(response, 200, { session });
     } catch (error) {
       return json(response, 400, { error: errorMessage(error) });
@@ -496,7 +496,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       } else if (session.planMode) {
         session.planMode.active = false;
       }
-      await store.save(session);
+      await store.saveMeta(session);
       return json(response, 200, { session });
     } catch (error) {
       return json(response, 400, { error: errorMessage(error) });
@@ -748,7 +748,7 @@ async function runPrompt(request: IncomingMessage, response: ServerResponse): Pr
   if (currentDirectory !== workspaceRoot) session.directories = [currentDirectory];
   session.cwd = currentDirectory;
   session.addDirInitialized = true;
-  await store.save(session);
+  await store.saveMeta(session);
 
   const controller = new AbortController();
   request.once("aborted", () => controller.abort());
@@ -803,7 +803,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   const shouldAutoName = shouldAutoNameSession(session);
   let assistantMessage = createAssistantMessage(now);
   session.messages.push(userMessage, assistantMessage);
-  await store.save(session);
+  await store.appendMessages(session, [userMessage, assistantMessage]);
 
   response.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
@@ -825,12 +825,14 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
 
   let lastSnapshotAt = 0;
   let snapshotSave = Promise.resolve();
+  // Checkpoints capture only the streaming assistant message; the write chain
+  // serializes them, so a clone decouples the queued write from live mutation.
   const checkpointSession = (force = false): Promise<void> => {
-    const now = Date.now();
-    if (!force && now - lastSnapshotAt < 250) return snapshotSave;
-    lastSnapshotAt = now;
-    const snapshot = structuredClone(session);
-    snapshotSave = snapshotSave.then(() => store.save(snapshot));
+    const nowMs = Date.now();
+    if (!force && nowMs - lastSnapshotAt < 250) return snapshotSave;
+    lastSnapshotAt = nowMs;
+    const assistant = structuredClone(assistantMessage);
+    snapshotSave = snapshotSave.then(() => store.updateMessage(session, assistant));
     return snapshotSave;
   };
   let stopReason = "";
@@ -844,10 +846,23 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     for (;;) {
       stopReason = "";
       const agentNotifications = await completedBackgroundAgentNotifications(session);
-      if (agentNotifications.length > 0) {
+      if (agentNotifications.notifications.length > 0 || agentNotifications.updatedMessages.length > 0) {
         const assistantIndex = session.messages.findIndex((message) => message.id === assistantMessage.id);
-        session.messages.splice(assistantIndex < 0 ? session.messages.length : assistantIndex, 0, ...agentNotifications);
-        await store.save(session);
+        session.messages.splice(
+          assistantIndex < 0 ? session.messages.length : assistantIndex,
+          0,
+          ...agentNotifications.notifications,
+        );
+        if (agentNotifications.updatedMessages.length > 0) {
+          await store.updateMessages(session, agentNotifications.updatedMessages);
+        }
+        if (agentNotifications.notifications.length > 0) {
+          await store.insertMessages(
+            session,
+            assistantIndex < 0 ? null : assistantMessage.id,
+            agentNotifications.notifications,
+          );
+        }
       }
       const skills = await sessionSkills(session);
       const userInstructions = await sessionUserInstructions(session);
@@ -925,7 +940,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           ? `${assistantMessage.content}\n\n${interruptionText(cutOffReason)}`
           : interruptionText(cutOffReason);
       }
-      await store.save(session);
+      await store.updateMessage(session, assistantMessage);
       emit("assistant_complete", { message: assistantMessage });
       throwIfSessionAborted(controller.signal);
 
@@ -953,9 +968,12 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       if (orderedCalls.length === 0) {
         takeReadyInputs();
       }
+      // The tool batch's assistant message: agent callbacks persist call state
+      // onto this message even after later model rounds reassign the variable.
+      const batchAssistantMessage = assistantMessage;
       let agentLinkSaveChain = Promise.resolve();
       const persistAgentLinks = (): Promise<void> => {
-        const pending = agentLinkSaveChain.then(() => store.save(session));
+        const pending = agentLinkSaveChain.then(() => store.updateMessage(session, batchAssistantMessage));
         agentLinkSaveChain = pending.catch(() => undefined);
         return pending;
       };
@@ -1005,7 +1023,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               call.status = "running";
               call.startedAt = new Date(started).toISOString();
               call.statusDisplay = { text: "AWAITING APPROVAL" };
-              await store.save(session);
+              await store.updateMessage(session, assistantMessage);
               emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
               const decisionPromise = planModeApprovals.waitForDecision(
                 sessionId,
@@ -1050,7 +1068,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               call.status = "running";
               call.startedAt = new Date(started).toISOString();
               call.statusDisplay = { text: "AWAITING APPROVAL" };
-              await store.save(session);
+              await store.updateMessage(session, assistantMessage);
               emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
               const decisionPromise = planModeApprovals.waitForDecision(
                 sessionId,
@@ -1076,7 +1094,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               } else if (decision.newSession) {
                 session.planMode.active = false;
                 allowedDirectories = sessionDirectories(session);
-                session.messages.push({
+                const planBanner: Message = {
                   id: randomUUID(),
                   role: "assistant",
                   content: `Plan implementation session: ${decision.newSessionId ?? ""}`,
@@ -1084,7 +1102,9 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                   status: "complete",
                   kind: "plan-banner",
                   ...(decision.newSessionId ? { forkedSessionId: decision.newSessionId } : {}),
-                });
+                };
+                session.messages.push(planBanner);
+                await store.appendMessages(session, [planBanner]);
                 emit("plan_mode_state", { planMode: session.planMode });
                 call.status = "complete";
                 call.output = "";
@@ -1121,7 +1141,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             call.status = "running";
             call.startedAt = new Date(started).toISOString();
             call.statusDisplay = { text: "AWAITING ANSWER" };
-            await store.save(session);
+            await store.updateMessage(session, assistantMessage);
             emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
             try {
               const { questions } = parseAskUserQuestionInput(call.input);
@@ -1144,7 +1164,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           } else if (call.name === BASH_TOOL.name) {
             try {
               const input = parseBashInput(call.input);
-              await store.save(session);
+              await store.updateMessage(session, assistantMessage);
               emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
               if (input.runInBackground) {
                 const started = Date.now();
@@ -1153,7 +1173,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                 call.timeoutMs = input.timeoutMs;
                 call.statusDisplay = { text: "STARTING", appendElapsed: true };
                 emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
-                await store.save(session);
+                await store.updateMessage(session, assistantMessage);
                 const task = await backgroundTasks.start(sessionId, input, allowedDirectories, controller.signal);
                 const message = `Command running in background with ID: ${task.id}. Use TaskOutput to read its output and status.`;
                 call.status = "complete";
@@ -1173,7 +1193,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                     call.timeoutMs = input.timeoutMs;
                     call.statusDisplay = statusDisplay;
                     emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
-                    await store.save(session);
+                    await store.updateMessage(session, assistantMessage);
                   },
                   onOutput: (chunk) => {
                     call.output += chunk;
@@ -1417,7 +1437,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           messageId: assistantMessage.id,
           toolCall: resultImages?.length ? { ...call, images: resultImages } : call,
         });
-        session.messages.push({
+        const toolResultMessage: Message = {
           id: randomUUID(),
           role: "user",
           content: resultText || call.output || "Tool failed without output",
@@ -1428,9 +1448,11 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           toolError: call.status !== "complete",
           ...(resultBlocks ? { contentBlocks: resultBlocks } : {}),
           ...(resultImages?.length ? { images: resultImages } : {}),
-        });
-        session.messages.push(...pendingSkillMessages.splice(0));
-        await store.save(session);
+        };
+        const appendedSkillMessages = pendingSkillMessages.splice(0);
+        session.messages.push(toolResultMessage, ...appendedSkillMessages);
+        await store.appendMessages(session, [toolResultMessage, ...appendedSkillMessages]);
+        await store.updateMessage(session, assistantMessage);
         if (abortAfterResult) throw abortAfterResult;
         throwIfSessionAborted(controller.signal);
         takeReadyInputs();
@@ -1461,7 +1483,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             status: "complete",
           };
           session.messages.push(continuationMessage);
-          await store.save(session);
+          await store.appendMessages(session, [continuationMessage]);
           emit("user_message", { message: continuationMessage });
           autoCompactionContinuedTurn = true;
         }
@@ -1490,7 +1512,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         // overrides from the interrupted turn no longer apply.
         turnModel = undefined;
         turnEffort = undefined;
-        await store.save(session);
+        await store.appendMessages(session, [queuedUserMessage]);
         emit("user_message", { message: queuedUserMessage });
       } else if (interruption?.kind === "command") {
         if (interruption.content.trim().toLowerCase() === "/compact") {
@@ -1505,7 +1527,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         && !autoCompactionContinuedTurn) {
         if (session.parentSessionId) {
           session.agentStatus = "complete";
-          await store.save(session);
+          await store.saveMeta(session);
         }
         emit("done", { message: assistantMessage, session });
         return;
@@ -1522,7 +1544,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       if (loop) throw new Error(formatToolLoopError(loop));
       assistantMessage = createAssistantMessage();
       session.messages.push(assistantMessage);
-      await store.save(session);
+      await store.appendMessages(session, [assistantMessage]);
       emit("continuation", { assistantMessage });
     }
   } catch (error) {
@@ -1538,7 +1560,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       }
     }
     if (session.parentSessionId) session.agentStatus = manuallyStopped ? "stopped" : "error";
-    await store.save(session);
+    await store.updateMessage(session, assistantMessage);
     const message = error instanceof Error && error.name === "AbortError" ? "Session aborted" : errorMessage(error);
     if (!response.writableEnded) emit("error", { error: message, message: assistantMessage, session });
   } finally {
@@ -1793,7 +1815,7 @@ async function executeAgentCall(
           const persistedChild = await store.get(childId);
           if (persistedChild?.agentStatus === "running") {
             persistedChild.agentStatus = isManualAgentStop(error) ? "stopped" : "error";
-            await store.save(persistedChild);
+            await store.saveMeta(persistedChild);
             broadcastSessionEvent(persistedChild.id, "error", {
               error: errorMessage(error),
               session: persistedChild,
@@ -1838,7 +1860,7 @@ async function executeAgentCall(
     if (child) {
       child.agentStatus = isManualAgentStop(error) ? "stopped" : "error";
       try {
-        await store.save(child);
+        await store.saveMeta(child);
         broadcastSessionEvent(child.id, "error", { error: call.output, session: child });
       } catch { /* preserve the original agent failure */ }
     }
@@ -1870,37 +1892,46 @@ async function agentUsage(sessionId: string): Promise<{ totalTokens: number; too
   };
 }
 
-async function completedBackgroundAgentNotifications(session: Session): Promise<Message[]> {
+async function completedBackgroundAgentNotifications(session: Session): Promise<{
+  notifications: Message[];
+  updatedMessages: Message[];
+}> {
   const notifications: Message[] = [];
-  for (const call of session.messages.flatMap((message) => message.toolCalls ?? [])) {
-    if (call.name !== AGENT_TOOL_NAME
-      || !call.agentSessionId
-      || call.agentNotificationDeliveredAt) continue;
-    const child = await store.get(call.agentSessionId);
-    if (!child || (child.agentStatus !== "complete" && child.agentStatus !== "error" && child.agentStatus !== "stopped")) continue;
-    const result = agentFinalMessage(child);
-    const fallback = child.agentStatus === "stopped"
-      ? "Agent stopped by the user."
-      : child.agentStatus === "error" ? "Agent failed without a final response." : "Agent completed without a text response.";
-    const deliveredAt = new Date().toISOString();
-    call.agentNotificationDeliveredAt = deliveredAt;
-    notifications.push({
-      id: randomUUID(),
-      role: "user",
-      content: [
-        "<task-notification>",
-        `<task-id>${child.id}</task-id>`,
-        `<status>${child.agentStatus}</status>`,
-        `<summary>${child.agentDescription ?? child.title}</summary>`,
-        `<result>${result || fallback}</result>`,
-        "</task-notification>",
-      ].join("\n"),
-      createdAt: deliveredAt,
-      status: "complete",
-      kind: "agent-notification",
-    });
+  const updatedMessages: Message[] = [];
+  for (const message of session.messages) {
+    let messageUpdated = false;
+    for (const call of message.toolCalls ?? []) {
+      if (call.name !== AGENT_TOOL_NAME
+        || !call.agentSessionId
+        || call.agentNotificationDeliveredAt) continue;
+      const child = await store.get(call.agentSessionId);
+      if (!child || (child.agentStatus !== "complete" && child.agentStatus !== "error" && child.agentStatus !== "stopped")) continue;
+      const result = agentFinalMessage(child);
+      const fallback = child.agentStatus === "stopped"
+        ? "Agent stopped by the user."
+        : child.agentStatus === "error" ? "Agent failed without a final response." : "Agent completed without a text response.";
+      const deliveredAt = new Date().toISOString();
+      call.agentNotificationDeliveredAt = deliveredAt;
+      messageUpdated = true;
+      notifications.push({
+        id: randomUUID(),
+        role: "user",
+        content: [
+          "<task-notification>",
+          `<task-id>${child.id}</task-id>`,
+          `<status>${child.agentStatus}</status>`,
+          `<summary>${child.agentDescription ?? child.title}</summary>`,
+          `<result>${result || fallback}</result>`,
+          "</task-notification>",
+        ].join("\n"),
+        createdAt: deliveredAt,
+        status: "complete",
+        kind: "agent-notification",
+      });
+    }
+    if (messageUpdated) updatedMessages.push(message);
   }
-  return notifications;
+  return { notifications, updatedMessages };
 }
 
 /** Resolves background agent sub-sessions launched directly by a session. */
@@ -2065,15 +2096,16 @@ async function compactSession(
   session.compaction = compaction;
   clearReadCache(session);
   session.contextTokens = afterTokens;
-  session.messages.push({
+  const compactionBanner: Message = {
     id: randomUUID(),
     role: "assistant",
     content: formatCompactionBanner(beforeTokens, afterTokens, coveredMessageCount),
     createdAt: now,
     status: "complete",
     kind: "compact-banner",
-  });
-  await store.save(session);
+  };
+  session.messages.push(compactionBanner);
+  await store.appendMessages(session, [compactionBanner]);
 }
 
 interface CompactionRun {
@@ -2148,7 +2180,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
       }
       session.addDirInitialized = true;
       if (firstAddDir) session.cwd = directory;
-      await store.save(session);
+      await store.saveMeta(session);
       return json(response, 200, { command: "add-dir", directory, cwdChanged: firstAddDir, session });
     } catch (error) {
       return json(response, 400, { error: `Could not add directory: ${errorMessage(error)}` });
@@ -2166,7 +2198,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
         return json(response, 400, { error: `Directory is not in the project or an /add-dir root: ${directory}` });
       }
       session.cwd = directory;
-      await store.save(session);
+      await store.saveMeta(session);
       return json(response, 200, { command: "cwd", directory, session });
     } catch (error) {
       return json(response, 400, { error: `Could not change directory: ${errorMessage(error)}` });
@@ -2243,7 +2275,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
       forkedSessionId: fork.id,
     };
     session.messages.push(sourceBanner);
-    await store.save(session);
+    await store.appendMessages(session, [sourceBanner]);
     return json(response, 201, { command: "fork", session: fork, previousSessionId: session.id });
   }
   if (command === "/context") {
@@ -2278,7 +2310,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
       kind: "command",
     };
     session.messages.push(userMessage, assistantMessage);
-    await store.save(session);
+    await store.appendMessages(session, [userMessage, assistantMessage]);
     return json(response, 200, { command: "context", session });
   }
   return json(response, 400, { error: `Unknown command: ${command || "(empty)"}` });
