@@ -519,7 +519,9 @@ async function runQueuedCommandScenario(mock, amber) {
 async function runAutomaticCompactionScenario(mock, amber) {
   console.log("\n== server-inserted automatic compaction");
   mock.reset();
-  mock.delayNextPostCompactionResponse(1_500);
+  // Hold the resumed model round open long enough that the active-state and
+  // concurrency-guard checks below cannot race the turn finishing.
+  mock.delayNextPostCompactionResponse(5_000);
   const events = [];
   const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
     name: "server-inserted automatic compaction",
@@ -964,6 +966,14 @@ async function runAgentCompactionScenario(mock, amber) {
       .flatMap((message) => message.toolCalls ?? [])
       .find((call) => call.name === "Agent");
     const childId = agentCall?.agentSessionId;
+    // Agents always run in the background, so the child keeps working after
+    // the parent turn ends; wait for it to finish before asserting on it.
+    if (childId) {
+      await waitFor(async () => {
+        const child = await (await fetch(amberUrl(amber.port, `/api/sessions/${childId}`))).json();
+        return child.session?.agentStatus !== undefined && child.session.agentStatus !== "running";
+      }, 30_000, `the ${parentPrompt} child agent to finish`);
+    }
     const child = childId
       ? await (await fetch(amberUrl(amber.port, `/api/sessions/${childId}`))).json()
       : undefined;
