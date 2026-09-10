@@ -80,6 +80,11 @@ test("clears a session in place", async () => {
   assert.equal(cleared.skillTouchedPaths, undefined);
   assert.equal(cleared.skillRoots, undefined);
   assert.deepEqual((await store.get(session.id))?.messages, []);
+  // A fresh process must not resurrect the cleared history from the log.
+  const reopened = new SessionStore(directory);
+  await reopened.initialize();
+  assert.deepEqual((await reopened.get(session.id))?.messages, []);
+  assert.deepEqual(await reopened.list().then((entries) => entries[0]?.preview), "No messages yet");
 });
 
 test("renames and deletes a session", async () => {
@@ -411,7 +416,7 @@ test("collapses a log swollen by streaming checkpoints", async () => {
   assert.equal(loaded?.messages[1]?.content, "progress 599");
 });
 
-test("tolerates a torn final log line from a crash mid-append", async () => {
+test("repairs a torn final log line so the next append survives", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-store-torn-"));
   const store = new SessionStore(directory);
   await store.initialize();
@@ -420,6 +425,7 @@ test("tolerates a torn final log line from a crash mid-append", async () => {
   session.messages.push(user);
   await store.appendMessages(session, [user]);
 
+  // A crash mid-append leaves a partial final line with no trailing newline.
   const logPath = join(directory, `${session.id}.log.jsonl`);
   await writeFile(logPath, `${await readFile(logPath, "utf8")}\n{"op":"add","message":{"id":"torn"`, "utf8");
 
@@ -427,6 +433,18 @@ test("tolerates a torn final log line from a crash mid-append", async () => {
   await restarted.initialize();
   const loaded = await restarted.get(session.id);
   assert.deepEqual(loaded?.messages.map((message) => message.id), ["user-1"]);
+
+  // The follow-up message must not merge onto the torn bytes and vanish.
+  const followUp = userMessage("user-2", "After the crash");
+  loaded!.messages.push(followUp);
+  await restarted.appendMessages(loaded!, [followUp]);
+
+  const reopened = new SessionStore(directory);
+  await reopened.initialize();
+  assert.deepEqual(
+    (await reopened.get(session.id))?.messages.map((message) => message.id),
+    ["user-1", "user-2"],
+  );
 });
 
 test("stores metadata and messages in separate files", async () => {

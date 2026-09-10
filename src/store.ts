@@ -229,13 +229,20 @@ export class SessionStore {
     }
     const metadata = await this.#readMetadata(id);
     if (!metadata) return null;
-    const { messages, lines } = await this.#readLog(id);
+    const { messages, lines, torn } = await this.#readLog(id);
     const session: Session = { ...metadata.session, messages };
     this.#cacheSession(session);
     this.#logLines.set(id, lines);
     // Log growth is bounded at write time (#appendOperations collapses a log
-    // that dwarfs the conversation), so a load never needs to rewrite one —
-    // rewriting from this snapshot could also race a queued append.
+    // that dwarfs the conversation), so a load never rewrites for size. A torn
+    // tail is the exception: a crash mid-append leaves bytes without a final
+    // newline, and the next append would merge onto them and be lost. Rewrite
+    // canonically from the replayed state first. A torn tail also implies the
+    // previous process died, so no live writer with queued operations exists
+    // to race this rewrite.
+    if (torn) {
+      await this.#enqueue(id, () => this.#rewriteLog(session));
+    }
     return session;
   }
 
@@ -244,13 +251,25 @@ export class SessionStore {
     if (!SESSION_ID.test(session.id)) throw new Error("Invalid session id");
     this.#cacheSession(session);
     session.updatedAt = new Date().toISOString();
+    // Both documents are serialized from one synchronous snapshot, and the log
+    // commits first: it is the source of truth for messages, so a crash between
+    // the two renames can leave stale metadata but never metadata advertising
+    // messages the log lacks (an empty /clear resurrecting, a fork listed with
+    // messages it cannot replay).
+    const canonical = canonicalLines(session.messages);
+    const meta = `${JSON.stringify(this.#metadataOf(session), null, 2)}\n`;
+    const logPath = this.#logPath(session.id);
+    const logTemporary = `${logPath}.${process.pid}.${randomUUID()}.tmp`;
     const metaPath = this.#metaPath(session.id);
     const metaTemporary = `${metaPath}.${process.pid}.${randomUUID()}.tmp`;
-    const meta = `${JSON.stringify(this.#metadataOf(session), null, 2)}\n`;
-    await this.#enqueue(session.id, async () => {
+    const id = session.id;
+    const lineCount = session.messages.length;
+    await this.#enqueue(id, async () => {
+      await writeFile(logTemporary, canonical, "utf8");
+      await rename(logTemporary, logPath);
       await writeFile(metaTemporary, meta, "utf8");
       await rename(metaTemporary, metaPath);
-      await this.#rewriteLog(session);
+      this.#logLines.set(id, lineCount);
     });
   }
 
@@ -415,10 +434,7 @@ export class SessionStore {
   async #rewriteLog(session: Session): Promise<void> {
     const logPath = this.#logPath(session.id);
     const temporary = `${logPath}.${process.pid}.${randomUUID()}.tmp`;
-    const canonical = session.messages.length
-      ? `${session.messages.map((message) => JSON.stringify({ op: "add", message })).join("\n")}\n`
-      : "";
-    await writeFile(temporary, canonical, "utf8");
+    await writeFile(temporary, canonicalLines(session.messages), "utf8");
     await rename(temporary, logPath);
     this.#logLines.set(session.id, session.messages.length);
   }
@@ -465,31 +481,42 @@ export class SessionStore {
     return metadata.filter((entry): entry is SessionMetadata => entry !== null);
   }
 
-  async #readLog(id: string): Promise<{ messages: Message[]; lines: number }> {
+  async #readLog(id: string): Promise<{ messages: Message[]; lines: number; torn: boolean }> {
     let contents: string;
     try {
       contents = await readFile(this.#logPath(id), "utf8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { messages: [], lines: 0 };
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { messages: [], lines: 0, torn: false };
       throw error;
     }
+    // A well-formed log ends with a newline. Anything after the last newline is
+    // a write the crash interrupted; an unparseable final complete line is the
+    // same damage after a later append merged onto it.
+    const rawLines = contents.split("\n");
+    const partialTail = contents.endsWith("\n") ? "" : (rawLines.pop() ?? "");
+    let lastCompleteIndex = -1;
+    for (let index = 0; index < rawLines.length; index += 1) {
+      if (rawLines[index]) lastCompleteIndex = index;
+    }
+    let torn = partialTail !== "";
     // A Map preserves insertion order, and re-setting an existing key replaces
     // it in place, which is exactly the update-in-place replay semantic.
     const replayed = new Map<string, Message>();
     let lines = 0;
-    for (const line of contents.split("\n")) {
+    for (let index = 0; index < rawLines.length; index += 1) {
+      const line = rawLines[index];
       if (!line) continue;
-      lines += 1;
       let operation: MessageLogOperation;
       try {
         operation = JSON.parse(line) as MessageLogOperation;
       } catch {
-        // A crash mid-append can leave a torn final line; skip it.
+        if (index === lastCompleteIndex) torn = true;
         continue;
       }
       applyOperation(replayed, operation);
+      lines += 1;
     }
-    return { messages: [...replayed.values()], lines };
+    return { messages: [...replayed.values()], lines, torn };
   }
 
   /** The flat `<id>.meta.json` document: session fields plus list summaries. */
@@ -525,8 +552,14 @@ export class SessionStore {
   }
 }
 
-function applyOperation(replayed: Map<string, Message>, operation: MessageLogOperation): void {
-  if (operation.op === "add" || operation.op === "update") {
+/** The canonical log body: one add operation per message, newline-terminated. */
+function canonicalLines(messages: Message[]): string {
+  return messages.length
+    ? `${messages.map((message) => JSON.stringify({ op: "add", message })).join("\n")}\n`
+    : "";
+}
+
+function applyOperation(replayed: Map<string, Message>, operation: MessageLogOperation): void {  if (operation.op === "add" || operation.op === "update") {
     replayed.set(operation.message.id, operation.message);
     return;
   }
