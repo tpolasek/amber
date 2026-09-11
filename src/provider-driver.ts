@@ -14,6 +14,8 @@ export interface DiscoveredModel {
 export interface ProviderModelConnection extends ProviderConnection {
   model: string;
   thinkingLevel: ThinkingLevel;
+  /** Per-response output token cap sent as max_tokens/max_output_tokens. */
+  maxOutputTokens?: number;
 }
 
 export interface ProviderDriver {

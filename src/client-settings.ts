@@ -373,6 +373,10 @@ export function providerSettingsCard(name: string, provider: EditableProviderSet
       setOptionalNumber(provider, "compact_tokens", value);
       markSettingsDirty();
     }),
+    settingsNumberField("MAX OUTPUT TOKENS", provider.max_output_tokens, "32000", (value) => {
+      setOptionalNumber(provider, "max_output_tokens", value);
+      markSettingsDirty();
+    }),
   );
 
   const models = document.createElement("details");
@@ -425,6 +429,10 @@ export function modelSettingsRow(
     }),
     settingsNumberField("COMPACT TOKENS", model.compact_tokens, "Provider default", (value) => {
       setOptionalNumber(model, "compact_tokens", value);
+      markSettingsDirty();
+    }),
+    settingsNumberField("MAX OUTPUT TOKENS", model.max_output_tokens, "Provider default", (value) => {
+      setOptionalNumber(model, "max_output_tokens", value);
       markSettingsDirty();
     }),
     settingsRemoveButton("Remove model override", () => {
@@ -704,7 +712,11 @@ export function setOptionalThinking(target: EditableModelSettings, value: string
   else delete target.thinking_level;
 }
 
-export function setOptionalNumber(target: EditableModelSettings, key: "compact_tokens", value: string): void {
+export function setOptionalNumber(
+  target: EditableModelSettings,
+  key: "compact_tokens" | "max_output_tokens",
+  value: string,
+): void {
   if (value) target[key] = Number(value);
   else delete target[key];
 }

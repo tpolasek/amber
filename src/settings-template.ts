@@ -77,6 +77,7 @@ export const SETTINGS_TEMPLATE_SOURCE = `${stringify(SETTINGS_TEMPLATE).trimEnd(
 # auth_url = "https://api.openai.com"
 # default_model = "gpt-5.4"
 # thinking_level = "high"
+# max_output_tokens = 65536 # Optional per-response output cap (default 32000); raise it for reasoning models that exhaust the cap on thinking.
 
 # To use a ChatGPT Plus/Pro subscription instead of an API key:
 # [providers.openai-codex]

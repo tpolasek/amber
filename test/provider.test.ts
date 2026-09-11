@@ -110,6 +110,35 @@ test("clamps openai-only thinking levels to the anthropic effort ceiling", async
   assert.deepEqual(receivedOutputConfig, { effort: "max" });
 });
 
+test("sends a configured output token cap instead of the default", async (context) => {
+  let receivedMaxTokens = 0;
+  const gateway = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { max_tokens?: number };
+    receivedMaxTokens = body.max_tokens ?? 0;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n');
+  });
+  gateway.listen(0, "127.0.0.1");
+  await once(gateway, "listening");
+  context.after(() => gateway.close());
+  const address = gateway.address();
+  assert(address && typeof address === "object");
+
+  const provider = new AnthropicProvider({
+    authToken: "test-token",
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    model: "glm-test",
+    maxOutputTokens: 65_536,
+  });
+  for await (const _event of provider.stream([{ role: "user", content: "Hi" }], new AbortController().signal)) {
+    /* consume */
+  }
+
+  assert.equal(receivedMaxTokens, 65_536);
+});
+
 test("explicitly omits the Anthropic system prompt", async (context) => {
   let requestBody: Record<string, unknown> = {};
   const gateway = createServer(async (request, response) => {

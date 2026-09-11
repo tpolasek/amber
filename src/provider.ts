@@ -16,6 +16,7 @@ export interface AnthropicProviderOptions {
   model: string;
   baseUrl: string;
   thinkingLevel?: ThinkingLevel;
+  maxOutputTokens?: number;
 }
 
 interface AnthropicEvent {
@@ -40,6 +41,7 @@ export class AnthropicProvider implements LlmProvider {
   readonly protocol = "anthropic" as const;
   readonly mode = "live" as const;
   readonly model: string;
+  readonly maxOutputTokens: number;
   readonly #authToken: string;
   readonly #baseUrl: string;
   readonly #thinkingLevel: ThinkingLevel;
@@ -50,6 +52,7 @@ export class AnthropicProvider implements LlmProvider {
     this.model = options.model;
     this.#baseUrl = options.baseUrl.replace(/\/$/, "");
     this.#thinkingLevel = options.thinkingLevel ?? "max";
+    this.maxOutputTokens = options.maxOutputTokens ?? 32_000;
   }
 
   async *stream(messages: ProviderMessage[], signal: AbortSignal, options?: StreamOptions): AsyncGenerator<StreamEvent> {
@@ -67,7 +70,7 @@ export class AnthropicProvider implements LlmProvider {
       },
       body: JSON.stringify({
         model: this.model,
-        max_tokens: 32_000,
+        max_tokens: this.maxOutputTokens,
         stream: true,
         ...(options?.tools?.length ? { tools: options.tools } : {}),
         ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
@@ -165,6 +168,7 @@ export const anthropicDriver: ProviderDriver = {
       baseUrl: connection.baseUrl,
       model: connection.model,
       thinkingLevel: connection.thinkingLevel,
+      ...(connection.maxOutputTokens !== undefined ? { maxOutputTokens: connection.maxOutputTokens } : {}),
     });
   },
 };

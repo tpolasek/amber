@@ -18,6 +18,8 @@ export interface ChatCompletionsOptions {
   system?: string | ProviderSystemBlock[] | null;
   tools?: ToolDefinition[];
   temperature?: number;
+  /** Output token cap; counts visible output and, on reasoning models, reasoning tokens. */
+  maxTokens?: number;
   signal: AbortSignal;
 }
 
@@ -61,7 +63,7 @@ export async function* streamChatCompletions(options: ChatCompletionsOptions): A
       ],
       stream: true,
       stream_options: { include_usage: true },
-      max_tokens: 32_000,
+      max_tokens: options.maxTokens ?? 32_000,
       ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
       ...(options.tools?.length
         ? { tools: options.tools.map(toChatTool), tool_choice: "auto" as const }

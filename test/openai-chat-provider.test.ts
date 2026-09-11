@@ -63,6 +63,7 @@ test("falls back to chat completions when /v1/responses is missing and remembers
     baseUrl: gateway.url,
     model: "local-model",
     thinkingLevel: "high",
+    maxOutputTokens: 65_536,
   });
 
   const events: StreamEvent[] = [];
@@ -91,6 +92,9 @@ test("falls back to chat completions when /v1/responses is missing and remembers
   assert.equal(chatRequest.authorization, "Bearer local-key");
   assert.equal(chatRequest.body.model, "local-model");
   assert.equal(chatRequest.body.stream, true);
+  // The configured output cap must reach the fallback path too: reasoning
+  // models count reasoning against it and get cut off mid-thought otherwise.
+  assert.equal(chatRequest.body.max_tokens, 65_536);
 });
 
 test("converts provider messages and tools to the chat completions shape", async (context) => {

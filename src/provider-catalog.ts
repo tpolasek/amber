@@ -96,6 +96,7 @@ export class ProviderCatalog {
         const override = provider.models[discoveredModel.id];
         const thinkingLevel = override?.thinking_level ?? provider.thinking_level ?? driver.defaultThinkingLevel;
         const compactTokens = override?.compact_tokens ?? provider.compact_tokens;
+        const maxOutputTokens = override?.max_output_tokens ?? provider.max_output_tokens;
         const key = `${providerName}/${discoveredModel.id}`;
         models.push({
           key,
@@ -112,6 +113,7 @@ export class ProviderCatalog {
           baseUrl: provider.auth_url,
           model: discoveredModel.id,
           thinkingLevel,
+          ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
         }));
       }
     }

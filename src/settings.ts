@@ -21,6 +21,8 @@ export type AmberTheme = "dark" | "light" | "light+" | "hacker";
 export interface ModelSettings {
   thinking_level?: ThinkingLevel;
   compact_tokens?: number;
+  /** Per-response output token cap (max_tokens / max_output_tokens); defaults to 32000. */
+  max_output_tokens?: number;
 }
 
 export interface ProviderSettings extends ModelSettings {
@@ -124,6 +126,7 @@ export function settingsForEditor(settings: AmberSettings): EditableAmberSetting
         ...(defaultModel ? { default_model: defaultModel } : {}),
         ...(provider.thinking_level ? { thinking_level: provider.thinking_level } : {}),
         ...(provider.compact_tokens ? { compact_tokens: provider.compact_tokens } : {}),
+        ...(provider.max_output_tokens ? { max_output_tokens: provider.max_output_tokens } : {}),
         models: structuredClone(provider.models),
       } satisfies EditableProviderSettings];
     })),
@@ -176,6 +179,7 @@ function canonicalProviders(value: unknown): unknown {
     copyOptionalString(provider, candidate, "default_model");
     copyOptionalString(provider, candidate, "thinking_level");
     copySetting(provider, candidate, "compact_tokens");
+    copySetting(provider, candidate, "max_output_tokens");
     const models = canonicalModels(candidate.models);
     if (!isRecord(models) || Object.keys(models).length > 0) provider.models = models;
     return [name, provider];
@@ -190,6 +194,7 @@ function canonicalModels(value: unknown): unknown {
     const model: Record<string, unknown> = {};
     copyOptionalString(model, candidate, "thinking_level");
     copySetting(model, candidate, "compact_tokens");
+    copySetting(model, candidate, "max_output_tokens");
     return [name, model];
   }));
 }
@@ -335,9 +340,15 @@ function parseModelSettings(value: Record<string, unknown>, field: string): Mode
     && (!Number.isSafeInteger(compactTokens) || (compactTokens as number) <= 0)) {
     throw new Error(`${field}.compact_tokens must be a positive integer`);
   }
+  const maxOutputTokens = value.max_output_tokens;
+  if (maxOutputTokens !== undefined
+    && (!Number.isSafeInteger(maxOutputTokens) || (maxOutputTokens as number) <= 0)) {
+    throw new Error(`${field}.max_output_tokens must be a positive integer`);
+  }
   return {
     ...(isThinkingLevel(thinkingLevel) ? { thinking_level: thinkingLevel } : {}),
     ...(typeof compactTokens === "number" ? { compact_tokens: compactTokens } : {}),
+    ...(typeof maxOutputTokens === "number" ? { max_output_tokens: maxOutputTokens } : {}),
   };
 }
 

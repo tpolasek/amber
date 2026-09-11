@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ProviderCatalog } from "../src/provider-catalog.js";
+import { AnthropicProvider } from "../src/provider.js";
 import type { AmberSettings } from "../src/settings.js";
 
 test("discovers every provider model and merges configured overrides", async () => {
@@ -15,9 +16,11 @@ test("discovers every provider model and merges configured overrides", async () 
         default_model: "glm-5.3",
         thinking_level: "max",
         compact_tokens: 200_000,
+        max_output_tokens: 65_536,
         models: {
           "glm-5.3": { thinking_level: "low", compact_tokens: 100_000 },
           "custom-glm": { thinking_level: "high" },
+          "glm-flash": { max_output_tokens: 8_192 },
         },
       },
       deepseek: {
@@ -77,6 +80,15 @@ test("discovers every provider model and merges configured overrides", async () 
       compactTokens: 200_000,
     },
     {
+      key: "zai/glm-flash",
+      provider: "zai",
+      api: "anthropic",
+      model: "glm-flash",
+      displayName: "glm-flash",
+      thinkingLevel: "max",
+      compactTokens: 200_000,
+    },
+    {
       key: "deepseek/deepseek-v4",
       provider: "deepseek",
       api: "anthropic",
@@ -90,6 +102,28 @@ test("discovers every provider model and merges configured overrides", async () 
   assert.equal(requests[1]?.searchParams.get("after_id"), "glm-5.3");
   assert.equal(catalog.provider("zai/glm-5.3").model, "glm-5.3");
   assert.throws(() => catalog.provider("missing/model"), /not configured/);
+});
+
+test("resolves the output token cap per model from provider and model overrides", async () => {
+  const settings: AmberSettings = {
+    default_provider: "zai",
+    providers: {
+      zai: {
+        api: "anthropic",
+        auth_key: "zai-key",
+        auth_url: "https://zai.example.test",
+        max_output_tokens: 65_536,
+        models: { "glm-capped": { max_output_tokens: 8_192 } },
+      },
+    },
+    agents: [],
+  };
+  const fetcher: typeof fetch = async () => Response.json({ data: [{ id: "glm-main" }], has_more: false });
+
+  const catalog = await ProviderCatalog.load(settings, fetcher);
+
+  assert.equal((catalog.provider("zai/glm-main") as AnthropicProvider).maxOutputTokens, 65_536);
+  assert.equal((catalog.provider("zai/glm-capped") as AnthropicProvider).maxOutputTokens, 8_192);
 });
 
 test("uses explicit models when discovery is unavailable", async () => {

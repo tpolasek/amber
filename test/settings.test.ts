@@ -318,6 +318,53 @@ test("reports invalid settings fields", async () => {
   await assert.rejects(loadSettings(homeDirectory), /compact_tokens must be a positive integer/);
 });
 
+test("loads a per-provider output token cap with model overrides", () => {
+  const settings = parseSettingsSource(stringify({
+    providers: {
+      deepseek: {
+        api: "openai",
+        auth_key: "key",
+        auth_url: "https://api.deepseek.com",
+        max_output_tokens: 65_536,
+        models: { "deepseek-flash": { max_output_tokens: 131_072 } },
+      },
+    },
+  }), "/tmp/settings.toml");
+
+  assert.equal(settings.providers.deepseek?.max_output_tokens, 65_536);
+  assert.equal(settings.providers.deepseek?.models["deepseek-flash"]?.max_output_tokens, 131_072);
+
+  assert.throws(() => parseSettingsSource(stringify({
+    providers: {
+      deepseek: {
+        api: "openai",
+        auth_key: "key",
+        auth_url: "https://api.deepseek.com",
+        max_output_tokens: 0,
+      },
+    },
+  }), "/tmp/settings.toml"), /providers\.deepseek\.max_output_tokens must be a positive integer/);
+});
+
+test("round-trips an output token cap through the settings editor", () => {
+  const result = settingsSourceFromEditor({
+    theme: "light+",
+    providers: {
+      deepseek: {
+        api: "openai",
+        auth_key: "key",
+        auth_url: "https://api.deepseek.com",
+        max_output_tokens: 65_536,
+        models: { "deepseek-flash": { max_output_tokens: 8_192 } },
+      },
+    },
+    agents: [],
+  }, "/tmp/settings.toml");
+
+  assert.equal(result.settings.providers.deepseek?.max_output_tokens, 65_536);
+  assert.equal(result.settings.providers.deepseek?.models["deepseek-flash"]?.max_output_tokens, 8_192);
+});
+
 test("loads an optional compaction flag for each agent", async () => {
   const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
   const settingsDirectory = join(homeDirectory, ".amber");

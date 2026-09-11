@@ -68,6 +68,17 @@ The UI regenerates the TOML file, so hand-written formatting and comments are no
 
 API-key providers use either the **Anthropic Messages** or **OpenAI Responses** protocol and default to a 200,000-token compaction threshold. Both protocols discover available models from **/v1/models**. OpenAI-protocol providers prefer the Responses API and automatically fall back to **Chat Completions** for compatible local servers such as LM Studio, Ollama, vLLM, and llama.cpp. OpenAI provider/model ids may contain slashes, so OpenRouter-style backends work.
 
+Each response is capped at 32,000 output tokens. Reasoning models count their reasoning against that cap, so a model that deliberates at length can be cut off mid-thought with "Ran out of tokens." Raise the cap per provider (or per model) with **max_output_tokens**; it is sent as `max_tokens` on Anthropic Messages and Chat Completions and as `max_output_tokens` on OpenAI Responses:
+
+```toml
+[providers.deepseek]
+api = "openai"
+auth_key = "<INSERT_DEEPSEEK_KEY_HERE>"
+auth_url = "https://api.deepseek.com"
+default_model = "deepseek-flash"
+max_output_tokens = 65536 # optional; defaults to 32000
+```
+
 Agent model precedence is the per-agent model override, then the default agent model within the default agent provider, then that provider's default model. Without agent defaults, agents inherit the session model. An agent thinking-level override takes precedence over the selected model's level. Agent auto-compaction is opt-in.
 
 ### ChatGPT Plus/Pro OAuth for OpenAI Codex

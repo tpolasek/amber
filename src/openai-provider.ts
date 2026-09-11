@@ -36,6 +36,7 @@ interface OpenAIProviderOptions {
   model: string;
   baseUrl: string;
   thinkingLevel?: ThinkingLevel;
+  maxOutputTokens?: number;
 }
 
 interface OpenAIEvent {
@@ -72,6 +73,7 @@ export class OpenAIProvider implements LlmProvider {
   readonly protocol = "openai" as const;
   readonly mode = "live" as const;
   readonly model: string;
+  readonly maxOutputTokens: number;
   readonly #apiKey: string | undefined;
   readonly #authResolver: OpenAIAuthResolver | undefined;
   readonly #baseUrl: string;
@@ -87,6 +89,7 @@ export class OpenAIProvider implements LlmProvider {
     this.#baseUrl = options.baseUrl;
     this.#codex = options.codex ?? false;
     this.#thinkingLevel = options.thinkingLevel ?? "xhigh";
+    this.maxOutputTokens = options.maxOutputTokens ?? 32_000;
   }
 
   async *stream(messages: ProviderMessage[], signal: AbortSignal, options?: StreamOptions): AsyncGenerator<StreamEvent> {
@@ -98,6 +101,7 @@ export class OpenAIProvider implements LlmProvider {
       ...(options?.system !== undefined ? { system: options.system } : {}),
       ...(options?.tools !== undefined ? { tools: options.tools } : {}),
       ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+      maxTokens: this.maxOutputTokens,
       signal,
     });
     if (!this.#codex && chatOnlyBaseUrls.has(this.#baseUrl)) {
@@ -129,7 +133,7 @@ export class OpenAIProvider implements LlmProvider {
           model: this.model,
           input: toOpenAIInput(messages),
           ...(options?.system === null ? {} : { instructions: systemText(options?.system) }),
-          ...(!this.#codex ? { max_output_tokens: 32_000 } : { text: { verbosity: "low" }, tool_choice: "auto" }),
+          ...(!this.#codex ? { max_output_tokens: this.maxOutputTokens } : { text: { verbosity: "low" }, tool_choice: "auto" }),
           stream: true,
           store: false,
           parallel_tool_calls: true,
@@ -236,6 +240,7 @@ export const openAIDriver: ProviderDriver = {
       baseUrl: connection.baseUrl,
       model: connection.model,
       thinkingLevel: connection.thinkingLevel,
+      ...(connection.maxOutputTokens !== undefined ? { maxOutputTokens: connection.maxOutputTokens } : {}),
     });
   },
 };
@@ -283,6 +288,7 @@ export function createOpenAICodexDriver(authResolver: OpenAIAuthResolver): Provi
         baseUrl: connection.baseUrl,
         model: connection.model,
         thinkingLevel: connection.thinkingLevel,
+        ...(connection.maxOutputTokens !== undefined ? { maxOutputTokens: connection.maxOutputTokens } : {}),
       });
     },
   };
