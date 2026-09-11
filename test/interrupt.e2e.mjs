@@ -233,6 +233,12 @@ function planResponse(payload) {
     if (bashUses.length >= 6) return { text: "ran every command without interruption" };
     return { tools: [{ id: `bash-${bashUses.length + 1}`, command: `echo tick ${bashUses.length + 1}` }] };
   }
+  // A "PAGINATION" prompt drives enough assistant/tool rounds to push the
+  // session past one transcript page (SESSION_PAGE_SIZE).
+  if (firstText.includes("PAGINATION SCENARIO")) {
+    if (bashUses.length >= 60) return { text: "pagination run finished" };
+    return { tools: [{ id: `bash-${bashUses.length + 1}`, command: `echo pagination tick ${bashUses.length + 1}` }] };
+  }
   // A "MULTI" prompt answers with four tool calls at once; otherwise one per response.
   if (firstText.includes("MULTI")) {
     return { tools: [0, 1, 2, 3].map((i) => ({ id: `multi-${bashUses.length}-${i}`, command: "sleep 1" })) };
@@ -290,7 +296,7 @@ function startAmber(runDirectory, port, options = {}) {
     cwd: repositoryRoot,
     env: {
       ...process.env,
-      HOME: join(runDirectory, "home"),
+      HOME: options.home ?? join(runDirectory, "home"),
       DATA_DIR: join(runDirectory, `data-${port}`),
       PORT: String(port),
       HOST: "127.0.0.1",
@@ -946,6 +952,122 @@ async function runTruncatedResponseScenario(mock, amber) {
     snapshot.active === false, JSON.stringify(snapshot.active));
 }
 
+async function runPaginationScenario(mock, runDirectory, basePort) {
+  console.log("\n== session transcript pagination");
+  mock.reset();
+  // An isolated Amber instance without compact_tokens: the long run below must
+  // never auto-compact, so the message count is exactly the rounds it ran.
+  const home = join(runDirectory, "home-pagination");
+  await mkdir(join(home, ".amber"), { recursive: true });
+  await writeFile(join(home, ".amber", "settings.toml"), [
+    'theme = "dark"',
+    "default_provider = \"mock\"",
+    "",
+    "[providers.mock]",
+    'api = "anthropic"',
+    'auth_key = "test-key"',
+    `auth_url = "http://127.0.0.1:${basePort + 1}"`,
+    'default_model = "mock-model"',
+    'thinking_level = "none"',
+    "",
+  ].join("\n"));
+  const amber = await startAmberReady(runDirectory, basePort + 3, { home, suppressBrowser: true });
+  try {
+    const events = [];
+    const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
+      name: "transcript pagination",
+      path: tmpdir(),
+    });
+    const sessionId = body.session.id;
+    const streamResponse = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "PAGINATION SCENARIO run many rounds." }),
+    });
+    await readStream(streamResponse, (event, data) => events.push({ event, ...data }));
+    const done = events.find((event) => event.event === "done");
+    // Captured before any later /name command adds its own provider request.
+    const providerRequests = mock.requests();
+
+    const renderedIds = (messages) => messages
+      .filter((message) => !["tool-result", "skill", "agent-notification"].includes(message.kind))
+      .map((message) => message.id);
+
+    // The snapshot delivers only the newest page: exactly 50 rendered messages
+    // (one user prompt, 60 tool rounds, one final answer = 62), every tool
+    // result still attached to its own assistant message.
+    const snapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+    const windowIds = renderedIds(snapshot.session.messages);
+    check("snapshot returns one page of 50 rendered messages",
+      snapshot.hasMore === true && windowIds.length === 50,
+      `hasMore=${snapshot.hasMore} rendered=${windowIds.length}`);
+    const windowToolResults = snapshot.session.messages.filter((message) => message.kind === "tool-result");
+    check("snapshot page never detaches tool results from their message",
+      windowToolResults.length > 0 && windowToolResults.every((result) => snapshot.session.messages.some((message) =>
+        message.role === "assistant" && (message.toolCalls ?? []).some((call) => call.id === result.toolUseId))),
+      `toolResults=${windowToolResults.length}`);
+    check("the done event carries the same page shape",
+      done?.hasMore === true && renderedIds(done.session.messages).length === 50,
+      `hasMore=${done?.hasMore} rendered=${done ? renderedIds(done.session.messages).length : 0}`);
+
+    // Pagination is transport-only: every provider request must still carry the
+    // entire session, never a page window.
+    const roundRequests = providerRequests.filter((request) => request.tools);
+    const toolResultsOf = (request) => request.messages
+      .filter((message) => Array.isArray(message.content))
+      .flatMap((message) => message.content.filter((block) => block.type === "tool_result"))
+      .map((block) => (typeof block.content === "string" ? block.content : JSON.stringify(block.content)));
+    check("every provider request sends the entire session history",
+      roundRequests.length === 61
+      && roundRequests.every((request, index) => {
+        const ticks = toolResultsOf(request);
+        return ticks.length === index
+          && ticks.every((text, tick) => text.includes(`pagination tick ${tick + 1}`));
+      })
+      && JSON.stringify(roundRequests.at(-1).messages).includes("PAGINATION SCENARIO run many rounds."),
+      `rounds=${roundRequests.length} lastToolResults=${roundRequests.length ? toolResultsOf(roundRequests.at(-1)).length : 0}`);
+
+    // Scrolling up: the page before the window covers all remaining history.
+    const earlier = await (await fetch(
+      amberUrl(amber.port, `/api/sessions/${sessionId}/messages?before=${encodeURIComponent(windowIds[0])}`),
+    )).json();
+    const earlierIds = renderedIds(earlier.messages);
+    check("the earlier page covers the remaining 12 rendered messages",
+      earlier.hasMore === false && earlierIds.length === 12,
+      `hasMore=${earlier.hasMore} rendered=${earlierIds.length}`);
+    check("the earliest page starts at the session's first message",
+      earlier.messages[0]?.content === "PAGINATION SCENARIO run many rounds.");
+    check("the newest page ends at the run's final answer",
+      windowIds.at(-1) === done.session.messages.at(-1)?.id);
+    const combinedRendered = [...earlierIds, ...windowIds];
+    check("pages are contiguous and duplicate-free",
+      combinedRendered.length === 62 && new Set(combinedRendered).size === 62);
+    const earlierAssistants = earlier.messages.filter((message) => message.role === "assistant");
+    check("the earlier page keeps its own tool results attached",
+      earlier.messages.filter((message) => message.kind === "tool-result").every((result) =>
+        earlier.messages.some((message) =>
+          message.role === "assistant" && (message.toolCalls ?? []).some((call) => call.id === result.toolUseId)))
+      && earlierAssistants.length === 11,
+      `assistants=${earlierAssistants.length}`);
+
+    // A cursor the session does not know yields an empty page, not a wrong one.
+    const unknown = await (await fetch(
+      amberUrl(amber.port, `/api/sessions/${sessionId}/messages?before=deadbeef`),
+    )).json();
+    check("an unknown cursor returns an empty page", unknown.messages.length === 0 && unknown.hasMore === false);
+    const malformed = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages?before=OK`));
+    check("a malformed cursor is rejected", malformed.status === 400);
+
+    // Command responses are pages too, so a /name never reloads full history.
+    const named = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/commands`), { command: "/name pagination session" });
+    check("command responses page the session",
+      named.body?.session?.messages?.length === snapshot.session.messages.length && named.body?.hasMore === true,
+      `messages=${named.body?.session?.messages?.length} hasMore=${named.body?.hasMore}`);
+  } finally {
+    await amber.stop();
+  }
+}
+
 async function runAgentCompactionScenario(mock, amber) {
   console.log("\n== agent compaction opt-in");
   const runAgent = async (parentPrompt) => {
@@ -1184,6 +1306,7 @@ try {
   await runBackgroundAgentScenario(mock, amber);
   await runStoppedBackgroundAgentScenario(mock, amber);
   await runTruncatedResponseScenario(mock, amber);
+  await runPaginationScenario(mock, runDirectory, basePort);
   await runAgentCompactionScenario(mock, amber);
   await runAutomaticCompactionScenario(mock, amber);
   await runFailedCompactionDetachedObserverScenario(mock, amber);

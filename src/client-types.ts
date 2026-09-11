@@ -58,6 +58,8 @@ export type PlanModeRequest =
   | { toolUseId: string; kind: "exit"; plan: string; planFilePath: string };
 export interface SessionSnapshot {
   session: Session;
+  // Older messages exist before the returned window.
+  hasMore: boolean;
   active: boolean;
   compaction?: { generatedCharacters: number };
   questionRequest?: AskUserQuestionRequest;

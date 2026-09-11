@@ -20,6 +20,7 @@ export const elements = {
   activeAgentList: required<HTMLElement>("active-agent-list"),
   transcript: required<HTMLElement>("transcript"),
   emptyState: required<HTMLElement>("empty-state"),
+  historyStatus: required<HTMLElement>("history-status"),
   composer: required<HTMLFormElement>("composer"),
   composerShell: required<HTMLElement>("composer-shell"),
   commandMenu: required<HTMLElement>("command-menu"),

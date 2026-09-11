@@ -15,6 +15,12 @@ import {
 } from "./client-formatters.js";
 import { api, notify, readEventStream, requiredWithin, responseError } from "./client-api.js";
 import { markdown } from "./client-markdown.js";
+import {
+  applySessionPage,
+  isRenderedMessage,
+  resetSessionWindow,
+  sessionWindow,
+} from "./client-session-window.js";
 import { elements, state } from "./client-state.js";
 import {
   effectiveModelKey,
@@ -170,6 +176,8 @@ let pendingImages: PendingImage[] = [];
 
 const ESC_ABORT_WINDOW_MS = 500;
 let lastEscapeForAbortAt = 0;
+
+const HISTORY_LOAD_TRIGGER_PX = 100;
 
 // Deferred until the current response finishes (or immediately when it already
 // has): the decision response and the end of the run's event stream race.
@@ -327,6 +335,9 @@ function wireEvents(): void {
     // scrolls and layout growth (loaded diffs, anchoring) must stay snapped.
     if (scrollHeight - scrollTop - clientHeight <= STREAMING_THINKING_BOTTOM_THRESHOLD_PX) userScrollUpIntent = false;
     transcriptScrollPin.update(scrollTop, clientHeight, scrollHeight, scrolledUp && userScrollUpIntent);
+    // Near the top: pull the previous page of history into the window. The
+    // loader compensates the scroll position for everything it prepends.
+    if (scrollTop <= HISTORY_LOAD_TRIGGER_PX) void loadEarlierSessionMessages();
   }, { passive: true });
   elements.transcript.addEventListener("wheel", (event) => {
     userScrollUpIntent = event.deltaY < 0;
@@ -463,6 +474,8 @@ function wireEvents(): void {
 function openLandingDialog(): void {
   if (state.streaming) return;
   state.session = null;
+  resetSessionWindow(false);
+  renderHistoryStatus();
   syncAgentSessionsForCurrentSession();
   renderModelStatus();
   renderPlanMode();
@@ -627,6 +640,7 @@ async function submitNewSession(): Promise<void> {
       await loadSessionList();
     } else {
       state.session = session;
+      resetSessionWindow(false);
       history[newSessionReplace ? "replaceState" : "pushState"]({}, "", `/s/${session.id}`);
       renderSession();
       await loadSessionList();
@@ -646,12 +660,69 @@ async function loadSession(id: string): Promise<void> {
   const snapshot = await api<SessionSnapshot>(`/api/sessions/${id}`);
   decorateStreamingMessage(snapshot);
   state.session = snapshot.session;
+  resetSessionWindow(snapshot.hasMore);
   if (!snapshot.session.parentSessionId) setStreaming(snapshot.active);
   syncPendingInteraction(snapshot);
   renderSession();
   syncCompactionProgress(snapshot);
   renderSessionList();
   document.body.classList.remove("sidebar-open");
+}
+
+async function loadEarlierSessionMessages(): Promise<void> {
+  const session = state.session;
+  const beforeId = session?.messages[0]?.id;
+  if (!session || !beforeId || sessionWindow.loading || !sessionWindow.hasMore) return;
+  sessionWindow.loading = true;
+  renderHistoryStatus();
+  try {
+    const query = new URLSearchParams({ before: beforeId });
+    const result = await api<{ messages: Message[]; hasMore: boolean }>(
+      `/api/sessions/${session.id}/messages?${query}`,
+    );
+    if (state.session?.id !== session.id || state.session.messages[0]?.id !== beforeId) return;
+    sessionWindow.hasMore = result.hasMore;
+    prependSessionMessages(result.messages);
+  } catch (error) {
+    if (state.session?.id === session.id) notify(messageFrom(error));
+  } finally {
+    if (state.session?.id === session.id) {
+      sessionWindow.loading = false;
+      renderHistoryStatus();
+    }
+  }
+}
+
+function prependSessionMessages(messages: Message[]): void {
+  const session = state.session;
+  if (!session || messages.length === 0) return;
+  const scroller = elements.transcript;
+  const previousScrollHeight = scroller.scrollHeight;
+  const previousScrollTop = scroller.scrollTop;
+  session.messages.unshift(...messages);
+  const firstRendered = scroller.querySelector<HTMLElement>(".message");
+  for (const message of messages) {
+    if (!isRenderedMessage(message)) continue;
+    appendMessage(message, firstRendered);
+  }
+  // Compensate for the prepended height so the viewport stays put.
+  scroller.scrollTop = previousScrollTop + (scroller.scrollHeight - previousScrollHeight);
+  elements.emptyState.hidden = true;
+}
+
+function renderHistoryStatus(): void {
+  const status = elements.historyStatus;
+  const messages = state.session?.messages ?? [];
+  if (!state.session || messages.length === 0) {
+    status.hidden = true;
+    return;
+  }
+  status.hidden = false;
+  status.textContent = sessionWindow.loading
+    ? "LOADING EARLIER MESSAGES…"
+    : sessionWindow.hasMore
+      ? "▲ SCROLL TO THE TOP FOR EARLIER MESSAGES"
+      : "BEGINNING OF SESSION";
 }
 
 function syncSessionRunUpdates(): void {
@@ -873,19 +944,21 @@ function applySessionEvent(context: SessionStreamContext, event: string, data: u
     const snapshot = data as SessionSnapshot;
     const wasStreaming = state.streaming;
     decorateStreamingMessage(snapshot);
-    context.session = snapshot.session;
+    const merged = applySessionPage(state.session, snapshot.session, snapshot.hasMore);
+    context.session = merged.session;
     if (!snapshot.session.parentSessionId) setStreaming(snapshot.active);
     syncPendingInteraction(snapshot);
-    updateRenderedSession(snapshot.session);
+    updateRenderedSession(merged.session);
     syncCompactionProgress(snapshot);
-    setStreamAssistant(context, createSessionStreamContext(snapshot.session).assistantMessage);
+    setStreamAssistant(context, createSessionStreamContext(merged.session).assistantMessage);
     if (!snapshot.session.parentSessionId && wasStreaming && !snapshot.active) sendQueuedMessage(snapshot.session.id);
   } else if (event === "start") {
-    const payload = data as { session?: Session; userMessage: Message; assistantMessage: Message };
+    const payload = data as { session?: Session; hasMore?: boolean; userMessage: Message; assistantMessage: Message };
     if (payload.session) {
-      context.session = payload.session;
-      updateRenderedSession(payload.session);
-      const streamedAssistant = payload.session.messages.find((message) => message.id === payload.assistantMessage.id)
+      const merged = applySessionPage(context.session, payload.session, payload.hasMore ?? false);
+      context.session = merged.session;
+      updateRenderedSession(merged.session);
+      const streamedAssistant = merged.session.messages.find((message) => message.id === payload.assistantMessage.id)
         ?? payload.assistantMessage;
       setStreamAssistant(context, streamedAssistant);
       elements.emptyState.hidden = true;
@@ -931,11 +1004,12 @@ function applySessionEvent(context: SessionStreamContext, event: string, data: u
     updateCompactProgress(compactProgress, (data as { generatedCharacters: number }).generatedCharacters);
   } else if (event === "compaction_complete") {
     compactProgress = null;
-    const session = (data as { session: Session }).session;
-    context.session = session;
-    updateRenderedSession(session);
+    const payload = data as { session: Session; hasMore?: boolean };
+    const merged = applySessionPage(context.session, payload.session, payload.hasMore ?? false);
+    context.session = merged.session;
+    updateRenderedSession(merged.session);
     renderContextMeter();
-    consumeQueuedManualCompaction(session.id);
+    consumeQueuedManualCompaction(merged.session.id);
   } else if (event === "compaction_error") {
     if (compactProgress) {
       removeCompactProgress(compactProgress, context.session);
@@ -974,7 +1048,9 @@ function applySessionEvent(context: SessionStreamContext, event: string, data: u
     context.session.title = (data as { title: string }).title;
     renderHeader();
   } else if (event === "done") {
-    const session = (data as { session: Session }).session;
+    const payload = data as { session: Session; hasMore?: boolean };
+    const merged = applySessionPage(context.session, payload.session, payload.hasMore ?? false);
+    const session = merged.session;
     context.session = session;
     if (!session.parentSessionId && state.controller === null) setStreaming(false);
     updateRenderedSession(session);
@@ -986,11 +1062,12 @@ function applySessionEvent(context: SessionStreamContext, event: string, data: u
       else sendQueuedMessage(session.id);
     }
   } else if (event === "error") {
-    const payload = data as { error: string; message?: Message; session?: Session };
+    const payload = data as { error: string; message?: Message; session?: Session; hasMore?: boolean };
     if (payload.session) {
-      context.session = payload.session;
+      const merged = applySessionPage(context.session, payload.session, payload.hasMore ?? false);
+      context.session = merged.session;
       if (!payload.session.parentSessionId && state.controller === null) setStreaming(false);
-      updateRenderedSession(payload.session);
+      updateRenderedSession(merged.session);
     } else if (payload.message) {
       const index = context.session.messages.findIndex((message) => message.id === payload.message!.id);
       if (index >= 0) context.session.messages[index] = payload.message;
@@ -1282,11 +1359,11 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
   if (clearComposer) clearPrompt();
   if (!duringResponse) setBusy(true);
   try {
-    const result = await api<{ command: "add-dir" | "cwd" | "context" | "clear" | "compact" | "fork" | "name" | "tasks"; session: Session; directory?: string; cwdChanged?: boolean; previousSessionId?: string; tasks?: BackgroundTask[] }>(
+    const result = await api<{ command: "add-dir" | "cwd" | "context" | "clear" | "compact" | "fork" | "name" | "tasks"; session: Session; hasMore: boolean; directory?: string; cwdChanged?: boolean; previousSessionId?: string; tasks?: BackgroundTask[] }>(
       `/api/sessions/${session.id}/commands`,
       { method: "POST", body: JSON.stringify({ command }) },
     );
-    state.session = result.session;
+    state.session = applySessionPage(state.session, result.session, result.hasMore).session;
     if (result.command === "add-dir") {
       notify(`${result.cwdChanged ? "Directory added and CWD changed" : "Directory added"} · ${result.directory}`);
     } else if (result.command === "cwd") {
@@ -1323,11 +1400,11 @@ async function runCompactCommand(command: string, clearComposer = true): Promise
   syncSessionRunUpdates();
 
   try {
-    const result = await api<{ command: "compact"; session: Session }>(`/api/sessions/${session.id}/commands`, {
+    const result = await api<{ command: "compact"; session: Session; hasMore: boolean }>(`/api/sessions/${session.id}/commands`, {
       method: "POST",
       body: JSON.stringify({ command }),
     });
-    state.session = result.session;
+    state.session = applySessionPage(state.session, result.session, result.hasMore).session;
     renderSession();
     notify("Context compacted · full history retained");
   } catch (error) {
@@ -1355,6 +1432,7 @@ function renderSession(): void {
   if (!session) {
     renderedTranscriptSessionId = null;
     transcriptScrollPin.reset();
+    renderHistoryStatus();
     return;
   }
   if (!sameSession) {
@@ -1363,7 +1441,7 @@ function renderSession(): void {
   }
   elements.emptyState.hidden = session.messages.length > 0;
   for (const message of session.messages) {
-    if (message.kind !== "tool-result" && message.kind !== "skill" && message.kind !== "agent-notification") {
+    if (isRenderedMessage(message)) {
       appendMessage(message);
     }
   }
@@ -1376,6 +1454,7 @@ function renderSession(): void {
   syncAgentSessionsForCurrentSession();
   renderContextMeter();
   renderQueuedMessage();
+  renderHistoryStatus();
   syncSessionRunUpdates();
   if (sameSession && !wasFollowingBottom) elements.transcript.scrollTop = previousScrollTop;
   else transcriptScrollPin.scrollToBottom(elements.transcript);
@@ -1391,9 +1470,7 @@ function updateRenderedSession(session: Session): void {
   const previousScrollTop = elements.transcript.scrollTop;
   const wasFollowingBottom = transcriptScrollPin.shouldFollowBottom();
   state.session = session;
-  const visibleMessages = session.messages.filter((message) =>
-    message.kind !== "tool-result" && message.kind !== "skill" && message.kind !== "agent-notification"
-  );
+  const visibleMessages = session.messages.filter(isRenderedMessage);
   const visibleIds = new Set(visibleMessages.map((message) => message.id));
   elements.transcript.querySelectorAll<HTMLElement>(".message").forEach((element) => {
     if (element.dataset.messageId && visibleIds.has(element.dataset.messageId)) return;
@@ -1429,6 +1506,7 @@ function updateRenderedSession(session: Session): void {
   syncAgentSessionsForCurrentSession();
   renderContextMeter();
   renderQueuedMessage();
+  renderHistoryStatus();
   syncSessionRunUpdates();
   if (wasFollowingBottom) transcriptScrollPin.scrollToBottom(elements.transcript);
   else elements.transcript.scrollTop = previousScrollTop;
@@ -1439,11 +1517,11 @@ async function changePlanMode(active: boolean): Promise<void> {
   if (!session || session.parentSessionId || state.streaming) return renderPlanMode();
   setBusy(true);
   try {
-    const result = await api<{ session: Session }>(`/api/sessions/${session.id}/plan-mode`, {
+    const result = await api<{ session: Session; hasMore: boolean }>(`/api/sessions/${session.id}/plan-mode`, {
       method: "POST",
       body: JSON.stringify({ active }),
     });
-    state.session = result.session;
+    state.session = applySessionPage(state.session, result.session, result.hasMore).session;
     renderPlanMode();
     await loadSessionList();
     notify(active ? "Plan mode enabled" : "Normal mode enabled");
@@ -1878,7 +1956,7 @@ async function refreshCurrentSession(): Promise<boolean> {
     const snapshot = await api<SessionSnapshot>(`/api/sessions/${state.session.id}`);
     decorateStreamingMessage(snapshot);
     syncPendingInteraction(snapshot);
-    updateRenderedSession(snapshot.session);
+    updateRenderedSession(applySessionPage(state.session, snapshot.session, snapshot.hasMore).session);
     syncCompactionProgress(snapshot);
     return snapshot.active;
   } catch {

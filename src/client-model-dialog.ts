@@ -7,6 +7,7 @@ import {
   setBusy,
 } from "./client-chrome.js";
 import { messageFrom } from "./client-formatters.js";
+import { applySessionPage } from "./client-session-window.js";
 import { elements, state } from "./client-state.js";
 import type { AvailableModel, Session } from "./client-types.js";
 import { nextThinkingLevel } from "./thinking-level.js";
@@ -91,11 +92,11 @@ export async function selectModel(model: AvailableModel): Promise<void> {
   if (state.config && effectiveModelKey(session, state.config) === model.key) return closeModelDialog();
   setBusy(true);
   try {
-    const result = await api<{ session: Session }>(`/api/sessions/${session.id}/model`, {
+    const result = await api<{ session: Session; hasMore: boolean }>(`/api/sessions/${session.id}/model`, {
       method: "POST",
       body: JSON.stringify({ model: model.key }),
     });
-    state.session = result.session;
+    state.session = applySessionPage(state.session, result.session, result.hasMore).session;
     renderHeader();
     renderContextMeter();
     closeModelDialog();
@@ -116,11 +117,11 @@ export async function cycleThinkingLevel(): Promise<void> {
   const thinkingLevel = nextThinkingLevel(effectiveThinkingLevel(session, config));
   setBusy(true);
   try {
-    const result = await api<{ session: Session }>(`/api/sessions/${session.id}/thinking-level`, {
+    const result = await api<{ session: Session; hasMore: boolean }>(`/api/sessions/${session.id}/thinking-level`, {
       method: "POST",
       body: JSON.stringify({ thinkingLevel }),
     });
-    state.session = result.session;
+    state.session = applySessionPage(state.session, result.session, result.hasMore).session;
     renderHeader();
     notify(`Thinking level · ${thinkingLevel}`);
   } catch (error) {

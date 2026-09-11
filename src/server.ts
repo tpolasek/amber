@@ -66,6 +66,7 @@ import {
 } from "./agent-tool.js";
 import { ActiveSessionRuns, abortSessionOperations } from "./session-aborts.js";
 import { SessionInputPriorityQueue, type QueuedSessionInput } from "./session-queue.js";
+import { pageSessionMessages, paginateSession } from "./session-pagination.js";
 import {
   ASK_USER_QUESTION_TOOL_NAME,
   AskUserQuestionManager,
@@ -167,6 +168,8 @@ const planModeApprovals = new PlanModeApprovalManager();
 const agentRunToken = randomUUID();
 const AUTO_COMPACTION_CONTINUE_MESSAGE = "We have just compacted the session, continue your work.";
 const SESSION_PATH_ID = "([a-z0-9.-]+)";
+/** Stored message ids: UUIDs and 8-character short ids. */
+const MESSAGE_ID = /^(?:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}|[a-z0-9]{8})$/;
 const sessionEventSubscribers = new Map<string, Set<ServerResponse>>();
 
 await reloadSettingsFromDisk();
@@ -371,7 +374,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       session.cwd = directory;
       session.addDirInitialized = true;
       await store.saveMeta(session);
-      return json(response, 201, { session });
+      return json(response, 201, pagedSessionPayload(session));
     } catch (error) {
       return json(response, 400, { error: `Could not add directory: ${errorMessage(error)}` });
     }
@@ -415,7 +418,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     if (!catalog.has(model)) return json(response, 400, { error: `Model '${model}' is not configured` });
     session.model = model;
     await store.saveMeta(session);
-    return json(response, 200, { session });
+    return json(response, 200, pagedSessionPayload(session));
   }
 
   const sessionThinkingLevelMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/thinking-level$`));
@@ -429,7 +432,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     try {
       session.thinkingLevel = parseThinkingLevel((await readJson(request)).thinkingLevel);
       await store.saveMeta(session);
-      return json(response, 200, { session });
+      return json(response, 200, pagedSessionPayload(session));
     } catch (error) {
       return json(response, 400, { error: errorMessage(error) });
     }
@@ -497,13 +500,23 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
         session.planMode.active = false;
       }
       await store.saveMeta(session);
-      return json(response, 200, { session });
+      return json(response, 200, pagedSessionPayload(session));
     } catch (error) {
       return json(response, 400, { error: errorMessage(error) });
     }
   }
 
   const messageMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/messages$`));
+  if (method === "GET" && messageMatch?.[1]) {
+    const session = activeSessions.session(messageMatch[1]) ?? await store.get(messageMatch[1]);
+    if (!session) return json(response, 404, { error: "Session not found" });
+    const before = url.searchParams.get("before") ?? null;
+    if (before !== null && !MESSAGE_ID.test(before)) {
+      return json(response, 400, { error: "Invalid before message id" });
+    }
+    const page = pageSessionMessages(session.messages, before);
+    return json(response, 200, { messages: page.messages, hasMore: page.hasMore });
+  }
   if (method === "POST" && messageMatch?.[1]) {
     return streamMessage(request, response, messageMatch[1]);
   }
@@ -815,7 +828,10 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   activeSessions.register(sessionId, session.parentSessionId, controller, session);
   interruptibleSessions.add(sessionId);
   const emit = (event: string, data: unknown) => emitSessionEvent(sessionId, response, event, data);
-  emit("start", { session, userMessage, assistantMessage });
+  {
+    const page = paginateSession(session);
+    emit("start", { session: page.session, hasMore: page.hasMore, userMessage, assistantMessage });
+  }
   const onAutomaticName = (title: string) => {
     if (!response.destroyed && !response.writableEnded) emit("session_named", { title });
   };
@@ -1518,7 +1534,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         if (interruption.content.trim().toLowerCase() === "/compact") {
           await startSessionCompaction(session, emit, false).completion;
         }
-        emit("done", { message: assistantMessage, session });
+        emit("done", { message: assistantMessage, ...pagedSessionPayload(session) });
         return;
       }
 
@@ -1529,7 +1545,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           session.agentStatus = "complete";
           await store.saveMeta(session);
         }
-        emit("done", { message: assistantMessage, session });
+        emit("done", { message: assistantMessage, ...pagedSessionPayload(session) });
         return;
       }
 
@@ -1562,7 +1578,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     if (session.parentSessionId) session.agentStatus = manuallyStopped ? "stopped" : "error";
     await store.updateMessage(session, assistantMessage);
     const message = error instanceof Error && error.name === "AbortError" ? "Session aborted" : errorMessage(error);
-    if (!response.writableEnded) emit("error", { error: message, message: assistantMessage, session });
+    if (!response.writableEnded) emit("error", { error: message, message: assistantMessage, ...pagedSessionPayload(session) });
   } finally {
     automaticNameRuns.get(sessionId)?.listeners.delete(onAutomaticName);
     // Anything still queued was never injected; the client dispatches it once
@@ -1818,7 +1834,7 @@ async function executeAgentCall(
             await store.saveMeta(persistedChild);
             broadcastSessionEvent(persistedChild.id, "error", {
               error: errorMessage(error),
-              session: persistedChild,
+              ...pagedSessionPayload(persistedChild),
             });
           }
         } catch (persistError) {
@@ -1861,7 +1877,7 @@ async function executeAgentCall(
       child.agentStatus = isManualAgentStop(error) ? "stopped" : "error";
       try {
         await store.saveMeta(child);
-        broadcastSessionEvent(child.id, "error", { error: call.output, session: child });
+        broadcastSessionEvent(child.id, "error", { error: call.output, ...pagedSessionPayload(child) });
       } catch { /* preserve the original agent failure */ }
     }
     try {
@@ -2141,7 +2157,7 @@ function startSessionCompaction(
         run.progress.generatedCharacters = generatedCharacters;
         emit("compaction_progress", { generatedCharacters });
       });
-      emit("compaction_complete", { session });
+      emit("compaction_complete", pagedSessionPayload(session));
       return { compacted: true };
     } catch (error) {
       const error_ = errorMessage(error);
@@ -2181,7 +2197,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
       session.addDirInitialized = true;
       if (firstAddDir) session.cwd = directory;
       await store.saveMeta(session);
-      return json(response, 200, { command: "add-dir", directory, cwdChanged: firstAddDir, session });
+      return json(response, 200, { command: "add-dir", directory, cwdChanged: firstAddDir, ...pagedSessionPayload(session) });
     } catch (error) {
       return json(response, 400, { error: `Could not add directory: ${errorMessage(error)}` });
     }
@@ -2189,7 +2205,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
 
   if (command === "/cwd") {
     const currentDirectory = sessionWorkingDirectory(session);
-    if (!argument) return json(response, 200, { command: "cwd", directory: currentDirectory, session });
+    if (!argument) return json(response, 200, { command: "cwd", directory: currentDirectory, ...pagedSessionPayload(session) });
     try {
       const expanded = argument === "~" ? homedir() : argument.startsWith("~/") ? join(homedir(), argument.slice(2)) : argument;
       const directory = await realpath(resolve(currentDirectory, expanded));
@@ -2199,7 +2215,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
       }
       session.cwd = directory;
       await store.saveMeta(session);
-      return json(response, 200, { command: "cwd", directory, session });
+      return json(response, 200, { command: "cwd", directory, ...pagedSessionPayload(session) });
     } catch (error) {
       return json(response, 400, { error: `Could not change directory: ${errorMessage(error)}` });
     }
@@ -2210,7 +2226,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     if (argument) {
       const title = argument.replace(/\s+/g, " ").trim();
       if (title.length > 80) return json(response, 400, { error: "Session names must be 80 characters or fewer" });
-      return json(response, 200, { command: "name", session: await store.rename(session, title) });
+      return json(response, 200, { command: "name", ...pagedSessionPayload(await store.rename(session, title)) });
     }
 
     const controller = new AbortController();
@@ -2218,7 +2234,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     activeSessions.register(sessionId, undefined, controller, session);
     try {
       const title = await generateSessionTitle(providerForSession(session), session.messages, controller.signal, session.compaction);
-      return json(response, 200, { command: "name", session: await store.rename(session, title) });
+      return json(response, 200, { command: "name", ...pagedSessionPayload(await store.rename(session, title)) });
     } catch (error) {
       return json(response, 502, { error: errorMessage(error) });
     } finally {
@@ -2229,11 +2245,11 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
   if (argument) return json(response, 400, { error: `${command} does not accept arguments` });
 
   if (command === "/tasks" || command === "/bashes") {
-    return json(response, 200, { command: "tasks", tasks: backgroundTasks.list(sessionId), session });
+    return json(response, 200, { command: "tasks", tasks: backgroundTasks.list(sessionId), ...pagedSessionPayload(session) });
   }
 
   if (command === "/clear") {
-    return json(response, 200, { command: "clear", session: await store.clear(session) });
+    return json(response, 200, { command: "clear", ...pagedSessionPayload(await store.clear(session)) });
   }
   if (command === "/compact") {
     const existing = compactionRuns.get(sessionId);
@@ -2248,10 +2264,10 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     // its own terminal event and must not be ended by this request.
     if (!existing) {
       const completed = await store.get(sessionId) ?? session;
-      broadcastSessionEvent(sessionId, "done", { session: completed });
+      broadcastSessionEvent(sessionId, "done", pagedSessionPayload(completed));
     }
     if (!result.compacted) return json(response, 502, { error: result.error });
-    return json(response, 200, { command: "compact", session: await store.get(sessionId) ?? session });
+    return json(response, 200, { command: "compact", ...pagedSessionPayload(await store.get(sessionId) ?? session) });
   }
   if (command === "/fork") {
     const now = new Date().toISOString();
@@ -2276,7 +2292,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     };
     session.messages.push(sourceBanner);
     await store.appendMessages(session, [sourceBanner]);
-    return json(response, 201, { command: "fork", session: fork, previousSessionId: session.id });
+    return json(response, 201, { command: "fork", ...pagedSessionPayload(fork), previousSessionId: session.id });
   }
   if (command === "/context") {
     const chatMessages = session.messages.filter(isModelMessage);
@@ -2311,7 +2327,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     };
     session.messages.push(userMessage, assistantMessage);
     await store.appendMessages(session, [userMessage, assistantMessage]);
-    return json(response, 200, { command: "context", session });
+    return json(response, 200, { command: "context", ...pagedSessionPayload(session) });
   }
   return json(response, 400, { error: `Unknown command: ${command || "(empty)"}` });
 }
@@ -2567,6 +2583,11 @@ async function observeSessionEvents(
   }
 }
 
+function pagedSessionPayload(session: Session): { session: Session; hasMore: boolean } {
+  const page = paginateSession(session);
+  return { session: page.session, hasMore: page.hasMore };
+}
+
 async function sessionSnapshot(session: Session): Promise<Record<string, unknown>> {
   const question = askUserQuestions.pending(session.id);
   const pendingPlan = planModeApprovals.pending(session.id);
@@ -2585,8 +2606,10 @@ async function sessionSnapshot(session: Session): Promise<Record<string, unknown
     };
   }
   const compaction = compactionRuns.get(session.id);
+  const page = paginateSession(session);
   return {
-    session,
+    session: page.session,
+    hasMore: page.hasMore,
     active: activeSessions.has(session.id),
     ...(compaction ? { compaction: compaction.progress } : {}),
     ...(question ? { questionRequest: question } : {}),
