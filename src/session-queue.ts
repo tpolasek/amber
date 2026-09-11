@@ -32,6 +32,20 @@ export class SessionInputPriorityQueue {
     this.#queued.set(sessionId, queue);
   }
 
+  /**
+   * Drops the user slot (message or command); server-inserted inputs stay.
+   * Reports whether anything was removed — false means it was already taken.
+   */
+  removeUser(sessionId: string): boolean {
+    const queue = this.#queued.get(sessionId);
+    if (!queue) return false;
+    const preserved = queue.filter((entry) => entry.priority === 0);
+    if (preserved.length === queue.length) return false;
+    if (preserved.length === 0) this.#queued.delete(sessionId);
+    else this.#queued.set(sessionId, preserved);
+    return true;
+  }
+
   /** Returns and removes every input in priority order. */
   takeReady(sessionId: string): QueuedSessionInput[] {
     const queue = this.#queued.get(sessionId) ?? [];

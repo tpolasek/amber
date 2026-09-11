@@ -243,6 +243,12 @@ function planResponse(payload) {
   if (firstText.includes("MULTI")) {
     return { tools: [0, 1, 2, 3].map((i) => ({ id: `multi-${bashUses.length}-${i}`, command: "sleep 1" })) };
   }
+  // An "UNQUEUE" prompt runs distinct slow commands: enough time to queue and
+  // delete input mid-run while the tool-loop detector lets it finish.
+  if (firstText.includes("UNQUEUE SCENARIO")) {
+    if (bashUses.length >= 6) return { text: "ran every command without interruption" };
+    return { tools: [{ id: `unqueue-bash-${bashUses.length + 1}`, command: `sleep 1 # tick ${bashUses.length + 1}` }] };
+  }
   if (bashUses.length >= 10) return { text: "ran every command without interruption" };
   return { tools: [{ id: `bash-${bashUses.length + 1}`, command: "sleep 1" }] };
 }
@@ -1068,6 +1074,46 @@ async function runPaginationScenario(mock, runDirectory, basePort) {
   }
 }
 
+async function runUnqueueScenario(mock, amber) {
+  console.log("\n== queued message unqueue");
+  mock.reset();
+  const events = [];
+  const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), { name: "queued unqueue", path: tmpdir() });
+  const sessionId = body.session.id;
+  const streamResponse = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content: "UNQUEUE SCENARIO run several commands" }),
+  });
+  const finished = readStream(streamResponse, (event, data) => events.push({ event, ...data }));
+  const bashesComplete = () => events.flatMap((event) => event.toolCall ? [event.toolCall] : [])
+    .filter((call) => call.name === "Bash" && call.status === "complete").length;
+  await waitFor(() => bashesComplete() >= 1, 30_000, "a completed bash call");
+
+  const queued = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/queued-message`), {
+    content: "UNQUEUE ME PLEASE",
+    kind: "message",
+  });
+  check("queue endpoint accepts the message", queued.status === 202 && queued.body.queued === true, JSON.stringify(queued));
+
+  const removed = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/queued-message`), { method: "DELETE" });
+  const removedBody = await removed.json();
+  check("delete removes the queued message", removed.status === 200 && removedBody.removed === true, JSON.stringify(removedBody));
+  const removedAgain = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/queued-message`), { method: "DELETE" })).json();
+  check("delete with nothing queued reports false", removedAgain.removed === false, JSON.stringify(removedAgain));
+
+  await finished;
+  const snapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+  const userMessages = snapshot.session.messages.filter((message) => message.role === "user" && message.kind === undefined);
+  check("the unqueued message never reached the session",
+    !userMessages.some((message) => message.content === "UNQUEUE ME PLEASE"));
+  check("no user_message event fired for the unqueued message",
+    !events.some((event) => event.event === "user_message" && event.message?.content === "UNQUEUE ME PLEASE"));
+  check("the run finished on its own",
+    snapshot.session.messages.filter((message) => message.role === "assistant").at(-1)?.content
+      === "ran every command without interruption");
+}
+
 async function runAgentCompactionScenario(mock, amber) {
   console.log("\n== agent compaction opt-in");
   const runAgent = async (parentPrompt) => {
@@ -1307,6 +1353,7 @@ try {
   await runStoppedBackgroundAgentScenario(mock, amber);
   await runTruncatedResponseScenario(mock, amber);
   await runPaginationScenario(mock, runDirectory, basePort);
+  await runUnqueueScenario(mock, amber);
   await runAgentCompactionScenario(mock, amber);
   await runAutomaticCompactionScenario(mock, amber);
   await runFailedCompactionDetachedObserverScenario(mock, amber);

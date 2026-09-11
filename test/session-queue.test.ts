@@ -39,6 +39,33 @@ test("clear drops an undelivered message", () => {
   assert.deepEqual(queue.takeReady("session"), []);
 });
 
+test("removeUser drops the user slot and reports it", () => {
+  const queue = new SessionInputPriorityQueue();
+  queue.enqueueUser("session", { content: "never mind", kind: "message" });
+
+  assert.equal(queue.removeUser("session"), true);
+  assert.deepEqual(queue.takeReady("session"), []);
+  assert.equal(queue.removeUser("session"), false, "nothing left to remove");
+});
+
+test("removeUser drops a queued command and keeps the server compaction", () => {
+  const queue = new SessionInputPriorityQueue();
+  queue.enqueueCompaction("session");
+  queue.enqueueUser("session", { content: "/compact", kind: "command" });
+
+  assert.equal(queue.removeUser("session"), true);
+  assert.deepEqual(
+    queue.takeReady("session").map((entry) => entry.content),
+    ["/compact"],
+    "only the server-inserted compaction remains",
+  );
+});
+
+test("removeUser on an unknown session reports false", () => {
+  const queue = new SessionInputPriorityQueue();
+  assert.equal(queue.removeUser("missing"), false);
+});
+
 test("server compaction sorts before user input regardless of enqueue order", () => {
   const queue = new SessionInputPriorityQueue();
   queue.enqueueUser("session", { content: "user input", kind: "message" });

@@ -295,7 +295,7 @@ button { color: inherit; }
 .queue-button { min-width: 132px; }
 .send-button:hover { border-color: var(--amber); background: var(--accent-a18); }
 .send-button i { margin-left: 7px; color: var(--amber-dim); font-style: normal; }
-.send-button.stop { color: var(--error-text); border-color: var(--danger-a60); background: var(--danger-a08); }
+.send-button.stop, .queue-button.unqueue { color: var(--error-text); border-color: var(--danger-a60); background: var(--danger-a08); }
 .composer-meta { width: min(var(--content-max), 100%); margin: 4px auto 0; display: flex; justify-content: flex-end; color: var(--fg-tertiary); font-size: 11px; line-height: 1; }
 .composer-meta kbd { padding: 1px 3px; border: 1px solid var(--border-key); background: transparent; font: inherit; }
 .composer-meta .secure { color: var(--fg-secure); }

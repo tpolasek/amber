@@ -370,7 +370,10 @@ function wireEvents(): void {
     if (state.streaming || isAgentSessionRunning()) abortCurrentSession();
     else void sendMessage();
   });
-  elements.queue.addEventListener("click", () => void queueCurrentMessage());
+  elements.queue.addEventListener("click", () => {
+    if (elements.queue.classList.contains("unqueue")) void unqueueMessage();
+    else void queueCurrentMessage();
+  });
   elements.attachButton.addEventListener("click", () => elements.fileInput.click());
   elements.fileInput.addEventListener("change", () => {
     void attachImageFiles([...elements.fileInput.files ?? []]);
@@ -433,7 +436,11 @@ function wireEvents(): void {
     }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      if (state.streaming) void queueCurrentMessage();
+      if (state.streaming) {
+        // An empty prompt with something queued turns Enter into unqueue.
+        if (currentQueuedMessage() !== null && elements.prompt.value.trim() === "") void unqueueMessage();
+        else void queueCurrentMessage();
+      }
       else elements.composer.requestSubmit();
     }
   });
@@ -441,6 +448,7 @@ function wireEvents(): void {
     historyPosition = -1;
     resizePrompt();
     updateCommandMenu();
+    updateQueueButton();
   });
   elements.prompt.addEventListener("click", updateCommandMenu);
   elements.prompt.addEventListener("keyup", (event) => {
@@ -1178,14 +1186,52 @@ function consumeQueuedManualCompaction(sessionId: string): void {
   renderQueuedMessage();
 }
 
+function currentQueuedMessage(): typeof queuedMessage {
+  return queuedMessage?.sessionId === state.session?.id ? queuedMessage : null;
+}
+
 function renderQueuedMessage(): void {
-  const queued = queuedMessage?.sessionId === state.session?.id ? queuedMessage : null;
+  const queued = currentQueuedMessage();
   elements.queuedMessage.hidden = queued === null;
   elements.queuedMessageContent.textContent = queued
     ? (queued.images?.length
       ? `${queued.content} · ${queued.images.length} ${queued.images.length === 1 ? "image" : "images"}`
       : queued.content)
     : "";
+  updateQueueButton();
+}
+
+/**
+ * With something queued and an empty prompt, the queue button becomes UNQUEUE:
+ * it and Enter drop the queued input. Typing anything reverts the button, and
+ * queueing again replaces the slot as before.
+ */
+function updateQueueButton(): void {
+  const unqueue = state.streaming && currentQueuedMessage() !== null && elements.prompt.value.trim() === "";
+  elements.queue.classList.toggle("unqueue", unqueue);
+  elements.queue.querySelector("span")!.textContent = unqueue ? "UNQUEUE" : "QUEUED SEND";
+}
+
+async function unqueueMessage(): Promise<void> {
+  const session = state.session;
+  const queued = currentQueuedMessage();
+  if (!session || !queued) return;
+  const previous = queuedMessage;
+  queuedMessage = null;
+  renderQueuedMessage();
+  try {
+    // A false result means the run already injected it — it simply lands in
+    // the transcript, so the cleared banner already tells the truth.
+    await api<{ removed: boolean }>(`/api/sessions/${session.id}/queued-message`, { method: "DELETE" });
+  } catch (error) {
+    // The server may still hold the input; restore the banner rather than let
+    // it send while shown as deleted.
+    if (queuedMessage === null && state.session?.id === session.id) {
+      queuedMessage = previous;
+      renderQueuedMessage();
+    }
+    notify(messageFrom(error));
+  }
 }
 
 function clearPrompt(): void {
@@ -1194,6 +1240,7 @@ function clearPrompt(): void {
   hideCommandMenu();
   resetPromptHistory();
   resizePrompt();
+  updateQueueButton();
 }
 
 async function attachImageFiles(files: File[]): Promise<void> {
@@ -1969,6 +2016,7 @@ function setStreaming(streaming: boolean): void {
   state.streaming = streaming;
   if (!streaming) state.aborting = false;
   elements.queue.hidden = !streaming;
+  updateQueueButton();
   elements.submit.classList.toggle("stop", streaming);
   elements.submit.querySelector("span")!.textContent = streaming ? "STOP" : "SEND";
   elements.prompt.disabled = false;
@@ -2320,6 +2368,7 @@ function setPromptValue(value: string): void {
   elements.prompt.value = value;
   resizePrompt();
   elements.prompt.setSelectionRange(value.length, value.length);
+  updateQueueButton();
 }
 
 function scrollTranscriptToBottom(): void {

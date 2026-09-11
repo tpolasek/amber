@@ -555,6 +555,13 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     queuedSessionMessages.enqueueUser(queuedMessageMatch[1], { content, kind, ...(images.length ? { images } : {}) });
     return json(response, 202, { queued: true });
   }
+  if (method === "DELETE" && queuedMessageMatch?.[1]) {
+    const session = await store.get(queuedMessageMatch[1]);
+    if (!session) return json(response, 404, { error: "Session not found" });
+    if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
+    // False silently reports that the run already injected the input.
+    return json(response, 200, { removed: queuedSessionMessages.removeUser(queuedMessageMatch[1]) });
+  }
 
   const commandMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/commands$`));
   if (method === "POST" && commandMatch?.[1]) {
