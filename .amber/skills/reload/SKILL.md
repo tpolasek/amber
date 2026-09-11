@@ -6,10 +6,10 @@ allowed-tools: Bash
 
 Hot-reload the Amber server: rebuild, stop the previous run, and start a fresh server.
 
-1. Run exactly this from the repository root:
+1. Run exactly this from the repository root (nohup + disown detaches on macOS and Linux; setsid is Linux-only):
 
    ```
-   setsid ./run.sh >/tmp/amber-restart.log 2>&1 </dev/null & disown; echo "run.sh launched detached"
+   nohup ./run.sh >/tmp/amber-restart.log 2>&1 </dev/null & disown; echo "run.sh launched detached"
    ```
 
 2. The command returns immediately; the detached script builds, SIGINTs the server on port 3000 (escalating to SIGTERM if needed), and starts the new one.

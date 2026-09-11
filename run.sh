@@ -11,11 +11,19 @@ PORT="${PORT:-3000}"
 LOG="${AMBER_LOG:-$HOME/.amber/server.log}"
 
 listener_pid() {
-  ss -tlnp "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]\+' | head -1 | cut -d= -f2
+  if command -v ss >/dev/null 2>&1; then
+    ss -tlnp "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]\+' | head -1 | cut -d= -f2
+  else
+    lsof -tiTCP:"$PORT" -sTCP:LISTEN -nP 2>/dev/null | head -1
+  fi
 }
 
 port_busy() {
-  ss -tln "sport = :$PORT" 2>/dev/null | grep -q ":$PORT"
+  if command -v ss >/dev/null 2>&1; then
+    ss -tln "sport = :$PORT" 2>/dev/null | grep -q ":$PORT"
+  else
+    [ -n "$(lsof -tiTCP:"$PORT" -sTCP:LISTEN -nP 2>/dev/null | head -1)" ]
+  fi
 }
 
 wait_for_port_free() { # $1 = seconds to wait
@@ -44,9 +52,13 @@ else
   echo "run.sh: no previous server on port $PORT"
 fi
 
-# setsid puts the server in its own session so it survives even when the
-# shell that ran this script (for example a terminal hosted by the old
-# server) is torn down with the previous run.
+# setsid (Linux) puts the server in its own session so it survives even when
+# the shell that ran this script is torn down with the previous run; nohup +
+# disown approximate that where setsid is unavailable (macOS).
 echo "run.sh: starting server on 0.0.0.0:$PORT (log: $LOG)"
-HOST=0.0.0.0 setsid nohup npm run start >"$LOG" 2>&1 </dev/null &
+if command -v setsid >/dev/null 2>&1; then
+  HOST=0.0.0.0 setsid nohup npm run start >"$LOG" 2>&1 </dev/null &
+else
+  HOST=0.0.0.0 nohup npm run start >"$LOG" 2>&1 </dev/null &
+fi
 disown
