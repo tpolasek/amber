@@ -349,6 +349,108 @@ test("provider history attaches image reads to tool results", () => {
   });
 });
 
+test("provider history answers tool calls whose run died mid-execution", () => {
+  const now = new Date().toISOString();
+  const messages: Message[] = [
+    { id: "user", role: "user", content: "Kill the server", createdAt: now, status: "complete" },
+    {
+      id: "assistant",
+      role: "assistant",
+      content: "",
+      createdAt: now,
+      status: "complete",
+      toolCalls: [{ id: "bash-1", name: "Bash", input: { command: "kill -9 1" }, status: "running", output: "" }],
+    },
+    { id: "later-user", role: "user", content: "Are you still there?", createdAt: now, status: "complete" },
+  ];
+
+  assert.deepEqual(buildProviderHistory(messages), [
+    { role: "user", content: "Kill the server" },
+    {
+      role: "assistant",
+      content: [{ type: "tool_use", id: "bash-1", name: "Bash", input: { command: "kill -9 1" } }],
+    },
+    {
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "bash-1", content: "Tool execution was interrupted before a result was recorded.", is_error: true },
+        { type: "text", text: "Are you still there?", cache_control: { type: "ephemeral" } },
+      ],
+    },
+  ]);
+});
+
+test("provider history answers a trailing tool call interrupted mid-execution", () => {
+  const now = new Date().toISOString();
+  const messages: Message[] = [
+    { id: "user", role: "user", content: "Kill the server", createdAt: now, status: "complete" },
+    {
+      id: "assistant",
+      role: "assistant",
+      content: "",
+      createdAt: now,
+      status: "complete",
+      toolCalls: [{ id: "bash-1", name: "Bash", input: { command: "kill -9 1" }, status: "running", output: "" }],
+    },
+  ];
+
+  assert.deepEqual(buildProviderHistory(messages), [
+    { role: "user", content: "Kill the server" },
+    {
+      role: "assistant",
+      content: [{ type: "tool_use", id: "bash-1", name: "Bash", input: { command: "kill -9 1" } }],
+    },
+    {
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "bash-1", content: "Tool execution was interrupted before a result was recorded.", is_error: true, cache_control: { type: "ephemeral" } },
+      ],
+    },
+  ]);
+});
+
+test("provider history synthesizes only the unanswered calls of a partially interrupted batch", () => {
+  const now = new Date().toISOString();
+  const messages: Message[] = [
+    { id: "user", role: "user", content: "Run both", createdAt: now, status: "complete" },
+    {
+      id: "assistant",
+      role: "assistant",
+      content: "",
+      createdAt: now,
+      status: "complete",
+      toolCalls: [
+        { id: "tool-1", name: "Bash", input: { command: "echo one" }, status: "complete", output: "one" },
+        { id: "tool-2", name: "Bash", input: { command: "kill -9 1" }, status: "running", output: "" },
+      ],
+    },
+    {
+      id: "result-1", role: "user", content: "one", createdAt: now, status: "complete",
+      kind: "tool-result", toolUseId: "tool-1",
+    },
+    { id: "later-user", role: "user", content: "Continue", createdAt: now, status: "complete" },
+  ];
+
+  assert.deepEqual(buildProviderHistory(messages), [
+    { role: "user", content: "Run both" },
+    {
+      role: "assistant",
+      content: [
+        { type: "tool_use", id: "tool-1", name: "Bash", input: { command: "echo one" } },
+        { type: "tool_use", id: "tool-2", name: "Bash", input: { command: "kill -9 1" } },
+      ],
+    },
+    {
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "tool-2", content: "Tool execution was interrupted before a result was recorded.", is_error: true },
+        { type: "tool_result", tool_use_id: "tool-1", content: "one", is_error: false },
+      ],
+    },
+    { role: "user", content: "Continue" },
+  ]);
+});
+
 test("provider history reinjects compacted skill instructions without duplicating active ones", () => {
   const now = new Date().toISOString();
   const base = { createdAt: now, status: "complete" as const };

@@ -1,8 +1,10 @@
-import type { Message, ProviderMessage, SessionCompaction, SessionInvokedSkill } from "./types.js";
+import type { Message, ProviderContentBlock, ProviderMessage, SessionCompaction, SessionInvokedSkill } from "./types.js";
 import { compactedSkillInstructions } from "./skill-tool.js";
 import { imageBlock } from "./message-images.js";
 
 const SUMMARY_PREFIX = "The following is a generated summary of the earlier conversation. Use it to continue the session, but prefer newer user messages if they conflict with it.\n\n";
+
+const INTERRUPTED_TOOL_RESULT = "Tool execution was interrupted before a result was recorded.";
 
 export function isModelMessage(message: Message): boolean {
   return message.kind === undefined || message.kind === "chat";
@@ -29,9 +31,19 @@ export function buildProviderHistory(
     : -1;
   const boundaryIndex = bannerIndex >= 0 ? bannerIndex : storedBoundaryIndex;
   const activeMessages = boundaryIndex >= 0 ? messages.slice(boundaryIndex + 1) : messages;
+  const visibleMessages = activeMessages
+    .filter((candidate) => candidate.id !== excludedMessageId && candidate.status === "complete" && isProviderMessage(candidate));
+  // A tool call without a stored result means the process died mid-execution.
+  // Providers reject an unanswered tool_use — failing every later request in
+  // the session — so synthesize an interruption result for it.
+  const answeredToolCalls = new Set(
+    visibleMessages.flatMap((message) => (message.kind === "tool-result" && message.toolUseId ? [message.toolUseId] : [])),
+  );
   const history: ProviderMessage[] = [];
-  for (const message of activeMessages
-    .filter((candidate) => candidate.id !== excludedMessageId && candidate.status === "complete" && isProviderMessage(candidate))) {
+  // Synthesized answers, held until the next user turn where providers expect
+  // a tool answer to land.
+  const interruptedResults: ProviderContentBlock[] = [];
+  for (const message of visibleMessages) {
     const providerMessage: ProviderMessage = {
       role: message.role,
       content: message.kind === "tool-result" && message.toolUseId
@@ -88,8 +100,35 @@ export function buildProviderHistory(
           : [{ type: "text" as const, text: previous.content }, { type: "text" as const, text: message.content }],
       });
     } else {
-      history.push(providerMessage);
+      if (interruptedResults.length > 0) {
+        const ownBlocks: ProviderContentBlock[] = Array.isArray(providerMessage.content)
+          ? providerMessage.content
+          : providerMessage.content ? [{ type: "text", text: providerMessage.content }] : [];
+        if (message.role === "user") {
+          history.push({ role: "user", content: [...interruptedResults.splice(0), ...ownBlocks] });
+        } else {
+          history.push({ role: "user", content: interruptedResults.splice(0) });
+          history.push(providerMessage);
+        }
+      } else {
+        history.push(providerMessage);
+      }
+      if (message.role === "assistant") {
+        interruptedResults.push(...(message.toolCalls ?? [])
+          .filter((call) => !answeredToolCalls.has(call.id))
+          .map((call) => ({
+            type: "tool_result" as const,
+            tool_use_id: call.id,
+            content: INTERRUPTED_TOOL_RESULT,
+            is_error: true,
+          })));
+      }
     }
+  }
+  // The interrupted batch ended the session; flush its answers so the request
+  // stays valid.
+  if (interruptedResults.length > 0) {
+    history.push({ role: "user", content: interruptedResults.splice(0) });
   }
 
   if (compaction && boundaryIndex >= 0) {
