@@ -19,7 +19,7 @@ import {
   type AmberSettings,
 } from "./settings.js";
 import { SETTINGS_TEMPLATE_SOURCE } from "./settings-template.js";
-import { loadUserInstructions } from "./user-instructions.js";
+import { loadProjectInstructions, loadUserInstructions } from "./user-instructions.js";
 import { AuthStorage } from "./auth-storage.js";
 import { OpenAICodexAuth } from "./openai-codex-oauth.js";
 import { buildProviderHistory, isModelMessage, isProviderMessage } from "./history.js";
@@ -862,6 +862,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   try {
     let allowedDirectories = sessionDirectories(session);
     const currentDirectory = sessionWorkingDirectory(session);
+    await captureSessionInstructions(session, currentDirectory);
     const toolLoopTracker = new ToolLoopTracker();
     // Skill model/effort overrides apply only to the model calls of this user turn.
     let turnModel: string | undefined;
@@ -888,7 +889,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         }
       }
       const skills = await sessionSkills(session);
-      const userInstructions = await sessionUserInstructions(session);
       const activeProvider = turnModel ? activeProviderCatalog().provider(turnModel) : providerForSession(session);
       const thinkingLevel = turnEffort ?? session.thinkingLevel;
       const baseHistory = buildProviderHistory(session.messages, assistantMessage.id, session.compaction, session.invokedSkills);
@@ -902,7 +902,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       let usage: Partial<TokenUsage> = {};
       for await (const event of activeProvider.stream(history, controller.signal, {
         tools: sessionTools(session, approvalCapable),
-        system: sessionSystemPrompt(session, currentDirectory, activeProvider.model, userInstructions),
+        system: sessionSystemPrompt(session, currentDirectory, activeProvider.model),
         ...(session.agentType ? { temperature: 1 } : {}),
         ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
       })) {
@@ -1673,15 +1673,29 @@ async function sessionSkills(session: Session): Promise<SkillDefinition[]> {
   return discoverSkills(context);
 }
 
-/** Standing user guidance, re-read each turn so edits take effect without a restart. */
-async function sessionUserInstructions(session: Session): Promise<string | undefined> {
-  if (session.agentType) return undefined;
-  const { text, problem } = await loadUserInstructions();
-  if (problem && !reportedUserInstructionProblems.has(problem)) {
-    reportedUserInstructionProblems.add(problem);
-    console.error(`amber: ${problem}`);
+/**
+ * Captures the global and project AGENTS.md files once per session; the
+ * snapshots ride in the system prompt, so they survive compaction untouched.
+ */
+async function captureSessionInstructions(session: Session, currentDirectory: string): Promise<void> {
+  if (session.instructions !== undefined) return;
+  if (session.agentType) {
+    session.instructions = {};
+  } else {
+    const user = await loadUserInstructions();
+    const project = await loadProjectInstructions(currentDirectory);
+    for (const problem of [user.problem, project.problem]) {
+      if (problem && !reportedUserInstructionProblems.has(problem)) {
+        reportedUserInstructionProblems.add(problem);
+        console.error(`amber: ${problem}`);
+      }
+    }
+    session.instructions = {
+      ...(user.text ? { user: user.text } : {}),
+      ...(project.text ? { project: project.text } : {}),
+    };
   }
-  return text;
+  await store.saveMeta(session);
 }
 
 /** Records a file touched by Read/Write/Edit to activate path-gated and nested skills. */
@@ -1756,10 +1770,14 @@ function sessionSystemPrompt(
   session: Session,
   currentDirectory: string,
   model: string,
-  userInstructions?: string,
 ): string | import("./types.js").ProviderSystemBlock[] {
   const system = !session.agentType
-    ? buildClaudeCodeSystemPrompt(currentDirectory, model, userInstructions)
+    ? buildClaudeCodeSystemPrompt(
+        currentDirectory,
+        model,
+        session.instructions?.user,
+        session.instructions?.project,
+      )
     : buildClaudeCodeAgentSystemPrompt(
         currentDirectory,
         model,

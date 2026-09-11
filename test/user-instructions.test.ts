@@ -1,9 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadUserInstructions, userInstructionsPath } from "../src/user-instructions.js";
+import {
+  loadProjectInstructions,
+  loadUserInstructions,
+  projectInstructionsPath,
+  userInstructionsPath,
+} from "../src/user-instructions.js";
 
 async function amberHome(): Promise<string> {
   const homeDirectory = await mkdtemp(join(tmpdir(), "amber-instructions-"));
@@ -65,4 +70,46 @@ test("reports a directory in place of the instructions file as a problem", async
 
   assert.equal(loaded.text, undefined);
   assert.match(loaded.problem ?? "", /^Could not read /);
+});
+
+test("project instructions come from the nearest AGENTS.md upward", async () => {
+  const homeDirectory = await amberHome();
+  const root = await mkdtemp(join(tmpdir(), "amber-project-"));
+  try {
+    await writeFile(join(root, "AGENTS.md"), "# Root rules\n", "utf8");
+    const nested = join(root, "packages", "app");
+    await mkdir(nested, { recursive: true });
+    await writeFile(join(nested, "AGENTS.md"), "# Nested rules\n", "utf8");
+
+    assert.deepEqual(await loadProjectInstructions(nested, homeDirectory), { text: "# Nested rules" });
+    assert.deepEqual(await loadProjectInstructions(join(root, "packages"), homeDirectory), { text: "# Root rules" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("project instructions report nothing when no AGENTS.md exists upward", async () => {
+  const homeDirectory = await amberHome();
+  const root = await mkdtemp(join(tmpdir(), "amber-project-"));
+
+  assert.deepEqual(await loadProjectInstructions(root, homeDirectory), {});
+});
+
+test("project instructions skip the global ~/.amber/AGENTS.md", async () => {
+  const homeDirectory = await amberHome();
+  await writeFile(userInstructionsPath(homeDirectory), "# Global rules\n", "utf8");
+
+  assert.deepEqual(await loadProjectInstructions(homeDirectory, homeDirectory), {});
+});
+
+test("project instructions report an empty AGENTS.md as a problem", async () => {
+  const homeDirectory = await amberHome();
+  const root = await mkdtemp(join(tmpdir(), "amber-project-"));
+  const path = projectInstructionsPath(root);
+  await writeFile(path, "  \n", "utf8");
+
+  const loaded = await loadProjectInstructions(root, homeDirectory);
+
+  assert.equal(loaded.text, undefined);
+  assert.equal(loaded.problem, `${path} is empty, so no project instructions were loaded.`);
 });

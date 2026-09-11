@@ -48,6 +48,29 @@ test("omits the user instructions block when there are none", () => {
   assert.equal(buildClaudeCodeSystemPrompt("/tmp/amber-not-a-repository", "mimo-v2.5", "").length, 3);
 });
 
+test("appends project instructions after user instructions", () => {
+  const system = buildClaudeCodeSystemPrompt(
+    "/tmp/amber-not-a-repository",
+    "mimo-v2.5",
+    "Prefer plain dashes.",
+    "Run npm test before finishing.",
+  );
+  assert.equal(system.length, 5);
+  assert.match(system[3]?.text ?? "", /# User instructions/);
+  const project = system[4]?.text ?? "";
+  assert.match(project, /# Project instructions/);
+  assert.match(project, /<project-instructions>\nRun npm test before finishing\.\n<\/project-instructions>/);
+  assert.deepEqual(system[4]?.cache_control, { type: "ephemeral" });
+});
+
+test("appends project instructions on their own when there are no user instructions", () => {
+  const system = buildClaudeCodeSystemPrompt("/tmp/amber-not-a-repository", "mimo-v2.5", undefined, "Run npm test.");
+  assert.equal(system.length, 4);
+  assert.match(system[3]?.text ?? "", /# Project instructions/);
+  assert.doesNotMatch(system[3]?.text ?? "", /# User instructions/);
+  assert.equal(buildClaudeCodeSystemPrompt("/tmp/amber-not-a-repository", "mimo-v2.5", undefined, "").length, 3);
+});
+
 test("injects the date reminder before only the first user prompt", () => {
   const messages = injectClaudeCodeUserContext([
     { role: "user", content: "4 + 4" },

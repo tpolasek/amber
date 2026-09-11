@@ -83,6 +83,7 @@ export function buildClaudeCodeSystemPrompt(
   currentDirectory: string,
   model: string,
   userInstructions?: string,
+  projectInstructions?: string,
 ): ProviderSystemBlock[] {
   const shell = basename(process.env.SHELL ?? "unknown");
   const environment = [
@@ -110,6 +111,13 @@ export function buildClaudeCodeSystemPrompt(
           cache_control: { type: "ephemeral" as const },
         }]
       : []),
+    ...(projectInstructions?.trim()
+      ? [{
+          type: "text" as const,
+          text: projectInstructionsBlock(projectInstructions.trim()),
+          cache_control: { type: "ephemeral" as const },
+        }]
+      : []),
   ];
 }
 
@@ -123,6 +131,19 @@ function userInstructionsBlock(instructions: string): string {
     "<user-instructions>",
     instructions,
     "</user-instructions>",
+  ].join("\n");
+}
+
+/** Wraps the repository's AGENTS.md so the model can tell it from the built-in prompt. */
+function projectInstructionsBlock(instructions: string): string {
+  return [
+    "# Project instructions",
+    "",
+    "The project's AGENTS.md sits at the root of this repository. It was captured when the session started and applies to work in this repository.",
+    "",
+    "<project-instructions>",
+    instructions,
+    "</project-instructions>",
   ].join("\n");
 }
 

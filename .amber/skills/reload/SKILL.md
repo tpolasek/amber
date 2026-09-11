@@ -1,10 +1,12 @@
 ---
 name: reload
-description: Rebuild the project and restart the Amber server, detaching the launcher so it survives the old server shutting down.
+description: Rebuild the project and restart the Amber server, detaching the launcher so it survives the old server shutting down. Only run when the user explicitly requests it.
 allowed-tools: Bash
 ---
 
 Hot-reload the Amber server: rebuild, stop the previous run, and start a fresh server.
+
+Only run this when the user explicitly requests it (/reload, or asks to restart/reload the server). Never invoke it proactively — a reload terminates the user's active session mid-run.
 
 1. Run exactly this from the repository root (nohup + disown detaches on macOS and Linux; setsid is Linux-only):
 

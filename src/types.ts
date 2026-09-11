@@ -120,6 +120,15 @@ export interface Session {
   skillTouchedPaths?: string[];
   /** Exact transformed content of each invoked skill, preserved across compaction. */
   invokedSkills?: SessionInvokedSkill[];
+  /** AGENTS.md snapshots captured once when the session started. */
+  instructions?: SessionInstructions;
+}
+
+export interface SessionInstructions {
+  /** Snapshot of ~/.amber/AGENTS.md. */
+  user?: string;
+  /** Snapshot of the nearest project AGENTS.md from the session directory. */
+  project?: string;
 }
 
 export interface SessionInvokedSkill {

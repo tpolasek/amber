@@ -96,7 +96,7 @@ Amber supports one Codex OAuth provider. Removing it from Settings also disconne
 
 Amber uses OpenAI Codex's public native-client ID and sends `originator=amber`. OAuth credentials are stored in **~/.amber/auth.json** with user-only permissions. Access tokens are refreshed automatically when fewer than five minutes remain; refreshes are serialized so concurrent requests cannot overwrite a rotated refresh token. The file contains plaintext access and refresh tokens, so protect access to your user account and home directory.
 
-## User instructions in **AGENTS.md**
+## Instructions in **AGENTS.md**
 
 Standing guidance for every session goes in **~/.amber/AGENTS.md**. Amber appends the file to the system prompt in a delimited **<user-instructions>** block, so the model can tell your rules apart from Amber's built-in prompt, and treats them as taking precedence wherever the two conflict. Use it for coding conventions, writing style, tools to avoid, and anything else you would otherwise repeat in every session.
 
@@ -107,7 +107,9 @@ Standing guidance for every session goes in **~/.amber/AGENTS.md**. Amber append
 - Run the full test suite before claiming work is done.
 ```
 
-The file is optional and is re-read on every turn, so edits take effect without restarting Amber. An empty or unreadable **AGENTS.md** is reported on the console once and the session continues without it.
+A repository can also ship its own **AGENTS.md**; Amber reads the nearest one from the session's working directory upward and appends it after the user block in a **<project-instructions>** block (skipping the global file).
+
+Both files are optional and are read once when a session starts, so the prompt stays stable for the whole session and survives compaction. An empty or unreadable **AGENTS.md** is reported on the console once and the session continues without it.
 
 ## Dependencies
 
