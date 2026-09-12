@@ -7,7 +7,9 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   addMarketplace,
+  enabledPluginBundles,
   installPlugin,
+  isPluginEnabled,
   loadInstalledPlugins,
   loadMarketplaceRegistry,
   listMarketplacePlugins,
@@ -17,8 +19,10 @@ import {
   parsePluginCommand,
   planPluginInstall,
   pluginCachePath,
+  pluginCacheRelativePath,
   pluginsDirectory,
   removeMarketplace,
+  saveInstalledPlugins,
   renderInstalledPlugins,
   renderMarketplaceList,
   renderPluginInstallPlan,
@@ -639,4 +643,92 @@ test("renders installed plugins", async () => {
   assert.match(rendered, /superpowers@fixture/);
   assert.match(rendered, /6\.3\.0/);
   assert.match(rendered, new RegExp(bundle.sha.slice(0, 12)));
+});
+
+/* ------------------------------------------------------------------ */
+/* Discovery                                                           */
+/* ------------------------------------------------------------------ */
+
+test("a key absent from the enable table means enabled", () => {
+  assert.equal(isPluginEnabled("superpowers@fixture"), true);
+  assert.equal(isPluginEnabled("superpowers@fixture", {}), true);
+  assert.equal(isPluginEnabled("superpowers@fixture", { "superpowers@fixture": true }), true);
+  assert.equal(isPluginEnabled("superpowers@fixture", { "superpowers@fixture": false }), false);
+});
+
+test("an installed plugin is a discovery bundle until it is disabled", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const bundle = await gitBundleFixture({ name: "superpowers", version: "6.3.0" });
+  const marketplace = await marketplaceFixture([
+    { name: "superpowers", description: "Skills", source: { source: "url", url: bundle.path } },
+  ]);
+  await addMarketplace({ spec: marketplace, homeDirectory });
+  await installPlugin({ name: "superpowers", homeDirectory });
+
+  const cwd = await mkdtemp(join(tmpdir(), "amber-cwd-"));
+  assert.deepEqual(await enabledPluginBundles({ cwd, homeDirectory }), [{
+    key: "superpowers@fixture",
+    name: "superpowers",
+    bundle: pluginCachePath("fixture", "superpowers", "6.3.0", homeDirectory),
+  }]);
+
+  const disabled = await enabledPluginBundles({
+    cwd,
+    homeDirectory,
+    enabledPlugins: { "superpowers@fixture": false },
+  });
+  assert.deepEqual(disabled, []);
+});
+
+test("a project-scoped record applies only inside its project root", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const projectRoot = await mkdtemp(join(tmpdir(), "amber-project-"));
+  const cachePath = pluginCachePath("fixture", "scoped", "1.0.0", homeDirectory);
+  await mkdir(join(cachePath, "skills"), { recursive: true });
+  await saveInstalledPlugins({
+    version: 1,
+    plugins: {
+      "scoped@fixture": [{
+        scope: "project",
+        projectRoot,
+        name: "scoped",
+        marketplace: "fixture",
+        version: "1.0.0",
+        commitSha: "",
+        source: { type: "directory", path: cachePath },
+        path: pluginCacheRelativePath("fixture", "scoped", "1.0.0"),
+        installedAt: "2026-09-12T00:00:00.000Z",
+        updatedAt: "2026-09-12T00:00:00.000Z",
+      }],
+    },
+  }, homeDirectory);
+
+  const inside = await enabledPluginBundles({ cwd: join(projectRoot, "packages", "web"), homeDirectory });
+  assert.deepEqual(inside.map((entry) => entry.key), ["scoped@fixture"]);
+
+  const outside = await enabledPluginBundles({ cwd: await mkdtemp(join(tmpdir(), "amber-other-")), homeDirectory });
+  assert.deepEqual(outside, []);
+});
+
+test("a record whose bundle is gone is skipped rather than failing discovery", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  await saveInstalledPlugins({
+    version: 1,
+    plugins: {
+      "ghost@fixture": [{
+        scope: "user",
+        projectRoot: null,
+        name: "ghost",
+        marketplace: "fixture",
+        version: "1.0.0",
+        commitSha: "",
+        source: { type: "directory", path: "/nowhere" },
+        path: pluginCacheRelativePath("fixture", "ghost", "1.0.0"),
+        installedAt: "2026-09-12T00:00:00.000Z",
+        updatedAt: "2026-09-12T00:00:00.000Z",
+      }],
+    },
+  }, homeDirectory);
+
+  assert.deepEqual(await enabledPluginBundles({ cwd: homeDirectory, homeDirectory }), []);
 });

@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
@@ -774,6 +775,75 @@ async function pruneEmptyCacheDirectories(marketplace: string, plugin: string, h
 
 function shortSha(sha: string): string {
   return sha.slice(0, 12);
+}
+
+/* ------------------------------------------------------------------ */
+/* Discovery                                                           */
+/* ------------------------------------------------------------------ */
+
+/** One installed bundle a session may take skills and commands from. */
+export interface PluginBundle {
+  /** `<plugin>@<marketplace>`, the plugin's identity everywhere else. */
+  key: string;
+  name: string;
+  /** Absolute bundle root in the cache. */
+  bundle: string;
+}
+
+export interface PluginBundleOptions {
+  /** Session working directory; decides which project-scoped records apply. */
+  cwd: string;
+  homeDirectory?: string;
+  enabledPlugins?: Record<string, boolean>;
+}
+
+/** A key absent from the table means enabled, so a fresh install needs no write. */
+export function isPluginEnabled(key: string, enabledPlugins?: Record<string, boolean>): boolean {
+  return enabledPlugins?.[key] !== false;
+}
+
+/**
+ * Installed and enabled bundles visible to a session, in registry-key order. A
+ * record whose cache directory is gone is skipped with a warning rather than
+ * failing the session.
+ */
+export async function enabledPluginBundles(options: PluginBundleOptions): Promise<PluginBundle[]> {
+  const homeDirectory = options.homeDirectory ?? homedir();
+  const registry = await loadInstalledPlugins(homeDirectory);
+  const root = pluginsDirectory(homeDirectory);
+  const bundles: PluginBundle[] = [];
+  for (const key of Object.keys(registry.plugins).sort()) {
+    if (!isPluginEnabled(key, options.enabledPlugins)) continue;
+    const record = applicableRecord(registry.plugins[key] ?? [], options.cwd);
+    if (!record) continue;
+    const bundle = join(root, record.path);
+    if (!existsSync(bundle)) {
+      warnMissingBundle(key, bundle);
+      continue;
+    }
+    bundles.push({ key, name: record.name, bundle });
+  }
+  return bundles;
+}
+
+/** The project record wins over the user one when the session sits inside it. */
+function applicableRecord(records: InstalledPluginRecord[], cwd: string): InstalledPluginRecord | undefined {
+  const project = records.find((record) =>
+    record.scope === "project" && record.projectRoot != null && isWithin(record.projectRoot, cwd));
+  return project ?? records.find((record) => record.scope === "user");
+}
+
+function isWithin(root: string, directory: string): boolean {
+  const relativePath = relative(root, directory);
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+const reportedMissingBundles = new Set<string>();
+
+function warnMissingBundle(key: string, bundle: string): void {
+  if (reportedMissingBundles.has(bundle)) return;
+  reportedMissingBundles.add(bundle);
+  console.error(`amber: plugin ${key} is installed but its bundle is missing at ${bundle}`);
 }
 
 /* ------------------------------------------------------------------ */
