@@ -1406,7 +1406,7 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
   if (clearComposer) clearPrompt();
   if (!duringResponse) setBusy(true);
   try {
-    const result = await api<{ command: "add-dir" | "cwd" | "context" | "clear" | "compact" | "fork" | "name" | "tasks"; session: Session; hasMore: boolean; directory?: string; cwdChanged?: boolean; previousSessionId?: string; tasks?: BackgroundTask[] }>(
+    const result = await api<{ command: "add-dir" | "cwd" | "context" | "clear" | "compact" | "fork" | "name" | "plugin" | "tasks"; session: Session; hasMore: boolean; directory?: string; cwdChanged?: boolean; previousSessionId?: string; tasks?: BackgroundTask[] }>(
       `/api/sessions/${session.id}/commands`,
       { method: "POST", body: JSON.stringify({ command }) },
     );
@@ -2238,7 +2238,8 @@ function acceptDirectoryCompletion(directory: DirectoryCompletion): void {
 }
 
 function selectCommand(command: BuiltInCommand, execute: boolean): void {
-  const continuesTyping = command.name === "/add-dir" || command.name === "/cwd" || command.name === "/git";
+  const continuesTyping = command.name === "/add-dir" || command.name === "/cwd"
+    || command.name === "/git" || command.name === "/plugin";
   elements.prompt.value = continuesTyping ? `${command.name} ` : command.name;
   if (continuesTyping) updateCommandMenu();
   else hideCommandMenu();

@@ -7,6 +7,16 @@ import { randomUUID } from "node:crypto";
 import { browserUrl, openBrowser } from "./browser-launch.js";
 import { listenErrorMessage, parseCliCommand, usageText } from "./cli.js";
 import { builtInCommand } from "./built-in-commands.js";
+import {
+  addMarketplace,
+  listMarketplacePlugins,
+  loadMarketplaceRegistry,
+  parsePluginCommand,
+  removeMarketplace,
+  renderMarketplaceList,
+  renderPluginList,
+  renderPluginOverview,
+} from "./plugins.js";
 import { SessionStore } from "./store.js";
 import { ProviderCatalog } from "./provider-catalog.js";
 import {
@@ -2267,6 +2277,19 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     }
   }
 
+  if (command === "/plugin") {
+    const parsed = parsePluginCommand(argument);
+    if (parsed.kind === "error") return json(response, 400, { error: parsed.message });
+    let body: string;
+    try {
+      body = await runPluginCommand(parsed);
+    } catch (error) {
+      return json(response, 400, { error: errorMessage(error) });
+    }
+    await appendCommandTranscript(session, rawCommand, body);
+    return json(response, 200, { command: "plugin", ...pagedSessionPayload(session) });
+  }
+
   if (argument) return json(response, 400, { error: `${command} does not accept arguments` });
 
   if (command === "/tasks" || command === "/bashes") {
@@ -2355,6 +2378,37 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     return json(response, 200, { command: "context", ...pagedSessionPayload(session) });
   }
   return json(response, 400, { error: `Unknown command: ${command || "(empty)"}` });
+}
+
+async function runPluginCommand(parsed: Exclude<ReturnType<typeof parsePluginCommand>, { kind: "error" }>): Promise<string> {
+  if (parsed.kind === "overview") return renderPluginOverview(await loadMarketplaceRegistry());
+  if (parsed.kind === "marketplace-list") return renderMarketplaceList(await loadMarketplaceRegistry());
+  if (parsed.kind === "marketplace-add") {
+    const added = await addMarketplace({ spec: parsed.spec, ...(parsed.alias ? { alias: parsed.alias } : {}) });
+    return [
+      `Added marketplace **${added.name}** with ${added.manifest.plugins.length} published plugin(s).`,
+      "",
+      renderPluginList(await listMarketplacePlugins({ marketplace: added.name })),
+    ].join("\n");
+  }
+  if (parsed.kind === "marketplace-remove") {
+    await removeMarketplace(parsed.name);
+    return `Removed marketplace **${parsed.name}**. Installed plugins from it are untouched.`;
+  }
+  return renderPluginList(await listMarketplacePlugins(parsed.marketplace ? { marketplace: parsed.marketplace } : {}));
+}
+
+/** Records a command and its rendered output as a pair of transcript messages. */
+async function appendCommandTranscript(session: Session, command: string, body: string): Promise<void> {
+  const now = new Date().toISOString();
+  const userMessage: Message = {
+    id: randomUUID(), role: "user", content: command, createdAt: now, status: "complete", kind: "command",
+  };
+  const assistantMessage: Message = {
+    id: randomUUID(), role: "assistant", content: body, createdAt: now, status: "complete", kind: "command",
+  };
+  session.messages.push(userMessage, assistantMessage);
+  await store.appendMessages(session, [userMessage, assistantMessage]);
 }
 
 async function resolveAddedDirectory(path: string): Promise<string> {
