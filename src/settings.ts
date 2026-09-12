@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { parse, stringify } from "smol-toml";
 import type { AgentDefinition } from "./agent-tool.js";
 import type { ProviderProtocol, ThinkingLevel } from "./types.js";
@@ -12,6 +12,8 @@ export interface AmberSettings {
   default_provider?: string;
   default_agent_provider?: string;
   default_agent_model?: string;
+  /** `<plugin>@<marketplace>` to enable state; a missing key means enabled. */
+  enabled_plugins?: Record<string, boolean>;
   providers: Record<string, ProviderSettings>;
   agents: AgentDefinition[];
 }
@@ -48,6 +50,7 @@ export interface EditableAmberSettings {
   default_provider?: string;
   default_agent_provider?: string;
   default_agent_model?: string;
+  enabled_plugins?: Record<string, boolean>;
   providers: Record<string, EditableProviderSettings>;
   agents: AgentDefinition[];
 }
@@ -91,18 +94,7 @@ export function parseSettingsSource(source: string, settingsPath = join(homedir(
 }
 
 export async function saveSettingsSource(source: string, homeDirectory = homedir()): Promise<string> {
-  const settingsDirectory = join(homeDirectory, ".amber");
-  const settingsPath = join(settingsDirectory, "settings.toml");
-  const temporaryPath = join(settingsDirectory, `.settings-${randomUUID()}.tmp`);
-  await mkdir(settingsDirectory, { recursive: true, mode: 0o700 });
-  await writeFile(temporaryPath, source, { encoding: "utf8", flag: "wx", mode: 0o600 });
-  try {
-    await rename(temporaryPath, settingsPath);
-  } catch (error) {
-    await unlink(temporaryPath).catch(() => undefined);
-    throw error;
-  }
-  return settingsPath;
+  return writeSettingsFile(join(homeDirectory, ".amber", "settings.toml"), source);
 }
 
 /** Converts parsed settings into the canonical shape exposed to the settings UI. */
@@ -112,6 +104,7 @@ export function settingsForEditor(settings: AmberSettings): EditableAmberSetting
     ...(settings.default_provider ? { default_provider: settings.default_provider } : {}),
     ...(settings.default_agent_provider ? { default_agent_provider: settings.default_agent_provider } : {}),
     ...(settings.default_agent_model ? { default_agent_model: settings.default_agent_model } : {}),
+    ...(settings.enabled_plugins ? { enabled_plugins: { ...settings.enabled_plugins } } : {}),
     providers: Object.fromEntries(Object.entries(settings.providers).map(([name, provider]) => {
       const authKey = configuredSetting(provider.auth_key);
       const authUrl = configuredSetting(provider.auth_url);
@@ -159,6 +152,7 @@ function canonicalEditorValue(value: unknown): unknown {
   copyOptionalString(result, value, "default_provider");
   copyOptionalString(result, value, "default_agent_provider");
   copyOptionalString(result, value, "default_agent_model");
+  copySetting(result, value, "enabled_plugins"); // Copied verbatim: a round trip must not drop a key.
   result.providers = canonicalProviders(value.providers);
   result.agents = canonicalAgents(value.agents);
   return result;
@@ -254,14 +248,166 @@ function parseSettings(parsed: unknown, settingsPath: string): AmberSettings {
   if (defaultAgentModel && !defaultAgentProvider) {
     throw new Error(`${settingsPath}: default_agent_model requires default_agent_provider`);
   }
+  const enabledPlugins = parseEnabledPlugins(settings.enabled_plugins, `${settingsPath}: enabled_plugins`);
   return {
     theme,
     ...(defaultProvider ? { default_provider: defaultProvider } : {}),
     ...(defaultAgentProvider ? { default_agent_provider: defaultAgentProvider } : {}),
     ...(defaultAgentModel ? { default_agent_model: defaultAgentModel } : {}),
+    ...(enabledPlugins ? { enabled_plugins: enabledPlugins } : {}),
     providers,
     agents: parseAgentDefinitions(settings.agents, settingsPath),
   };
+}
+
+function parseEnabledPlugins(value: unknown, field: string): Record<string, boolean> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error(`${field} must be a table of booleans`);
+  const enabled: Record<string, boolean> = {};
+  for (const [key, candidate] of Object.entries(value)) {
+    if (typeof candidate !== "boolean") throw new Error(`${field}."${key}" must be true or false`);
+    enabled[key] = candidate;
+  }
+  return enabled;
+}
+
+/* ------------------------------------------------------------------ */
+/* Plugin enable state                                                 */
+/* ------------------------------------------------------------------ */
+
+/** Where a project keeps its enable state; the only settings file below home. */
+export function projectSettingsPath(projectRoot: string): string {
+  return join(projectRoot, ".amber", "settings.toml");
+}
+
+/**
+ * A project settings file carries `enabled_plugins` and nothing else, so a
+ * project can never silently override a provider or an API key.
+ */
+export function parseProjectSettingsSource(source: string, path: string): Record<string, boolean> {
+  let parsed: unknown;
+  try {
+    parsed = parse(source);
+  } catch (error) {
+    throw new Error(`Could not read ${path}: ${errorMessage(error)}`);
+  }
+  if (!isRecord(parsed)) throw new Error(`${path} must contain a TOML table`);
+  const unsupported = Object.keys(parsed).find((key) => key !== "enabled_plugins");
+  if (unsupported) {
+    throw new Error(`${path}: a project settings file may only set enabled_plugins, found '${unsupported}'`);
+  }
+  return parseEnabledPlugins(parsed.enabled_plugins, `${path}: enabled_plugins`) ?? {};
+}
+
+/** The nearest ancestor of `cwd` carrying `.amber/settings.toml`, home excluded. */
+export async function loadProjectEnabledPlugins(
+  cwd: string,
+  homeDirectory = homedir(),
+): Promise<Record<string, boolean>> {
+  const home = resolve(homeDirectory);
+  let directory = resolve(cwd);
+  for (;;) {
+    if (directory !== home) {
+      const path = projectSettingsPath(directory);
+      const source = await readFileIfPresent(path);
+      if (source !== undefined) return parseProjectSettingsSource(source, path);
+    }
+    const parent = dirname(directory);
+    if (parent === directory) return {};
+    directory = parent;
+  }
+}
+
+/** The user table overlaid with the project one, which wins key by key. */
+export async function sessionEnabledPlugins(
+  cwd: string,
+  userEnabledPlugins?: Record<string, boolean>,
+  homeDirectory = homedir(),
+): Promise<Record<string, boolean>> {
+  return { ...userEnabledPlugins, ...await loadProjectEnabledPlugins(cwd, homeDirectory) };
+}
+
+export interface EnabledPluginUpdate {
+  key: string;
+  enabled: boolean;
+  scope?: "user" | "project";
+  /** Required at project scope; the root whose `.amber` owns the state. */
+  projectRoot?: string;
+  homeDirectory?: string;
+}
+
+/** Persists one plugin's enable state, leaving every other setting untouched. */
+export async function writeEnabledPlugin(update: EnabledPluginUpdate): Promise<string> {
+  const homeDirectory = update.homeDirectory ?? homedir();
+  if ((update.scope ?? "user") === "user") {
+    const { source, path } = await loadSettingsSource(homeDirectory);
+    const next = withEnabledPlugin(source, update.key, update.enabled);
+    parseSettingsSource(next, path);
+    return saveSettingsSource(next, homeDirectory);
+  }
+  if (!update.projectRoot) throw new Error("A project-scoped plugin needs a project root");
+  const path = projectSettingsPath(resolve(update.projectRoot));
+  const next = withEnabledPlugin(await readFileIfPresent(path) ?? "", update.key, update.enabled);
+  parseProjectSettingsSource(next, path);
+  return writeSettingsFile(path, next);
+}
+
+/**
+ * Edits the `[enabled_plugins]` table in the source text rather than
+ * re-serialising the document, so comments and key order survive the write.
+ */
+export function withEnabledPlugin(source: string, key: string, enabled: boolean): string {
+  const entry = `${JSON.stringify(key)} = ${enabled}`;
+  const lines = source.split("\n");
+  const header = lines.findIndex((line) => /^\s*\[enabled_plugins\]\s*$/.test(line));
+  if (header === -1) {
+    if (/^\s*enabled_plugins\s*=/m.test(source)) {
+      throw new Error("Rewrite enabled_plugins as an [enabled_plugins] table before toggling a plugin");
+    }
+    const body = source.replace(/\s+$/, "");
+    return `${body ? `${body}\n\n` : ""}[enabled_plugins]\n${entry}\n`;
+  }
+  let end = header + 1;
+  while (end < lines.length && !/^\s*\[/.test(lines[end] as string)) end += 1;
+  const existing = lines.findIndex((line, index) => index > header && index < end && tomlKey(line) === key);
+  if (existing !== -1) {
+    lines[existing] = entry;
+    return lines.join("\n");
+  }
+  let insertAt = end;
+  while (insertAt > header + 1 && !(lines[insertAt - 1] as string).trim()) insertAt -= 1;
+  lines.splice(insertAt, 0, entry);
+  return lines.join("\n");
+}
+
+function tomlKey(line: string): string | undefined {
+  const match = /^\s*("[^"]*"|'[^']*'|[A-Za-z0-9_-]+)\s*=/.exec(line);
+  if (!match) return undefined;
+  const raw = match[1] as string;
+  return /^["']/.test(raw) ? raw.slice(1, -1) : raw;
+}
+
+async function readFileIfPresent(path: string): Promise<string | undefined> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if (isNotFoundError(error)) return undefined;
+    throw error;
+  }
+}
+
+async function writeSettingsFile(path: string, source: string): Promise<string> {
+  const directory = dirname(path);
+  const temporaryPath = join(directory, `.settings-${randomUUID()}.tmp`);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await writeFile(temporaryPath, source, { encoding: "utf8", flag: "wx", mode: 0o600 });
+  try {
+    await rename(temporaryPath, path);
+  } catch (error) {
+    await unlink(temporaryPath).catch(() => undefined);
+    throw error;
+  }
+  return path;
 }
 
 function parseTheme(value: unknown, field: string): AmberTheme {

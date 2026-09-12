@@ -37,9 +37,20 @@ export interface EditableSettings {
   default_provider?: string;
   default_agent_provider?: string;
   default_agent_model?: string;
+  // Round-tripped, never edited through the form: plugins are toggled one key
+  // at a time against /api/plugins so the table's comments and order survive.
+  enabled_plugins?: Record<string, boolean>;
   providers: Record<string, EditableProviderSettings>;
   agents: EditableAgentSettings[];
 }
+export interface InstalledPluginState { key: string; name: string; marketplace: string; version: string; enabled: boolean }
+export interface PluginSettings {
+  plugins: InstalledPluginState[];
+  /** Keys with a project-scope record, which only `/plugin --project` governs. */
+  projectScoped: string[];
+  enabled_plugins: Record<string, boolean>;
+}
+export interface SavedPluginSettings extends PluginSettings { path: string }
 export interface SettingsDocument { settings: EditableSettings; path: string; error?: string }
 export interface SavedSettings extends SettingsDocument { config: Config }
 export interface AuthProviderStatus { id: "openai-codex"; name: string; authName: string; configured: boolean; providerConfigured: boolean }

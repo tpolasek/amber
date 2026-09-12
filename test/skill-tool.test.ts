@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -23,6 +23,7 @@ import {
   truncateToWidth,
   type SkillDefinition,
 } from "../src/skill-tool.js";
+import { loadSettings, sessionEnabledPlugins, writeEnabledPlugin } from "../src/settings.js";
 
 interface Fixture {
   root: string;
@@ -534,6 +535,125 @@ test("keeps flow-style lists intact when another frontmatter value needs quoting
     assert.equal(skill?.argumentHint, "[left] [right]");
     assert.deepEqual(skill?.paths, ["src", "docs"]);
     assert.deepEqual(skill?.allowedTools, ["Bash", "Read"]);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+/** Registers a plugin bundle in the fixture home and returns its cache root. */
+async function installFixturePlugin(
+  fx: Fixture,
+  name: string,
+  options: { scope?: "user" | "project"; projectRoot?: string } = {},
+): Promise<string> {
+  const relativePath = `cache/fixture/${name}/1.0.0`;
+  const bundle = join(fx.home, ".amber", "plugins", relativePath);
+  await mkdir(bundle, { recursive: true });
+  const registryPath = join(fx.home, ".amber", "plugins", "installed_plugins.json");
+  let plugins: Record<string, unknown[]>;
+  try {
+    plugins = JSON.parse(await readFile(registryPath, "utf8")).plugins;
+  } catch {
+    plugins = {};
+  }
+  plugins[`${name}@fixture`] = [{
+    scope: options.scope ?? "user",
+    projectRoot: options.projectRoot ?? null,
+    name,
+    marketplace: "fixture",
+    version: "1.0.0",
+    commitSha: "",
+    source: { type: "directory", path: bundle },
+    path: relativePath,
+    installedAt: "2026-09-12T00:00:00.000Z",
+    updatedAt: "2026-09-12T00:00:00.000Z",
+  }];
+  await write(registryPath, JSON.stringify({ version: 1, plugins }));
+  return bundle;
+}
+
+test("enabled plugins contribute namespaced skills and commands", async () => {
+  const fx = await fixture();
+  try {
+    const bundle = await installFixturePlugin(fx, "superpowers");
+    await write(join(bundle, "skills", "brainstorming", "SKILL.md"), "---\ndescription: plugin brainstorming\n---\nBrainstorm body");
+    await write(join(bundle, "commands", "git", "sync.md"), "---\ndescription: plugin command\n---\nSync body");
+
+    const skills = await discovery(fx);
+    const brainstorming = skills.find((skill) => skill.name === "superpowers:brainstorming");
+    assert.equal(brainstorming?.description, "plugin brainstorming");
+    assert.equal(brainstorming?.content, "Brainstorm body");
+    assert.equal(skills.some((skill) => skill.name === "superpowers:git:sync"), true);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("a plugin with no commands directory still contributes its skills", async () => {
+  const fx = await fixture();
+  try {
+    const bundle = await installFixturePlugin(fx, "superpowers");
+    await write(join(bundle, "skills", "brainstorming", "SKILL.md"), "---\ndescription: plugin brainstorming\n---\nBody");
+
+    const skills = await discovery(fx);
+    assert.deepEqual(skills.map((skill) => skill.name), ["superpowers:brainstorming"]);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("a disabled plugin contributes nothing", async () => {
+  const fx = await fixture();
+  try {
+    const bundle = await installFixturePlugin(fx, "superpowers");
+    await write(join(bundle, "skills", "brainstorming", "SKILL.md"), "---\ndescription: plugin brainstorming\n---\nBody");
+
+    const skills = await discovery(fx, { enabledPlugins: { "superpowers@fixture": false } });
+    assert.deepEqual(skills, []);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("settings decide a plugin's skills, at user scope and then at project scope", async () => {
+  const fx = await fixture();
+  try {
+    const bundle = await installFixturePlugin(fx, "superpowers");
+    await write(join(bundle, "skills", "brainstorming", "SKILL.md"), "---\ndescription: plugin brainstorming\n---\nBody");
+    const contributes = async () => {
+      const settings = await loadSettings(fx.home);
+      const skills = await discovery(fx, {
+        enabledPlugins: await sessionEnabledPlugins(fx.project, settings.enabled_plugins, fx.home),
+      });
+      return skills.some((skill) => skill.name === "superpowers:brainstorming");
+    };
+
+    assert.equal(await contributes(), true);
+
+    await writeEnabledPlugin({ key: "superpowers@fixture", enabled: false, homeDirectory: fx.home });
+    assert.equal(await contributes(), false);
+
+    await writeEnabledPlugin({ key: "superpowers@fixture", enabled: true, homeDirectory: fx.home });
+    assert.equal(await contributes(), true);
+
+    await writeEnabledPlugin({ key: "superpowers@fixture", enabled: false, scope: "project", projectRoot: fx.project });
+    assert.equal(await contributes(), false);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("a plugin skill cannot shadow a project skill of the same name", async () => {
+  const fx = await fixture();
+  try {
+    await write(join(fx.project, ".amber", "skills", "brainstorming", "SKILL.md"), "---\ndescription: project\n---\nProject body");
+    const bundle = await installFixturePlugin(fx, "superpowers");
+    await write(join(bundle, "skills", "brainstorming", "SKILL.md"), "---\ndescription: plugin\n---\nPlugin body");
+
+    const skills = await discovery(fx);
+    assert.deepEqual(skills.map((skill) => skill.name), ["brainstorming", "superpowers:brainstorming"]);
+    assert.equal(skills[0]?.content, "Project body");
+    assert.equal(skills[1]?.content, "Plugin body");
   } finally {
     await fx.cleanup();
   }

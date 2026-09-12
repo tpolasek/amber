@@ -5,12 +5,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse, stringify } from "smol-toml";
 import {
+  loadProjectEnabledPlugins,
   loadSettings,
   loadSettingsSource,
   parseSettingsSource,
+  projectSettingsPath,
   saveSettingsSource,
+  sessionEnabledPlugins,
   settingsForEditor,
   settingsSourceFromEditor,
+  withEnabledPlugin,
+  writeEnabledPlugin,
 } from "../src/settings.js";
 import { COMMIT_SKILL_TEMPLATE_SOURCE, SETTINGS_TEMPLATE, SETTINGS_TEMPLATE_SOURCE } from "../src/settings-template.js";
 
@@ -650,4 +655,156 @@ test("rejects slashed model names for anthropic providers", async () => {
   }), "utf8");
 
   await assert.rejects(loadSettings(homeDirectory), /providers\.zai\.models model names cannot contain/);
+});
+
+/* ------------------------------------------------------------------ */
+/* Plugin enable state                                                 */
+/* ------------------------------------------------------------------ */
+
+test("loads and round-trips the enabled_plugins table", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const settingsDirectory = join(homeDirectory, ".amber");
+  await mkdir(settingsDirectory);
+  await writeFile(join(settingsDirectory, "settings.toml"), [
+    'theme = "dark"',
+    "",
+    "[enabled_plugins]",
+    '"superpowers@official" = false',
+    '"code-simplifier@official" = true',
+    "",
+    "[providers.zai]",
+    'auth_key = "key"',
+    'auth_url = "https://example.test"',
+    "",
+  ].join("\n"), "utf8");
+
+  const settings = await loadSettings(homeDirectory);
+  assert.deepEqual(settings.enabled_plugins, {
+    "superpowers@official": false,
+    "code-simplifier@official": true,
+  });
+
+  const editor = settingsForEditor(settings);
+  assert.deepEqual(editor.enabled_plugins, settings.enabled_plugins);
+  const { settings: roundTripped } = settingsSourceFromEditor(editor);
+  assert.deepEqual(roundTripped.enabled_plugins, settings.enabled_plugins);
+});
+
+test("rejects a non-boolean plugin enable state", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const settingsDirectory = join(homeDirectory, ".amber");
+  await mkdir(settingsDirectory);
+  await writeFile(
+    join(settingsDirectory, "settings.toml"),
+    '[enabled_plugins]\n"superpowers@official" = "yes"\n',
+    "utf8",
+  );
+
+  await assert.rejects(loadSettings(homeDirectory), /enabled_plugins\."superpowers@official" must be true or false/);
+});
+
+test("toggles one plugin in the user settings file, leaving comments and keys untouched", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const { path } = await loadSettingsSource(homeDirectory);
+  const before = await readFile(path, "utf8");
+
+  assert.equal(await writeEnabledPlugin({ key: "superpowers@official", enabled: false, homeDirectory }), path);
+  const disabled = await readFile(path, "utf8");
+  assert.equal(disabled.startsWith(before.replace(/\s+$/, "")), true);
+  assert.match(disabled, /^\[enabled_plugins\]$/m);
+  assert.match(disabled, /^"superpowers@official" = false$/m);
+  assert.deepEqual((await loadSettings(homeDirectory)).enabled_plugins, { "superpowers@official": false });
+
+  await writeEnabledPlugin({ key: "other@official", enabled: false, homeDirectory });
+  await writeEnabledPlugin({ key: "superpowers@official", enabled: true, homeDirectory });
+  const enabled = await readFile(path, "utf8");
+  assert.equal(enabled.match(/^"superpowers@official" =/gm)?.length, 1);
+  assert.deepEqual((await loadSettings(homeDirectory)).enabled_plugins, {
+    "superpowers@official": true,
+    "other@official": false,
+  });
+  assert.equal((await stat(path)).mode & 0o777, 0o600);
+});
+
+test("keeps a settings table that follows the enable table when toggling", () => {
+  const source = [
+    'theme = "dark"',
+    "",
+    "[enabled_plugins]",
+    '"superpowers@official" = true',
+    "",
+    "[providers.default]",
+    'api = "anthropic"',
+    "",
+  ].join("\n");
+
+  assert.equal(withEnabledPlugin(source, "other@official", false), source.replace(
+    '"superpowers@official" = true\n',
+    '"superpowers@official" = true\n"other@official" = false\n',
+  ));
+});
+
+test("refuses to toggle an inline enabled_plugins table", () => {
+  assert.throws(
+    () => withEnabledPlugin('enabled_plugins = { "a@b" = true }\n', "a@b", false),
+    /\[enabled_plugins\] table/,
+  );
+});
+
+test("reads project enable state from the nearest ancestor, never from home", async () => {
+  const root = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const homeDirectory = join(root, "home");
+  const project = join(root, "project");
+  const nested = join(project, "packages", "app");
+  await mkdir(nested, { recursive: true });
+  await mkdir(join(homeDirectory, ".amber"), { recursive: true });
+  await writeFile(join(homeDirectory, ".amber", "settings.toml"), 'theme = "dark"\n', "utf8");
+
+  assert.deepEqual(await loadProjectEnabledPlugins(nested, homeDirectory), {});
+  assert.deepEqual(await loadProjectEnabledPlugins(homeDirectory, homeDirectory), {});
+
+  await writeEnabledPlugin({ key: "superpowers@official", enabled: false, scope: "project", projectRoot: project });
+  assert.equal(
+    await readFile(projectSettingsPath(project), "utf8"),
+    '[enabled_plugins]\n"superpowers@official" = false\n',
+  );
+  assert.deepEqual(await loadProjectEnabledPlugins(nested, homeDirectory), { "superpowers@official": false });
+
+  await writeEnabledPlugin({ key: "superpowers@official", enabled: true, scope: "project", projectRoot: nested });
+  assert.deepEqual(await loadProjectEnabledPlugins(nested, homeDirectory), { "superpowers@official": true });
+});
+
+test("a project settings file may only set enabled_plugins", async () => {
+  const root = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const project = join(root, "project");
+  await mkdir(join(project, ".amber"), { recursive: true });
+  await writeFile(join(project, ".amber", "settings.toml"), 'theme = "dark"\n', "utf8");
+
+  await assert.rejects(
+    loadProjectEnabledPlugins(project, join(root, "home")),
+    /may only set enabled_plugins, found 'theme'/,
+  );
+});
+
+test("project enable state wins over the user table key by key", async () => {
+  const root = await mkdtemp(join(tmpdir(), "amber-settings-"));
+  const homeDirectory = join(root, "home");
+  const project = join(root, "project");
+  await mkdir(join(project, ".amber"), { recursive: true });
+  await mkdir(homeDirectory, { recursive: true });
+  await writeFile(join(project, ".amber", "settings.toml"), [
+    "[enabled_plugins]",
+    '"superpowers@official" = true',
+    '"local@acme" = false',
+    "",
+  ].join("\n"), "utf8");
+
+  assert.deepEqual(await sessionEnabledPlugins(project, {
+    "superpowers@official": false,
+    "other@official": false,
+  }, homeDirectory), {
+    "superpowers@official": true,
+    "other@official": false,
+    "local@acme": false,
+  });
 });

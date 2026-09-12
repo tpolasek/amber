@@ -36,6 +36,9 @@ import type {
   EditableModelSettings,
   EditableProviderSettings,
   EditableSettings,
+  InstalledPluginState,
+  PluginSettings,
+  SavedPluginSettings,
   SavedSettings,
   SettingsDocument,
 } from "./client-types.js";
@@ -46,6 +49,7 @@ import type { ThinkingLevel } from "./thinking-level.js";
 // handlers, never at module evaluation time.
 export let settingsBusy = false;
 export let settingsDraft: EditableSettings | null = null;
+export let settingsPlugins: PluginSettings | null = null;
 
 export function renderConfig(): void {
   if (!state.config) return;
@@ -65,11 +69,13 @@ export async function openSettingsDialog(): Promise<void> {
   settingsBusy = true;
   renderSettingsBusyState();
   try {
-    const [document] = await Promise.all([
+    const [document, plugins] = await Promise.all([
       api<SettingsDocument>("/api/settings"),
+      api<PluginSettings>("/api/plugins"),
       loadAuthProviders(),
     ]);
     settingsDraft = document.settings;
+    settingsPlugins = plugins;
     elements.settingsPath.textContent = document.path;
     elements.settingsStatus.textContent = document.error
       ? "Configuration needs attention"
@@ -95,6 +101,7 @@ export async function closeSettingsDialog(): Promise<void> {
   if (state.config) document.documentElement.dataset.theme = state.config.theme;
   elements.settingsDialog.hidden = true;
   settingsDraft = null;
+  settingsPlugins = null;
   stopAuthPolling();
   const loginId = abandonActiveAuthLogin();
   if (loginId !== null) {
@@ -172,8 +179,70 @@ export function renderSettingsForm(): void {
   renderThemeOptions();
   renderSettingsDefaults();
   renderProviderSettings();
+  renderPluginSettings();
   renderAgentSettings();
   renderSettingsBusyState();
+}
+
+export function renderPluginSettings(): void {
+  elements.settingsPluginList.replaceChildren();
+  if (!settingsPlugins) return;
+  if (settingsPlugins.plugins.length === 0) {
+    elements.settingsPluginList.append(settingsEmptyState(
+      "No plugins installed. Add a marketplace and install one with /plugin.",
+    ));
+  }
+  for (const plugin of settingsPlugins.plugins) elements.settingsPluginList.append(pluginSettingsRow(plugin));
+  const note = document.createElement("p");
+  note.className = "settings-plugin-note";
+  const project = settingsPlugins.projectScoped;
+  note.textContent = "These checkboxes write your own ~/.amber/settings.toml. "
+    + (project.length > 0
+      ? `Installed for a project: ${project.join(", ")}. Toggle those with /plugin --project from inside the project.`
+      : "A plugin installed for a project only is toggled with /plugin --project from inside the project.");
+  elements.settingsPluginList.append(note);
+}
+
+export function pluginSettingsRow(plugin: InstalledPluginState): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "settings-plugin-row";
+  const version = document.createElement("span");
+  version.className = "settings-plugin-version";
+  version.textContent = plugin.version;
+  row.append(
+    settingsCheckboxField(plugin.key, plugin.enabled, (checked) => void setPluginEnabled(plugin.key, checked)),
+    version,
+  );
+  return row;
+}
+
+/**
+ * Writes one plugin's enable state immediately, outside the document save: the
+ * save re-serialises settings.toml and would discard the table's comments.
+ */
+export async function setPluginEnabled(key: string, enabled: boolean): Promise<void> {
+  if (settingsBusy) return;
+  settingsBusy = true;
+  showSettingsError();
+  elements.settingsStatus.textContent = `${enabled ? "Enabling" : "Disabling"} ${key}…`;
+  renderSettingsBusyState();
+  try {
+    const result = await settingsMutation<SavedPluginSettings>("/api/plugins/enabled", {
+      method: "PUT",
+      body: JSON.stringify({ key, enabled }),
+    });
+    settingsPlugins = result;
+    // Keep the draft in step so a later document save cannot revert the toggle.
+    if (settingsDraft) settingsDraft.enabled_plugins = result.enabled_plugins;
+    elements.settingsStatus.textContent = `${enabled ? "Enabled" : "Disabled"} ${key} · saved to ${result.path}`;
+  } catch (error) {
+    showSettingsError(messageFrom(error));
+    elements.settingsStatus.textContent = "Not saved · the plugin was left as it was.";
+  } finally {
+    settingsBusy = false;
+    renderPluginSettings();
+    renderSettingsBusyState();
+  }
 }
 
 export function renderThemeOptions(): void {

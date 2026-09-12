@@ -78,6 +78,7 @@ export const elements = {
   settingsAddProvider: required<HTMLButtonElement>("settings-add-provider"),
   settingsLoginCodex: required<HTMLButtonElement>("settings-login-codex"),
   settingsProviderList: required<HTMLElement>("settings-provider-list"),
+  settingsPluginList: required<HTMLElement>("settings-plugin-list"),
   settingsAddAgent: required<HTMLButtonElement>("settings-add-agent"),
   settingsAgentList: required<HTMLElement>("settings-agent-list"),
   settingsPath: required<HTMLElement>("settings-path"),
