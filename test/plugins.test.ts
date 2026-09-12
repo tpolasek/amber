@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
   addMarketplace,
@@ -31,6 +32,7 @@ import {
   renderMarketplaceUpdate,
   renderPluginInstallPlan,
   renderPluginList,
+  renderPluginOverview,
   renderPluginUpdated,
   renderPluginUpdatePlan,
   renderPluginUpdateReport,
@@ -970,4 +972,21 @@ test("an installed plugin its marketplace no longer publishes is unavailable, no
     planPluginUpdate({ name: "superpowers", scope: "project", projectRoot: "/tmp", homeDirectory: fixture.homeDirectory }),
     /not installed at project scope/,
   );
+});
+
+/** Repo root from `dist/test/plugins.test.js`. */
+const repositoryRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+test("the plugin docs cover every /plugin action and say what a plugin skill runs", async () => {
+  const docs = await readFile(join(repositoryRoot, "docs", "plugins.md"), "utf8");
+  const actions = renderPluginOverview({ version: 1, marketplaces: {} })
+    .split("\n")
+    .flatMap((line) => /^- `(\/plugin [a-z ]+)/.exec(line)?.[1]?.trim() ?? []);
+
+  assert.ok(actions.length > 0);
+  for (const action of actions) assert.ok(docs.includes(action), `docs/plugins.md does not document \`${action}\``);
+  // The trust model is the one thing a reader must not be able to miss.
+  assert.match(docs, /shell substitutions/);
+  assert.match(docs, /--yes/);
+  assert.ok((await readFile(join(repositoryRoot, "README.md"), "utf8")).includes("docs/plugins.md"));
 });
