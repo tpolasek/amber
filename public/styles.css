@@ -398,6 +398,11 @@ button { color: inherit; }
 .settings-model-list { display: grid; gap: 7px; }
 .settings-model-row { display: grid; grid-template-columns: minmax(170px, 1.4fr) minmax(130px, 1fr) minmax(130px, 1fr) 28px; align-items: end; gap: 8px; padding: 9px; border: 1px solid var(--accent-a14); background: var(--accent-a025); }
 .settings-agent-prompts { display: grid; gap: 10px; }
+.settings-plugin-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px; border: 1px solid var(--accent-a14); background: var(--accent-a025); }
+.settings-plugin-row .settings-checkbox { min-width: 0; padding: 0; }
+.settings-plugin-row .settings-checkbox span { overflow: hidden; color: var(--amber-hot); font-size: 11px; letter-spacing: .04em; text-overflow: ellipsis; white-space: nowrap; }
+.settings-plugin-version { flex: none; color: var(--fg-metadata); font-size: 10px; letter-spacing: .04em; }
+.settings-plugin-note { margin: 0; color: var(--fg-metadata); font-size: 10px; line-height: 1.5; }
 .settings-checkbox { display: flex; align-items: center; gap: 7px; padding: 5px 2px; color: var(--fg-label); cursor: pointer; font-size: 9px; font-weight: 600; letter-spacing: .09em; }
 .settings-checkbox input { accent-color: var(--amber); }
 .settings-empty { margin: 0; padding: 13px; border: 1px dashed var(--accent-a18); color: var(--fg-metadata); font-size: 10px; line-height: 1.45; text-align: center; }

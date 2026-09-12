@@ -37,6 +37,8 @@ import {
   renderPluginUpdatePlan,
   renderPluginUpdateReport,
   saveMarketplaceRegistry,
+  projectPluginKeys,
+  userPluginStates,
   uninstallPlugin,
   updateMarketplace,
   updatePlugin,
@@ -693,6 +695,59 @@ test("renders installed plugins", async () => {
     { "superpowers@fixture": false },
   );
   assert.match(disabled, /_\(disabled\)_/);
+});
+
+test("lists user-scope installs with their enable state for the settings modal", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  assert.deepEqual(userPluginStates(await loadInstalledPlugins(homeDirectory)), []);
+
+  const bundle = await gitBundleFixture({ name: "superpowers", version: "6.3.0" });
+  const marketplace = await marketplaceFixture([
+    { name: "superpowers", description: "Skills", source: { source: "url", url: bundle.path } },
+  ]);
+  await addMarketplace({ spec: marketplace, homeDirectory });
+  await installPlugin({ name: "superpowers", homeDirectory });
+  const registry = await loadInstalledPlugins(homeDirectory);
+
+  // Never toggled: the plugin is listed, and it reads as enabled.
+  assert.deepEqual(userPluginStates(registry), [{
+    key: "superpowers@fixture",
+    name: "superpowers",
+    marketplace: "fixture",
+    version: "6.3.0",
+    enabled: true,
+  }]);
+  assert.equal(userPluginStates(registry, { "superpowers@fixture": false })[0]?.enabled, false);
+  assert.equal(userPluginStates(registry, { "superpowers@fixture": true })[0]?.enabled, true);
+  assert.deepEqual(projectPluginKeys(registry), []);
+});
+
+test("the modal's listing leaves project-scope records to /plugin --project", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const projectRoot = await mkdtemp(join(tmpdir(), "amber-project-"));
+  const record = {
+    scope: "user" as const,
+    projectRoot: null,
+    name: "shared",
+    marketplace: "fixture",
+    version: "1.0.0",
+    commitSha: "",
+    source: { type: "directory" as const, path: "./plugins/shared" },
+    path: pluginCacheRelativePath("fixture", "shared", "1.0.0"),
+    installedAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  await saveInstalledPlugins({
+    version: 1,
+    plugins: {
+      "shared@fixture": [record, { ...record, scope: "project", projectRoot, name: "shared" }],
+      "scoped@fixture": [{ ...record, scope: "project", projectRoot, name: "scoped" }],
+    },
+  }, homeDirectory);
+  const registry = await loadInstalledPlugins(homeDirectory);
+
+  assert.deepEqual(userPluginStates(registry).map((plugin: { key: string }) => plugin.key), ["shared@fixture"]);
+  assert.deepEqual(projectPluginKeys(registry), ["scoped@fixture", "shared@fixture"]);
 });
 
 test("resolves the installed key a toggle names", async () => {

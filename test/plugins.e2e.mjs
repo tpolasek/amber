@@ -166,6 +166,20 @@ async function postJson(url, body) {
   return { status: response.status, body: await response.json().catch(() => ({})) };
 }
 
+async function putJson(url, body, token) {
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: { "content-type": "application/json", "x-amber-auth-action-token": token },
+    body: JSON.stringify(body),
+  });
+  return { status: response.status, body: await response.json().catch(() => ({})) };
+}
+
+async function getJson(url) {
+  const response = await fetch(url);
+  return { status: response.status, body: await response.json().catch(() => ({})) };
+}
+
 async function waitFor(predicate, timeoutMs, label) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -259,6 +273,7 @@ async function main() {
   // The only thing this profile carries is a provider: no marketplaces, no
   // plugins, no skills anywhere on disk.
   await writeFile(join(home, ".amber", "settings.toml"), [
+    "# handwritten: this comment must survive every plugin toggle",
     'theme = "dark"',
     'default_provider = "mock"',
     "",
@@ -326,6 +341,15 @@ async function main() {
       await pathExists(join(bundle, "skills")), bundle);
     check("the installed listing shows it as enabled",
       (await pluginCommand(amber, sessionId, "installed")).includes(`**${PLUGIN_KEY}** \`${record?.version}\``));
+    const untoggled = await getJson(amberUrl(amber.port, "/api/plugins"));
+    check("the settings modal lists a never-toggled plugin as enabled",
+      untoggled.body.plugins?.length === 1
+        && untoggled.body.plugins[0].key === PLUGIN_KEY
+        && untoggled.body.plugins[0].enabled === true
+        && untoggled.body.plugins[0].version === record?.version,
+      JSON.stringify(untoggled.body));
+    check("no enable key was written for it",
+      !(await readFile(join(home, ".amber", "settings.toml"), "utf8")).includes("enabled_plugins"));
 
     console.log("\n== a session lists and runs a superpowers skill");
     const enabled = await runTurn(mock, amber, sessionId, `${TURN_MARKER}: use the brainstorming skill.`);
@@ -376,6 +400,50 @@ async function main() {
       back.snapshot.session.messages.filter((message) => message.kind === "skill" && message.skillName === SKILL).length === 2
         && back.snapshot.session.messages.filter((message) => message.role === "assistant").at(-1)?.content === SKILL_RAN,
       back.snapshot.session.messages.filter((message) => message.role === "assistant").at(-1)?.content);
+
+    console.log("\n== the settings modal toggles the same state");
+    const { authActionToken } = (await getJson(amberUrl(amber.port, "/api/config"))).body;
+    const before = await readFile(join(home, ".amber", "settings.toml"), "utf8");
+    const listed = await getJson(amberUrl(amber.port, "/api/plugins"));
+    check("the modal lists the plugin as enabled and claims no project scope",
+      listed.body.plugins?.[0]?.enabled === true && listed.body.projectScoped?.length === 0,
+      JSON.stringify(listed.body));
+    const unchecked = await putJson(
+      amberUrl(amber.port, "/api/plugins/enabled"),
+      { key: PLUGIN_KEY, enabled: false },
+      authActionToken,
+    );
+    check("unchecking it reports the user settings file it wrote",
+      unchecked.status === 200 && unchecked.body.path === join(home, ".amber", "settings.toml"),
+      JSON.stringify(unchecked));
+    check("the modal listing comes back unchecked",
+      unchecked.body.plugins?.[0]?.enabled === false, JSON.stringify(unchecked.body.plugins));
+    const after = await readFile(join(home, ".amber", "settings.toml"), "utf8");
+    check("the toggle changed one line and left comments and key order alone",
+      after === before.replace(`"${PLUGIN_KEY}" = true`, `"${PLUGIN_KEY}" = false`)
+        && after.includes("# handwritten: this comment must survive every plugin toggle"),
+      after);
+    const modalOff = await runTurn(mock, amber, sessionId, `${TURN_MARKER}: use the brainstorming skill after the modal.`);
+    check("the next message of the open session has lost the skill",
+      !listsSkill(modalOff.requests[0], SKILL), skillListing(modalOff.requests[0]).join(" | "));
+    const rechecked = await putJson(
+      amberUrl(amber.port, "/api/plugins/enabled"),
+      { key: PLUGIN_KEY, enabled: true },
+      authActionToken,
+    );
+    check("rechecking it reports the plugin as enabled again",
+      rechecked.body.plugins?.[0]?.enabled === true, JSON.stringify(rechecked.body.plugins));
+    check("settings.toml is back to what it was before the modal touched it",
+      (await readFile(join(home, ".amber", "settings.toml"), "utf8")) === before);
+    const modalOn = await runTurn(mock, amber, sessionId, `${TURN_MARKER}: use the brainstorming skill once again.`);
+    check("the skill is back on the next message",
+      listsSkill(modalOn.requests[0], SKILL), skillListing(modalOn.requests[0]).join(" | "));
+    const refused = await putJson(
+      amberUrl(amber.port, "/api/plugins/enabled"),
+      { key: PLUGIN_KEY, enabled: false },
+      "not-the-token",
+    );
+    check("a toggle without the settings action token is refused", refused.status === 403, JSON.stringify(refused));
 
     console.log("\n== update reports the installed plugin as current");
     const updates = await pluginCommand(amber, sessionId, "update");

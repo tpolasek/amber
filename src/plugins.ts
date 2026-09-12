@@ -1085,6 +1085,47 @@ function warnMissingBundle(key: string, bundle: string): void {
   console.error(`amber: plugin ${key} is installed but its bundle is missing at ${bundle}`);
 }
 
+/** One user-scope install as the settings modal shows it. */
+export interface UserPluginState {
+  /** `<plugin>@<marketplace>`, the key the enable table and every toggle use. */
+  key: string;
+  name: string;
+  marketplace: string;
+  version: string;
+  enabled: boolean;
+}
+
+/**
+ * User-scope installs in key order, taken from the registry rather than from
+ * the enable table, so a plugin that has never been toggled is still listed -
+ * reading as enabled, because an absent key means enabled.
+ */
+export function userPluginStates(
+  registry: InstalledPluginRegistry,
+  enabledPlugins?: Record<string, boolean>,
+): UserPluginState[] {
+  const plugins: UserPluginState[] = [];
+  for (const key of Object.keys(registry.plugins).sort()) {
+    const record = (registry.plugins[key] ?? []).find((candidate) => candidate.scope === "user");
+    if (!record) continue;
+    plugins.push({
+      key,
+      name: record.name,
+      marketplace: record.marketplace,
+      version: record.version,
+      enabled: isPluginEnabled(key, enabledPlugins),
+    });
+  }
+  return plugins;
+}
+
+/** Keys carrying a project-scope record, which only `/plugin --project` governs. */
+export function projectPluginKeys(registry: InstalledPluginRegistry): string[] {
+  return Object.keys(registry.plugins)
+    .filter((key) => (registry.plugins[key] ?? []).some((record) => record.scope === "project"))
+    .sort();
+}
+
 /* ------------------------------------------------------------------ */
 /* Rendering                                                           */
 /* ------------------------------------------------------------------ */

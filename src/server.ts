@@ -19,6 +19,7 @@ import {
   planPluginInstall,
   planPluginUpdate,
   pluginKey,
+  projectPluginKeys,
   removeMarketplace,
   renderInstalledPlugins,
   renderMarketplaceList,
@@ -33,6 +34,7 @@ import {
   uninstallPlugin,
   updateMarketplaces,
   updatePlugin,
+  userPluginStates,
 } from "./plugins.js";
 import { SessionStore } from "./store.js";
 import { ProviderCatalog } from "./provider-catalog.js";
@@ -317,6 +319,40 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       ...(configurationError ? { error: configurationError } : {}),
       config: await configPayload(),
     });
+  }
+  if (method === "GET" && url.pathname === "/api/plugins") {
+    if (!authorizeLocalSettingsAccess(request, response)) return;
+    try {
+      return json(response, 200, await pluginSettingsPayload());
+    } catch (error) {
+      return json(response, 500, { error: errorMessage(error) });
+    }
+  }
+  if (method === "PUT" && url.pathname === "/api/plugins/enabled") {
+    if (!authorizeSettingsMutation(request, response)) return;
+    const body = await readJson(request);
+    if (typeof body.key !== "string" || !body.key.trim()) {
+      return json(response, 400, { error: "A plugin key is required" });
+    }
+    if (typeof body.enabled !== "boolean") {
+      return json(response, 400, { error: "Enabled must be true or false" });
+    }
+    const key = body.key.trim();
+    try {
+      const installed = userPluginStates(await loadInstalledPlugins());
+      if (!installed.some((plugin) => plugin.key === key)) {
+        return json(response, 404, { error: `Plugin '${key}' is not installed at user scope` });
+      }
+      // The toggle edits the [enabled_plugins] table in place rather than
+      // re-serialising settings.toml, so comments and key order survive.
+      const path = await writeEnabledPlugin({ key, enabled: body.enabled });
+      // Skills are rediscovered per message but settings are not reloaded, so
+      // the in-memory table moves with the file, as `/plugin enable` does.
+      if (settings) settings.enabled_plugins = { ...settings.enabled_plugins, [key]: body.enabled };
+      return json(response, 200, { ...await pluginSettingsPayload(), path });
+    } catch (error) {
+      return json(response, 500, { error: errorMessage(error) });
+    }
   }
   if (method === "GET" && url.pathname === "/api/auth") {
     return json(response, 200, {
@@ -2644,6 +2680,20 @@ function configurationErrorMessage(error: unknown): string {
   const detail = errorMessage(error);
   const prefix = `${settingsPath}: `;
   return detail.startsWith(prefix) ? detail.slice(prefix.length) : detail;
+}
+
+/** The settings modal's view of plugins: user-scope installs and their enable state. */
+async function pluginSettingsPayload(): Promise<{
+  plugins: ReturnType<typeof userPluginStates>;
+  projectScoped: string[];
+  enabled_plugins: Record<string, boolean>;
+}> {
+  const registry = await loadInstalledPlugins();
+  return {
+    plugins: userPluginStates(registry, settings?.enabled_plugins),
+    projectScoped: projectPluginKeys(registry),
+    enabled_plugins: { ...settings?.enabled_plugins },
+  };
 }
 
 function authorizeLocalSettingsAccess(request: IncomingMessage, response: ServerResponse): boolean {

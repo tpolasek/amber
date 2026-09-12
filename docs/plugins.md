@@ -4,7 +4,8 @@ A plugin is a bundle of skills and commands published by a **marketplace** and i
 Amber's own cache. Marketplaces are named git repositories or local directories; Amber reads the
 same manifest format Claude Code uses, so a marketplace written for Claude Code works unchanged.
 
-Everything is driven from the `/plugin` slash command.
+Marketplaces, installs, and updates are driven from the `/plugin` slash command. Enabling and
+disabling an installed plugin can also be done in the web settings modal.
 
 ## Before you install anything: what runs
 
@@ -101,6 +102,20 @@ reformat your file.
 
 Disabling a plugin leaves it installed. Its bundle stays in the cache and its registry record
 stays in place; it simply stops contributing skills and commands.
+
+### From the settings modal
+
+The web settings modal has a **PLUGINS** section listing every plugin installed at user scope,
+each with an enable checkbox. The list comes from the installed-plugins registry, so a plugin that
+has never been toggled is listed and reads as enabled, with no key written for it.
+
+A checkbox writes the same `[enabled_plugins]` table `/plugin enable` and `/plugin disable` write,
+in place and one key at a time, and it takes effect on the next message of an open session. It is
+written when you click it, not when you press SAVE.
+
+The modal edits your own `~/.amber/settings.toml`, so it shows user-scope installs only. A plugin
+installed for one project is named in a note under the list and is toggled with
+`/plugin enable <plugin> --project` from inside that project.
 
 ## Scopes
 
