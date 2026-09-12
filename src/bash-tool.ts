@@ -7,7 +7,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import type { ToolDefinition, ToolStatus, ToolStatusDisplay } from "./types.js";
 
 export const DEFAULT_BASH_TIMEOUT_MS = 120_000;
-export const MAX_BASH_TIMEOUT_MS = 600_000;
+export const MAX_BASH_TIMEOUT_MS = 1_200_000;
 export const MAX_FOREGROUND_BASH_TIMEOUT_MS = 290_000;
 export const MAX_OUTPUT_CHARACTERS = 20_000;
 const TRUNCATION_MARKER = "[output truncated]";

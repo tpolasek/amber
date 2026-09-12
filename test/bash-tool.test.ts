@@ -36,8 +36,8 @@ test("caps foreground Bash timeout below the read-cache TTL while allowing long 
   assert.deepEqual(parseBashInput({ command: "pwd", timeout: 290_000 }), {
     command: "pwd", timeoutMs: 290_000, runInBackground: false,
   });
-  assert.deepEqual(parseBashInput({ command: "pwd", timeout: 600_000, run_in_background: true }), {
-    command: "pwd", timeoutMs: 600_000, runInBackground: true,
+  assert.deepEqual(parseBashInput({ command: "pwd", timeout: 1_200_000, run_in_background: true }), {
+    command: "pwd", timeoutMs: 1_200_000, runInBackground: true,
   });
 });
 
