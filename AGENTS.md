@@ -34,6 +34,9 @@ Sessions live in `~/.amber/data/sessions/`. The log is the source of truth for m
 - Tests use `node:test` + `node:assert/strict`, plain data-literal fixtures.
 - Commit messages: one imperative line, e.g. "Repair torn log tails and commit the log before metadata".
 
+## Commit style
+- Be brief and to the point, not overly verbose. Bullet points are encouraged.
+
 ## Reloading during development
 
 Code changes require a server restart to take effect. Use the `/reload` skill (or `./run.sh` detached): it rebuilds, SIGINTs the old server, and starts a new one. The session you are running in dies mid-flight — that is expected; the session persists on disk and resumes after the reload.
