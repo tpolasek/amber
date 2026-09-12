@@ -9,6 +9,7 @@ import { listenErrorMessage, parseCliCommand, usageText } from "./cli.js";
 import { builtInCommand } from "./built-in-commands.js";
 import {
   addMarketplace,
+  checkPluginUpdates,
   installedPluginKey,
   installPlugin,
   listMarketplacePlugins,
@@ -16,15 +17,22 @@ import {
   loadMarketplaceRegistry,
   parsePluginCommand,
   planPluginInstall,
+  planPluginUpdate,
   pluginKey,
   removeMarketplace,
   renderInstalledPlugins,
   renderMarketplaceList,
+  renderMarketplaceUpdate,
   renderPluginInstalled,
   renderPluginInstallPlan,
   renderPluginList,
   renderPluginOverview,
+  renderPluginUpdated,
+  renderPluginUpdatePlan,
+  renderPluginUpdateReport,
   uninstallPlugin,
+  updateMarketplaces,
+  updatePlugin,
 } from "./plugins.js";
 import { SessionStore } from "./store.js";
 import { ProviderCatalog } from "./provider-catalog.js";
@@ -2411,6 +2419,23 @@ async function runPluginCommand(
   if (parsed.kind === "marketplace-remove") {
     await removeMarketplace(parsed.name);
     return `Removed marketplace **${parsed.name}**. Installed plugins from it are untouched.`;
+  }
+  if (parsed.kind === "marketplace-update") {
+    return renderMarketplaceUpdate(await updateMarketplaces(parsed.name));
+  }
+  if (parsed.kind === "update-check") {
+    return renderPluginUpdateReport(await checkPluginUpdates());
+  }
+  if (parsed.kind === "update") {
+    const target = {
+      name: parsed.name,
+      scope: parsed.scope,
+      ...(parsed.marketplace ? { marketplace: parsed.marketplace } : {}),
+      ...(parsed.scope === "project" ? { projectRoot: sessionRoot } : {}),
+    };
+    // An update runs whatever the new commit brings, so it is confirmed like an install.
+    if (!parsed.confirmed) return renderPluginUpdatePlan(await planPluginUpdate(target));
+    return renderPluginUpdated(await updatePlugin(target));
   }
   if (parsed.kind === "installed") {
     return renderInstalledPlugins(

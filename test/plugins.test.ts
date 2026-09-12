@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   addMarketplace,
+  checkPluginUpdates,
   enabledPluginBundles,
   installedPluginKey,
   installPlugin,
@@ -19,6 +20,7 @@ import {
   parseMarketplaceSpec,
   parsePluginCommand,
   planPluginInstall,
+  planPluginUpdate,
   pluginCachePath,
   pluginCacheRelativePath,
   pluginsDirectory,
@@ -26,11 +28,18 @@ import {
   saveInstalledPlugins,
   renderInstalledPlugins,
   renderMarketplaceList,
+  renderMarketplaceUpdate,
   renderPluginInstallPlan,
   renderPluginList,
+  renderPluginUpdated,
+  renderPluginUpdatePlan,
+  renderPluginUpdateReport,
   saveMarketplaceRegistry,
   uninstallPlugin,
+  updateMarketplace,
+  updatePlugin,
 } from "../src/plugins.js";
+import type { PluginUpdateStatus } from "../src/plugins.js";
 
 const run = promisify(execFile);
 
@@ -233,6 +242,26 @@ test("parses install and uninstall targets, scopes and confirmation", () => {
   assert.match((parsePluginCommand("uninstall a --yes") as { message: string }).message, /Unknown flag/);
   assert.match((parsePluginCommand("install Bad@Name") as { message: string }).message, /<plugin>\[@marketplace\]/);
   assert.match((parsePluginCommand("install a@b@c") as { message: string }).message, /<plugin>\[@marketplace\]/);
+});
+
+test("parses update checks, update targets and marketplace refetches", () => {
+  assert.deepEqual(parsePluginCommand("update"), { kind: "update-check" });
+  assert.deepEqual(parsePluginCommand("update superpowers"), {
+    kind: "update", name: "superpowers", scope: "user", confirmed: false,
+  });
+  assert.deepEqual(parsePluginCommand("update superpowers@fixture --yes"), {
+    kind: "update", name: "superpowers", marketplace: "fixture", scope: "user", confirmed: true,
+  });
+  assert.deepEqual(parsePluginCommand("update superpowers --project --yes"), {
+    kind: "update", name: "superpowers", scope: "project", confirmed: true,
+  });
+  assert.deepEqual(parsePluginCommand("marketplace update"), { kind: "marketplace-update" });
+  assert.deepEqual(parsePluginCommand("marketplace update fixture"), { kind: "marketplace-update", name: "fixture" });
+  // `--yes` with nothing to apply it to is refused rather than silently updating everything.
+  assert.match((parsePluginCommand("update --yes") as { message: string }).message, /Name a plugin/);
+  assert.match((parsePluginCommand("update --project") as { message: string }).message, /Name a plugin/);
+  assert.match((parsePluginCommand("update a b") as { message: string }).message, /Usage/);
+  assert.match((parsePluginCommand("update a --force") as { message: string }).message, /Unknown flag/);
 });
 
 test("parses enable and disable targets and scopes", () => {
@@ -768,4 +797,177 @@ test("a record whose bundle is gone is skipped rather than failing discovery", a
   }, homeDirectory);
 
   assert.deepEqual(await enabledPluginBundles({ cwd: homeDirectory, homeDirectory }), []);
+});
+
+/* ------------------------------------------------------------------ */
+/* Update and check                                                    */
+/* ------------------------------------------------------------------ */
+
+/** Commits a new plugin.json version plus a second skill on top of a bundle repo. */
+async function publishBundleVersion(bundle: string, version: string): Promise<string> {
+  await writeFile(join(bundle, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "superpowers", version }));
+  await mkdir(join(bundle, "skills", "debugging"), { recursive: true });
+  await writeFile(join(bundle, "skills", "debugging", "SKILL.md"), "---\nname: debugging\n---\nBody\n");
+  await run("git", ["add", "-A"], { cwd: bundle });
+  await run("git", ["commit", "-qm", version], { cwd: bundle });
+  const { stdout } = await run("git", ["rev-parse", "HEAD"], { cwd: bundle });
+  return stdout.trim();
+}
+
+async function installedFixture(): Promise<{ homeDirectory: string; bundle: string; sha: string }> {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const bundle = await gitBundleFixture({ name: "superpowers", version: "6.3.0" });
+  const marketplace = await marketplaceFixture([
+    { name: "superpowers", description: "Skills", source: { source: "url", url: bundle.path } },
+  ]);
+  await addMarketplace({ spec: marketplace, homeDirectory });
+  await installPlugin({ name: "superpowers", homeDirectory });
+  return { homeDirectory, bundle: bundle.path, sha: bundle.sha };
+}
+
+test("reports no drift while the published commit matches the installed one", async () => {
+  const fixture = await installedFixture();
+  const statuses = await checkPluginUpdates({ homeDirectory: fixture.homeDirectory });
+  assert.equal(statuses.length, 1);
+  assert.equal(statuses[0]?.key, "superpowers@fixture");
+  assert.equal(statuses[0]?.state, "current");
+  assert.equal(statuses[0]?.publishedSha, fixture.sha);
+  assert.match(renderPluginUpdateReport(statuses), /up to date/);
+
+  const result = await updatePlugin({ name: "superpowers", homeDirectory: fixture.homeDirectory });
+  assert.equal(result.updated, false);
+  assert.equal(result.record.commitSha, fixture.sha);
+});
+
+test("reports drift when the marketplace publishes a newer commit", async () => {
+  const fixture = await installedFixture();
+  const published = await publishBundleVersion(fixture.bundle, "6.4.0");
+
+  const [status] = await checkPluginUpdates({ homeDirectory: fixture.homeDirectory });
+  assert.equal(status?.state, "drifted");
+  assert.equal(status?.publishedSha, published);
+  assert.equal(status?.record.commitSha, fixture.sha);
+
+  const report = renderPluginUpdateReport(await checkPluginUpdates({ homeDirectory: fixture.homeDirectory }));
+  assert.match(report, /superpowers@fixture/);
+  assert.match(report, new RegExp(published.slice(0, 12)));
+  assert.match(report, /\/plugin update/);
+
+  // Checking reports; it never fetches a bundle.
+  const plan = await planPluginUpdate({ name: "superpowers", homeDirectory: fixture.homeDirectory });
+  assert.equal(plan.state, "drifted");
+  const rendered = renderPluginUpdatePlan(plan);
+  assert.match(rendered, new RegExp(fixture.sha));
+  assert.match(rendered, new RegExp(published));
+  assert.match(rendered, /--yes/);
+  assert.equal((await loadInstalledPlugins(fixture.homeDirectory)).plugins["superpowers@fixture"]?.[0]?.commitSha, fixture.sha);
+});
+
+test("applying an update keeps the install time, the enable state and the skill namespace", async () => {
+  const fixture = await installedFixture();
+  const { homeDirectory } = fixture;
+  const first = (await loadInstalledPlugins(homeDirectory)).plugins["superpowers@fixture"]?.[0];
+  const published = await publishBundleVersion(fixture.bundle, "6.4.0");
+
+  const result = await updatePlugin({ name: "superpowers", homeDirectory });
+  assert.equal(result.updated, true);
+  assert.equal(result.previous.version, "6.3.0");
+  assert.equal(result.record.version, "6.4.0");
+  assert.equal(result.record.commitSha, published);
+  assert.equal(result.record.installedAt, first?.installedAt);
+  assert.notEqual(result.record.updatedAt, first?.updatedAt);
+
+  // One record, one cache directory: the replaced version is discarded.
+  assert.equal(((await loadInstalledPlugins(homeDirectory)).plugins["superpowers@fixture"] ?? []).length, 1);
+  await assert.rejects(stat(pluginCachePath("fixture", "superpowers", "6.3.0", homeDirectory)));
+  const cache = pluginCachePath("fixture", "superpowers", "6.4.0", homeDirectory);
+  assert.equal((await stat(join(cache, "skills", "debugging", "SKILL.md"))).isFile(), true);
+
+  // Same key, same namespace, still enabled - the settings table was never touched.
+  const cwd = await mkdtemp(join(tmpdir(), "amber-cwd-"));
+  assert.deepEqual(await enabledPluginBundles({ cwd, homeDirectory }), [
+    { key: "superpowers@fixture", name: "superpowers", bundle: cache },
+  ]);
+  assert.deepEqual(await enabledPluginBundles({ cwd, homeDirectory, enabledPlugins: { "superpowers@fixture": false } }), []);
+  assert.match(renderPluginUpdated(result), /6\.3\.0.*6\.4\.0/s);
+  assert.equal((await checkPluginUpdates({ homeDirectory }))[0]?.state, "current");
+});
+
+test("a directory-sourced plugin cannot drift on a commit but does on a published version", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const marketplace = await marketplaceFixture([
+    { name: "local-plugin", description: "d", version: "0.1.0", source: "./plugins/local" },
+  ]);
+  await bundleFixture(join(marketplace, "plugins", "local"));
+  await addMarketplace({ spec: marketplace, homeDirectory });
+  await installPlugin({ name: "local-plugin", homeDirectory });
+
+  assert.equal((await checkPluginUpdates({ homeDirectory }))[0]?.state, "local");
+
+  await writeFile(
+    join(marketplace, ".claude-plugin", "marketplace.json"),
+    JSON.stringify({
+      name: "fixture",
+      plugins: [{ name: "local-plugin", description: "d", version: "0.2.0", source: "./plugins/local" }],
+    }),
+  );
+  const refetched = await updateMarketplace("fixture", homeDirectory);
+  assert.equal(refetched.plugins, 1);
+
+  const [status] = await checkPluginUpdates({ homeDirectory });
+  assert.equal(status?.state, "drifted");
+  assert.equal(status?.publishedVersion, "0.2.0");
+  assert.equal((await updatePlugin({ name: "local-plugin", homeDirectory })).record.version, "0.2.0");
+});
+
+test("refetches a marketplace checkout and records the commit it moved to", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const origin = await gitMarketplaceFixture([{ name: "one", description: "d", source: "./plugins/one" }]);
+  await addMarketplace({ spec: origin.path, homeDirectory, treatDirectoryAsGit: true });
+
+  const unchanged = await updateMarketplace("fixture", homeDirectory);
+  assert.equal(unchanged.changed, false);
+  assert.equal(unchanged.commitSha, origin.sha);
+
+  await writeFile(
+    join(origin.path, ".claude-plugin", "marketplace.json"),
+    JSON.stringify({
+      name: "fixture",
+      plugins: [
+        { name: "one", description: "d", source: "./plugins/one" },
+        { name: "two", description: "d", source: "./plugins/two" },
+      ],
+    }),
+  );
+  await run("git", ["commit", "-qam", "publish two"], { cwd: origin.path });
+  const { stdout } = await run("git", ["rev-parse", "HEAD"], { cwd: origin.path });
+
+  const updated = await updateMarketplace("fixture", homeDirectory);
+  assert.equal(updated.changed, true);
+  assert.equal(updated.previousSha, origin.sha);
+  assert.equal(updated.commitSha, stdout.trim());
+  assert.equal(updated.plugins, 2);
+  assert.equal((await loadMarketplaceRegistry(homeDirectory)).marketplaces.fixture?.commitSha, stdout.trim());
+  assert.deepEqual(
+    (await listMarketplacePlugins({ homeDirectory })).map((entry) => entry.plugin.name),
+    ["one", "two"],
+  );
+  assert.match(renderMarketplaceUpdate([updated]), /fixture/);
+  await assert.rejects(updateMarketplace("absent", homeDirectory), /not added/);
+});
+
+test("an installed plugin its marketplace no longer publishes is unavailable, not drifted", async () => {
+  const fixture = await installedFixture();
+  await removeMarketplace("fixture", fixture.homeDirectory);
+
+  const [status] = await checkPluginUpdates({ homeDirectory: fixture.homeDirectory });
+  assert.equal(status?.state, "unavailable");
+  assert.match(status?.reason ?? "", /no longer added/);
+  assert.match(renderPluginUpdateReport([status as PluginUpdateStatus]), /no longer added/);
+  await assert.rejects(updatePlugin({ name: "superpowers", homeDirectory: fixture.homeDirectory }), /no longer added/);
+
+  await assert.rejects(
+    planPluginUpdate({ name: "superpowers", scope: "project", projectRoot: "/tmp", homeDirectory: fixture.homeDirectory }),
+    /not installed at project scope/,
+  );
 });

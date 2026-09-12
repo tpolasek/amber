@@ -13,7 +13,7 @@ export const BUILT_IN_COMMANDS: BuiltInCommand[] = [
   { name: "/fork", description: "Fork this session with its complete history", runsDuringResponse: false },
   { name: "/git", description: "Inspect the repository: diff, show, status; commit [push]", runsDuringResponse: false },
   { name: "/name", description: "Generate a session name, or pass a title", runsDuringResponse: false },
-  { name: "/plugin", description: "Manage plugin marketplaces, and install, enable, or remove plugins", runsDuringResponse: false },
+  { name: "/plugin", description: "Manage plugin marketplaces, and install, enable, update, or remove plugins", runsDuringResponse: false },
   { name: "/tasks", description: "List and manage background shell tasks", runsDuringResponse: true },
 ];
 

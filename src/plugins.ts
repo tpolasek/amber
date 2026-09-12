@@ -114,8 +114,11 @@ export type PluginCommand =
   | { kind: "marketplace-list" }
   | { kind: "marketplace-add"; spec: string; alias?: string }
   | { kind: "marketplace-remove"; name: string }
+  | { kind: "marketplace-update"; name?: string }
   | { kind: "list"; marketplace?: string }
   | { kind: "installed" }
+  | { kind: "update-check" }
+  | { kind: "update"; name: string; marketplace?: string; scope: PluginScope; confirmed: boolean }
   | { kind: "install"; name: string; marketplace?: string; scope: PluginScope; confirmed: boolean }
   | { kind: "uninstall"; name: string; marketplace?: string; scope: PluginScope }
   | { kind: "toggle"; name: string; marketplace?: string; scope: PluginScope; enabled: boolean }
@@ -296,6 +299,11 @@ export function parsePluginCommand(argument: string): PluginCommand {
       if (operands.length !== 1 || !name) return { kind: "error", message: "Usage: /plugin marketplace remove <name>" };
       return { kind: "marketplace-remove", name };
     }
+    if (action === "update") {
+      const name = operands[0];
+      if (operands.length > 1) return { kind: "error", message: "Usage: /plugin marketplace update [name]" };
+      return { kind: "marketplace-update", ...(name ? { name } : {}) };
+    }
     return { kind: "error", message: `Unknown marketplace action: ${action}` };
   }
 
@@ -325,6 +333,29 @@ export function parsePluginCommand(argument: string): PluginCommand {
       ...target,
       scope: flags.has("--project") ? "project" : "user",
       enabled: head === "enable",
+    };
+  }
+
+  if (head === "update") {
+    const flags = new Set(rest.filter((word) => word.startsWith("--")));
+    const operands = rest.filter((word) => !word.startsWith("--"));
+    const usage = "Usage: /plugin update [<plugin>[@marketplace]] [--project] [--yes]";
+    const unknown = [...flags].find((flag) => flag !== "--project" && flag !== "--yes");
+    if (unknown) return { kind: "error", message: `Unknown flag ${unknown}. ${usage}` };
+    if (operands.length > 1) return { kind: "error", message: usage };
+    const [spec] = operands;
+    if (!spec) {
+      // Bare `/plugin update` reports drift for everything; applying one is always named.
+      if (flags.size > 0) return { kind: "error", message: `Name a plugin to update. ${usage}` };
+      return { kind: "update-check" };
+    }
+    const target = parsePluginTarget(spec);
+    if (!target) return { kind: "error", message: `Plugin must be named <plugin>[@marketplace]: ${spec}` };
+    return {
+      kind: "update",
+      ...target,
+      scope: flags.has("--project") ? "project" : "user",
+      confirmed: flags.has("--yes"),
     };
   }
 
@@ -809,6 +840,183 @@ function shortSha(sha: string): string {
 }
 
 /* ------------------------------------------------------------------ */
+/* Update and check                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * `local` is a source with no commit to compare - a directory bundle - whose
+ * published version still matches; `unavailable` carries the reason nothing
+ * could be compared at all.
+ */
+export type PluginUpdateState = "current" | "drifted" | "local" | "unavailable";
+
+export interface PluginUpdateStatus {
+  key: string;
+  record: InstalledPluginRecord;
+  state: PluginUpdateState;
+  /** Version the marketplace names today, when its entry names one. */
+  publishedVersion?: string;
+  /** Commit the marketplace's source resolves to now; absent for a `directory` source. */
+  publishedSha?: string;
+  /** Why the state is `unavailable`. */
+  reason?: string;
+}
+
+export interface PluginUpdateResult {
+  status: PluginUpdateStatus;
+  previous: InstalledPluginRecord;
+  record: InstalledPluginRecord;
+  updated: boolean;
+}
+
+/** Drift for every installed record, in registry-key order. */
+export async function checkPluginUpdates(options: { homeDirectory?: string } = {}): Promise<PluginUpdateStatus[]> {
+  const homeDirectory = options.homeDirectory ?? homedir();
+  const registry = await loadInstalledPlugins(homeDirectory);
+  const statuses: PluginUpdateStatus[] = [];
+  for (const key of Object.keys(registry.plugins).sort()) {
+    for (const record of registry.plugins[key] ?? []) {
+      statuses.push(await pluginUpdateStatus(key, record, homeDirectory));
+    }
+  }
+  return statuses;
+}
+
+/** Drift for the one record a `/plugin update <plugin>` names. */
+export async function planPluginUpdate(options: PluginTargetOptions): Promise<PluginUpdateStatus> {
+  const homeDirectory = options.homeDirectory ?? homedir();
+  const { scope, projectRoot } = resolveScope(options);
+  const registry = await loadInstalledPlugins(homeDirectory);
+  const key = options.marketplace
+    ? pluginKey(options.name, options.marketplace)
+    : installedKeyForName(registry, options.name);
+  const record = (registry.plugins[key] ?? []).find(
+    (candidate) => candidate.scope === scope && candidate.projectRoot === projectRoot,
+  );
+  if (!record) throw new Error(`Plugin '${key}' is not installed at ${scope} scope`);
+  return pluginUpdateStatus(key, record, homeDirectory);
+}
+
+/**
+ * Re-installs a drifted plugin from its marketplace. The registry key never
+ * changes, so enable state and the `<plugin>:` skill namespace survive; an
+ * up-to-date plugin is left alone rather than refetched.
+ */
+export async function updatePlugin(options: PluginTargetOptions): Promise<PluginUpdateResult> {
+  const status = await planPluginUpdate(options);
+  if (status.state === "unavailable") throw new Error(status.reason ?? `Plugin '${status.key}' cannot be updated`);
+  if (status.state !== "drifted") {
+    return { status, previous: status.record, record: status.record, updated: false };
+  }
+  const record = await installPlugin({ ...options, marketplace: status.record.marketplace });
+  return { status, previous: status.record, record, updated: true };
+}
+
+async function pluginUpdateStatus(
+  key: string,
+  record: InstalledPluginRecord,
+  homeDirectory: string,
+): Promise<PluginUpdateStatus> {
+  const unavailable = (reason: string): PluginUpdateStatus => ({ key, record, state: "unavailable", reason });
+
+  const marketplaces = await loadMarketplaceRegistry(homeDirectory);
+  if (!marketplaces.marketplaces[record.marketplace]) {
+    return unavailable(`Marketplace '${record.marketplace}' is no longer added, so '${key}' cannot be compared`);
+  }
+
+  let entry: MarketplacePlugin;
+  try {
+    entry = await marketplacePluginEntry(record.marketplace, record.name, homeDirectory);
+  } catch (error) {
+    return unavailable(errorText(error));
+  }
+
+  let publishedSha: string | undefined;
+  if (entry.source.type !== "directory") {
+    try {
+      publishedSha = entry.source.sha ?? await resolveRemoteSha(entry.source.url, entry.source.ref);
+    } catch (error) {
+      return unavailable(`Could not resolve the published commit of '${key}': ${errorText(error)}`);
+    }
+  }
+
+  const published = {
+    ...(entry.version ? { publishedVersion: entry.version } : {}),
+    ...(publishedSha ? { publishedSha } : {}),
+  };
+  // An empty recorded sha means a directory install; a published sha against it
+  // is a source that changed kind, which is drift.
+  const drifted = (publishedSha !== undefined && publishedSha !== record.commitSha)
+    || (entry.version !== undefined && entry.version !== record.version);
+  if (drifted) return { key, record, state: "drifted", ...published };
+  const state: PluginUpdateState = publishedSha === undefined && !record.commitSha ? "local" : "current";
+  return { key, record, state, ...published };
+}
+
+export interface MarketplaceUpdateResult {
+  name: string;
+  previousSha?: string;
+  commitSha?: string;
+  /** A `directory` marketplace has no commit, so it is never reported as changed. */
+  changed: boolean;
+  plugins: number;
+}
+
+/** Refetches a marketplace checkout so drift against it is measured against what is published now. */
+export async function updateMarketplace(name: string, homeDirectory = homedir()): Promise<MarketplaceUpdateResult> {
+  const registry = await loadMarketplaceRegistry(homeDirectory);
+  const record = registry.marketplaces[name];
+  if (!record) throw new Error(`Marketplace '${name}' is not added`);
+
+  const scratch = join(pluginsDirectory(homeDirectory), "marketplaces", `.probe-${randomUUID()}`);
+  let manifest: MarketplaceManifest;
+  let commitSha: string | undefined;
+  try {
+    commitSha = await fetchMarketplace(record.source, scratch);
+    manifest = await readMarketplaceManifest(scratch);
+  } catch (error) {
+    await rm(scratch, { recursive: true, force: true });
+    throw error;
+  }
+
+  // The old checkout goes only once the new one is in hand and parses.
+  const destination = marketplaceCheckoutPath(name, homeDirectory);
+  await rm(destination, { recursive: true, force: true });
+  await rename(scratch, destination);
+
+  const previousSha = record.commitSha;
+  registry.marketplaces[name] = {
+    ...record,
+    lastFetchedAt: new Date().toISOString(),
+    ...(commitSha ? { commitSha } : {}),
+  };
+  await saveMarketplaceRegistry(registry, homeDirectory);
+
+  return {
+    name,
+    ...(previousSha ? { previousSha } : {}),
+    ...(commitSha ? { commitSha } : {}),
+    changed: commitSha !== undefined && commitSha !== previousSha,
+    plugins: manifest.plugins.length,
+  };
+}
+
+/** Refetches one named marketplace, or every added one. */
+export async function updateMarketplaces(name: string | undefined, homeDirectory = homedir()): Promise<MarketplaceUpdateResult[]> {
+  if (name) return [await updateMarketplace(name, homeDirectory)];
+  const registry = await loadMarketplaceRegistry(homeDirectory);
+  const results: MarketplaceUpdateResult[] = [];
+  for (const marketplace of Object.keys(registry.marketplaces).sort()) {
+    results.push(await updateMarketplace(marketplace, homeDirectory));
+  }
+  return results;
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/* ------------------------------------------------------------------ */
 /* Discovery                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -912,9 +1120,11 @@ export function renderPluginOverview(registry: MarketplaceRegistry): string {
     "- `/plugin marketplace add <owner/repo | url | directory> [as <name>]`",
     "- `/plugin marketplace remove <name>`",
     "- `/plugin marketplace list`",
+    "- `/plugin marketplace update [name]`",
     "- `/plugin list [marketplace]`",
     "- `/plugin installed`",
     "- `/plugin install <plugin>[@marketplace] [--project] [--yes]`",
+    "- `/plugin update [<plugin>[@marketplace]] [--project] [--yes]`",
     "- `/plugin uninstall <plugin>[@marketplace] [--project]`",
     "- `/plugin enable <plugin>[@marketplace] [--project]`",
     "- `/plugin disable <plugin>[@marketplace] [--project]`",
@@ -975,6 +1185,87 @@ export function renderInstalledPlugins(
     }
   }
   return lines.join("\n");
+}
+
+export function renderPluginUpdateReport(statuses: PluginUpdateStatus[]): string {
+  if (statuses.length === 0) {
+    return ["**Plugin updates**", "", "No plugins installed."].join("\n");
+  }
+  const lines = ["**Plugin updates**", ""];
+  for (const status of statuses) {
+    const scope = status.record.scope === "project" ? ` · project \`${status.record.projectRoot}\`` : "";
+    lines.push(`- **${status.key}** \`${status.record.version}\`${scope} — ${updateSummary(status)}`);
+  }
+  const drifted = statuses.filter((status) => status.state === "drifted");
+  if (drifted.length > 0) {
+    lines.push("", `Apply one with \`/plugin update ${drifted[0]?.key}${drifted[0]?.record.scope === "project" ? " --project" : ""} --yes\`.`);
+  }
+  return lines.join("\n");
+}
+
+function updateSummary(status: PluginUpdateStatus): string {
+  if (status.state === "unavailable") return status.reason ?? "cannot be compared";
+  if (status.state === "local") return "local source, nothing to compare";
+  if (status.state === "current") return "up to date";
+  const moved = [
+    status.publishedVersion && status.publishedVersion !== status.record.version
+      ? `\`${status.record.version}\` → \`${status.publishedVersion}\`` : undefined,
+    status.publishedSha && status.publishedSha !== status.record.commitSha
+      ? `\`${shortSha(status.record.commitSha) || "none"}\` → \`${shortSha(status.publishedSha)}\`` : undefined,
+  ].filter(Boolean).join(" · ");
+  return `update available: ${moved}`;
+}
+
+/**
+ * What `/plugin update <plugin>` shows before it fetches: an update runs
+ * whatever the new commit brings, so the old and new commit are shown first.
+ */
+export function renderPluginUpdatePlan(status: PluginUpdateStatus): string {
+  if (status.state !== "drifted") {
+    return `**${status.key}** \`${status.record.version}\` — ${updateSummary(status)}`;
+  }
+  const source = status.record.source;
+  const where = source.type === "directory" ? source.path : source.url;
+  return [
+    `**Update \`${status.key}\`?**`,
+    "",
+    `- Source: \`${where}\` (${source.type})`,
+    `- Installed: \`${status.record.version}\`${status.record.commitSha ? ` · \`${status.record.commitSha}\`` : ""}`,
+    `- Published: ${status.publishedVersion ? `\`${status.publishedVersion}\`` : "version from the bundle manifest at update time"}${status.publishedSha ? ` · \`${status.publishedSha}\`` : ""}`,
+    `- Scope: ${status.record.scope}${status.record.projectRoot ? ` (\`${status.record.projectRoot}\`)` : ""}`,
+    "",
+    "A plugin's skills run shell commands with your privileges. Update only from a source you trust.",
+    "",
+    `Run \`/plugin update ${status.key}${status.record.scope === "project" ? " --project" : ""} --yes\` to apply.`,
+  ].join("\n");
+}
+
+export function renderPluginUpdated(result: PluginUpdateResult): string {
+  if (!result.updated) return `**${result.status.key}** \`${result.record.version}\` — ${updateSummary(result.status)}`;
+  return [
+    `Updated **${result.status.key}** \`${result.previous.version}\` → \`${result.record.version}\`.`,
+    "",
+    ...(result.record.commitSha
+      ? [`- Commit: \`${shortSha(result.previous.commitSha) || "none"}\` → \`${shortSha(result.record.commitSha)}\``]
+      : []),
+    `- Cache: \`${result.record.path}\``,
+    "",
+    "Its enable state and skill namespace are unchanged.",
+  ].join("\n");
+}
+
+export function renderMarketplaceUpdate(results: MarketplaceUpdateResult[]): string {
+  if (results.length === 0) {
+    return ["**Marketplaces**", "", "No marketplaces added."].join("\n");
+  }
+  return ["**Marketplaces**", "", ...results.map((result) => {
+    const moved = !result.commitSha
+      ? " · re-read" // A directory marketplace has no commit to compare.
+      : result.changed
+        ? ` · \`${result.previousSha ? shortSha(result.previousSha) : "none"}\` → \`${shortSha(result.commitSha)}\``
+        : " · unchanged";
+    return `- **${result.name}** — ${result.plugins} published plugin(s)${moved}`;
+  }), "", "Check installed plugins for drift with `/plugin update`."].join("\n");
 }
 
 export function renderPluginList(entries: MarketplacePluginEntry[]): string {
