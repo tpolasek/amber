@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -67,12 +67,56 @@ export interface MarketplacePluginEntry {
   installed: boolean;
 }
 
+/** A plugin is installed for the user, or for one project only. */
+export type PluginScope = "user" | "project";
+
+export interface InstalledPluginRecord {
+  scope: PluginScope;
+  /** Absolute root whose `.amber` owns the install; null at user scope. */
+  projectRoot: string | null;
+  name: string;
+  marketplace: string;
+  version: string;
+  /** Full commit sha of the bundle source; empty for a `directory` source. */
+  commitSha: string;
+  source: PluginSource;
+  /** Relative to `~/.amber/plugins`, so a profile stays movable. */
+  path: string;
+  installedAt: string;
+  updatedAt: string;
+}
+
+/** `<plugin>@<marketplace>` to at most one record per scope, matching Claude Code. */
+export interface InstalledPluginRegistry {
+  version: 1;
+  plugins: Record<string, InstalledPluginRecord[]>;
+}
+
+/** What `/plugin install` prints before it fetches anything. */
+export interface PluginInstallPlan {
+  key: string;
+  marketplace: string;
+  plugin: MarketplacePlugin;
+  scope: PluginScope;
+  projectRoot: string | null;
+  source: PluginSource;
+  ref?: string;
+  /** Resolved without fetching a tree; absent for a `directory` source. */
+  sha?: string;
+  /** Known before the fetch; otherwise the bundle manifest decides. */
+  version?: string;
+  replaces?: InstalledPluginRecord;
+}
+
 export type PluginCommand =
   | { kind: "overview" }
   | { kind: "marketplace-list" }
   | { kind: "marketplace-add"; spec: string; alias?: string }
   | { kind: "marketplace-remove"; name: string }
   | { kind: "list"; marketplace?: string }
+  | { kind: "installed" }
+  | { kind: "install"; name: string; marketplace?: string; scope: PluginScope; confirmed: boolean }
+  | { kind: "uninstall"; name: string; marketplace?: string; scope: PluginScope }
   | { kind: "error"; message: string };
 
 /* ------------------------------------------------------------------ */
@@ -85,6 +129,19 @@ export function pluginsDirectory(homeDirectory = homedir()): string {
 
 export function marketplaceCheckoutPath(name: string, homeDirectory = homedir()): string {
   return join(pluginsDirectory(homeDirectory), "marketplaces", name);
+}
+
+/** Cache path of one installed version, relative to `~/.amber/plugins`. */
+export function pluginCacheRelativePath(marketplace: string, plugin: string, version: string): string {
+  return ["cache", marketplace, plugin, version].join("/");
+}
+
+export function pluginCachePath(marketplace: string, plugin: string, version: string, homeDirectory = homedir()): string {
+  return join(pluginsDirectory(homeDirectory), "cache", marketplace, plugin, version);
+}
+
+export function pluginKey(plugin: string, marketplace: string): string {
+  return `${plugin}@${marketplace}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -247,7 +304,36 @@ export function parsePluginCommand(argument: string): PluginCommand {
     return { kind: "error", message: "Usage: /plugin list [marketplace]" };
   }
 
+  if (head === "installed") {
+    return rest.length === 0 ? { kind: "installed" } : { kind: "error", message: "Usage: /plugin installed" };
+  }
+
+  if (head === "install" || head === "uninstall") {
+    const flags = new Set(rest.filter((word) => word.startsWith("--")));
+    const operands = rest.filter((word) => !word.startsWith("--"));
+    const usage = `Usage: /plugin ${head} <plugin>[@marketplace] [--project]${head === "install" ? " [--yes]" : ""}`;
+    const allowed = head === "install" ? ["--project", "--yes"] : ["--project"];
+    const unknown = [...flags].find((flag) => !allowed.includes(flag));
+    if (unknown) return { kind: "error", message: `Unknown flag ${unknown}. ${usage}` };
+    const [spec] = operands;
+    if (operands.length !== 1 || !spec) return { kind: "error", message: usage };
+    const target = parsePluginTarget(spec);
+    if (!target) return { kind: "error", message: `Plugin must be named <plugin>[@marketplace]: ${spec}` };
+    const scope: PluginScope = flags.has("--project") ? "project" : "user";
+    return head === "install"
+      ? { kind: "install", ...target, scope, confirmed: flags.has("--yes") }
+      : { kind: "uninstall", ...target, scope };
+  }
+
   return { kind: "error", message: `Unknown /plugin action: ${head}` };
+}
+
+function parsePluginTarget(spec: string): { name: string; marketplace?: string } | undefined {
+  const [name, marketplace, ...extra] = spec.split("@");
+  if (extra.length > 0 || !name || !NAME_PATTERN.test(name)) return undefined;
+  if (marketplace === undefined) return { name };
+  if (!NAME_PATTERN.test(marketplace)) return undefined;
+  return { name, marketplace };
 }
 
 /* ------------------------------------------------------------------ */
@@ -265,11 +351,17 @@ export async function saveMarketplaceRegistry(registry: MarketplaceRegistry, hom
   return writeJsonFile(join(pluginsDirectory(homeDirectory), "marketplaces.json"), registry);
 }
 
-/** Registry keys (`<plugin>@<marketplace>`) of installed plugins; step 3 writes this file. */
-export async function loadInstalledPluginKeys(homeDirectory = homedir()): Promise<Set<string>> {
+export async function loadInstalledPlugins(homeDirectory = homedir()): Promise<InstalledPluginRegistry> {
   const parsed = await readJsonFile(join(pluginsDirectory(homeDirectory), "installed_plugins.json"));
-  if (!isRecord(parsed) || !isRecord(parsed.plugins)) return new Set();
-  return new Set(Object.keys(parsed.plugins));
+  if (!isRecord(parsed) || !isRecord(parsed.plugins)) return { version: 1, plugins: {} };
+  return { version: 1, plugins: parsed.plugins as Record<string, InstalledPluginRecord[]> };
+}
+
+export async function saveInstalledPlugins(
+  registry: InstalledPluginRegistry,
+  homeDirectory = homedir(),
+): Promise<string> {
+  return writeJsonFile(join(pluginsDirectory(homeDirectory), "installed_plugins.json"), registry);
 }
 
 /* ------------------------------------------------------------------ */
@@ -310,6 +402,65 @@ async function fetchMarketplace(source: MarketplaceSource, destination: string):
     await rm(staging, { recursive: true, force: true });
     throw error;
   }
+}
+
+/**
+ * Reads a plugin bundle manifest. A bundle with no manifest at all is still
+ * installable: name and version then come from the marketplace entry.
+ */
+export async function readPluginManifest(root: string): Promise<{ name?: string; version?: string } | undefined> {
+  for (const directory of [".amber-plugin", ".claude-plugin"]) {
+    const path = join(root, directory, "plugin.json");
+    const parsed = await readJsonFile(path);
+    if (parsed === undefined) continue;
+    if (!isRecord(parsed)) throw new Error(`${path} must contain a JSON object`);
+    const name = optionalString(parsed.name);
+    const version = optionalString(parsed.version);
+    return { ...(name ? { name } : {}), ...(version ? { version } : {}) };
+  }
+  return undefined;
+}
+
+/** Resolves a ref to a commit without fetching a tree, so a plan can be shown first. */
+async function resolveRemoteSha(url: string, ref?: string): Promise<string> {
+  const { stdout } = await run("git", ["ls-remote", url, ref ?? "HEAD"], { timeout: GIT_TIMEOUT_MS });
+  const sha = stdout.split("\n").map((line) => line.trim()).filter(Boolean)[0]?.split(/\s+/)[0];
+  if (!sha) throw new Error(`Could not resolve ${ref ?? "HEAD"} in ${url}`);
+  return sha;
+}
+
+/**
+ * Checks a commit out into `staging` and returns its full sha. The `.git`
+ * directory is dropped: the cached bundle is a tree, and drift is detected from
+ * the registry's recorded sha rather than from a checkout.
+ */
+async function fetchGitTree(url: string, ref: string | undefined, sha: string | undefined, staging: string): Promise<string> {
+  await mkdir(staging, { recursive: true, mode: 0o700 });
+  const git = (args: string[]) => run("git", args, { cwd: staging, timeout: GIT_TIMEOUT_MS });
+  await git(["init", "-q"]);
+  await git(["remote", "add", "origin", url]);
+  const target = sha ?? ref;
+  try {
+    await git(["fetch", "-q", "--depth", "1", "origin", ...(target ? [target] : [])]);
+    await git(["checkout", "-q", "FETCH_HEAD"]);
+  } catch {
+    // A server that will not serve an arbitrary commit needs the whole history.
+    await git(["fetch", "-q", "origin"]);
+    await git(["checkout", "-q", target ?? "FETCH_HEAD"]);
+  }
+  const { stdout } = await git(["rev-parse", "HEAD"]);
+  await rm(join(staging, ".git"), { recursive: true, force: true });
+  return stdout.trim();
+}
+
+/** Resolves a `directory` source against the marketplace checkout, refusing escapes. */
+function resolveBundleDirectory(marketplaceRoot: string, path: string): string {
+  const root = resolve(marketplaceRoot);
+  const target = resolve(root, path);
+  if (target !== root && !target.startsWith(`${root}/`)) {
+    throw new Error(`Plugin source '${path}' escapes its marketplace directory`);
+  }
+  return target;
 }
 
 /* ------------------------------------------------------------------ */
@@ -393,7 +544,7 @@ export async function listMarketplacePlugins(options: ListMarketplacePluginsOpti
     throw new Error(`Marketplace '${options.marketplace}' is not added`);
   }
   const names = (options.marketplace ? [options.marketplace] : Object.keys(registry.marketplaces)).sort();
-  const installed = await loadInstalledPluginKeys(homeDirectory);
+  const installed = new Set(Object.keys((await loadInstalledPlugins(homeDirectory)).plugins));
 
   const entries: MarketplacePluginEntry[] = [];
   for (const marketplace of names) {
@@ -403,6 +554,226 @@ export async function listMarketplacePlugins(options: ListMarketplacePluginsOpti
     }
   }
   return entries;
+}
+
+/* ------------------------------------------------------------------ */
+/* Install and uninstall                                               */
+/* ------------------------------------------------------------------ */
+
+export interface PluginTargetOptions {
+  name: string;
+  marketplace?: string;
+  scope?: PluginScope;
+  /** Required at project scope; the root whose `.amber` owns the install. */
+  projectRoot?: string;
+  homeDirectory?: string;
+}
+
+interface ResolvedTarget {
+  homeDirectory: string;
+  marketplace: string;
+  scope: PluginScope;
+  projectRoot: string | null;
+  key: string;
+}
+
+function resolveScope(options: PluginTargetOptions): { scope: PluginScope; projectRoot: string | null } {
+  const scope = options.scope ?? "user";
+  if (scope === "user") return { scope, projectRoot: null };
+  if (!options.projectRoot) throw new Error("A project-scoped plugin needs a project root");
+  return { scope, projectRoot: resolve(options.projectRoot) };
+}
+
+/** Finds the one marketplace publishing `name`, or refuses an ambiguous bare name. */
+async function findPublishingMarketplace(name: string, homeDirectory: string): Promise<string> {
+  const entries = await listMarketplacePlugins({ homeDirectory });
+  const matches = entries.filter((entry) => entry.plugin.name === name).map((entry) => entry.marketplace);
+  if (matches.length === 0) throw new Error(`No added marketplace publishes a plugin named '${name}'`);
+  if (matches.length > 1) {
+    throw new Error(`Plugin '${name}' is published by ${matches.join(", ")}; name it as ${name}@<marketplace>`);
+  }
+  return matches[0] as string;
+}
+
+async function marketplacePluginEntry(
+  marketplace: string,
+  name: string,
+  homeDirectory: string,
+): Promise<MarketplacePlugin> {
+  const registry = await loadMarketplaceRegistry(homeDirectory);
+  if (!registry.marketplaces[marketplace]) throw new Error(`Marketplace '${marketplace}' is not added`);
+  const manifest = await readMarketplaceManifest(marketplaceCheckoutPath(marketplace, homeDirectory));
+  const plugin = manifest.plugins.find((candidate) => candidate.name === name);
+  if (!plugin) throw new Error(`Marketplace '${marketplace}' publishes no plugin named '${name}'`);
+  return plugin;
+}
+
+/**
+ * Everything `/plugin install` must show before fetching: installing a plugin is
+ * third-party code execution, so the source, ref, version and sha are resolved
+ * and printed first.
+ */
+export async function planPluginInstall(options: PluginTargetOptions): Promise<PluginInstallPlan> {
+  const homeDirectory = options.homeDirectory ?? homedir();
+  const { scope, projectRoot } = resolveScope(options);
+  const marketplace = options.marketplace ?? await findPublishingMarketplace(options.name, homeDirectory);
+  const plugin = await marketplacePluginEntry(marketplace, options.name, homeDirectory);
+  const key = pluginKey(plugin.name, marketplace);
+
+  const source = plugin.source;
+  const sha = source.type === "directory"
+    ? undefined
+    : source.sha ?? await resolveRemoteSha(source.url, source.ref);
+  const installed = (await loadInstalledPlugins(homeDirectory)).plugins[key] ?? [];
+  const replaces = installed.find((record) => record.scope === scope && record.projectRoot === projectRoot);
+
+  return {
+    key,
+    marketplace,
+    plugin,
+    scope,
+    projectRoot,
+    source,
+    ...(source.type !== "directory" && source.ref ? { ref: source.ref } : {}),
+    ...(sha ? { sha } : {}),
+    ...(plugin.version ? { version: plugin.version } : {}),
+    ...(replaces ? { replaces } : {}),
+  };
+}
+
+/**
+ * Fetches the bundle into `cache/<marketplace>/<plugin>/<version>` and records
+ * it. The version is the bundle manifest's, else the marketplace entry's, else
+ * the 12-character sha; with none of the three the install fails rather than
+ * writing an "unknown" directory.
+ */
+export async function installPlugin(options: PluginTargetOptions): Promise<InstalledPluginRecord> {
+  const homeDirectory = options.homeDirectory ?? homedir();
+  const plan = await planPluginInstall(options);
+  const { marketplace, plugin, scope, projectRoot, source } = plan;
+
+  const staging = join(pluginsDirectory(homeDirectory), "cache", marketplace, plugin.name, `.tmp-${randomUUID()}`);
+  await mkdir(join(staging, ".."), { recursive: true, mode: 0o700 });
+
+  let bundleRoot = staging;
+  let commitSha = "";
+  try {
+    if (source.type === "directory") {
+      const from = resolveBundleDirectory(marketplaceCheckoutPath(marketplace, homeDirectory), source.path);
+      await mkdir(staging, { recursive: true, mode: 0o700 });
+      await run("cp", ["-R", `${from}/.`, staging], { timeout: GIT_TIMEOUT_MS });
+    } else {
+      // The plan's sha, so what the confirmation showed is what gets checked out.
+      commitSha = await fetchGitTree(source.url, source.ref, plan.sha, staging);
+      if (source.path) bundleRoot = resolveBundleDirectory(staging, source.path);
+    }
+
+    const manifest = await readPluginManifest(bundleRoot);
+    if (manifest?.name && manifest.name !== plugin.name) {
+      throw new Error(`Bundle manifest names '${manifest.name}', but the marketplace publishes it as '${plugin.name}'`);
+    }
+    const version = manifest?.version ?? plugin.version ?? (commitSha ? shortSha(commitSha) : undefined);
+    if (!version) {
+      throw new Error(`Could not resolve a version for '${plugin.name}': no bundle manifest version, marketplace version, or commit`);
+    }
+
+    const destination = pluginCachePath(marketplace, plugin.name, version, homeDirectory);
+    await rm(destination, { recursive: true, force: true });
+    await rename(bundleRoot, destination);
+    if (bundleRoot !== staging) await rm(staging, { recursive: true, force: true });
+
+    const now = new Date().toISOString();
+    const registry = await loadInstalledPlugins(homeDirectory);
+    const records = (registry.plugins[plan.key] ?? []).filter(
+      (record) => !(record.scope === scope && record.projectRoot === projectRoot),
+    );
+    const record: InstalledPluginRecord = {
+      scope,
+      projectRoot,
+      name: plugin.name,
+      marketplace,
+      version,
+      commitSha,
+      source,
+      path: pluginCacheRelativePath(marketplace, plugin.name, version),
+      installedAt: plan.replaces?.installedAt ?? now,
+      updatedAt: now,
+    };
+    records.push(record);
+    records.sort((left, right) => left.scope.localeCompare(right.scope));
+    registry.plugins[plan.key] = records;
+    await saveInstalledPlugins(registry, homeDirectory);
+
+    if (plan.replaces && plan.replaces.path !== record.path) {
+      await discardUnreferencedCache(plan.replaces, registry, homeDirectory);
+    }
+    return record;
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true });
+    await pruneEmptyCacheDirectories(marketplace, plugin.name, homeDirectory);
+    throw error;
+  }
+}
+
+/** Drops the record for one scope, and the cached bundle once nothing references it. */
+export async function uninstallPlugin(options: PluginTargetOptions): Promise<InstalledPluginRecord> {
+  const homeDirectory = options.homeDirectory ?? homedir();
+  const { scope, projectRoot } = resolveScope(options);
+  const registry = await loadInstalledPlugins(homeDirectory);
+  const key = options.marketplace
+    ? pluginKey(options.name, options.marketplace)
+    : installedKeyForName(registry, options.name);
+
+  const records = registry.plugins[key] ?? [];
+  const removed = records.find((record) => record.scope === scope && record.projectRoot === projectRoot);
+  if (!removed) throw new Error(`Plugin '${key}' is not installed at ${scope} scope`);
+
+  const remaining = records.filter((record) => record !== removed);
+  if (remaining.length === 0) delete registry.plugins[key];
+  else registry.plugins[key] = remaining;
+  await saveInstalledPlugins(registry, homeDirectory);
+
+  await discardUnreferencedCache(removed, registry, homeDirectory);
+  return removed;
+}
+
+function installedKeyForName(registry: InstalledPluginRegistry, name: string): string {
+  const keys = Object.keys(registry.plugins).filter((key) => key.startsWith(`${name}@`));
+  if (keys.length === 0) throw new Error(`Plugin '${name}' is not installed`);
+  if (keys.length > 1) throw new Error(`Plugin '${name}' is installed from ${keys.length} marketplaces; name one of ${keys.join(", ")}`);
+  return keys[0] as string;
+}
+
+/**
+ * A cache bundle is shared by every scope installed at that version, so it goes
+ * only once no record still points at it. Empty parents go with it, leaving no
+ * trace of the uninstalled plugin.
+ */
+async function discardUnreferencedCache(
+  record: InstalledPluginRecord,
+  registry: InstalledPluginRegistry,
+  homeDirectory: string,
+): Promise<void> {
+  const stillUsed = Object.values(registry.plugins).some((records) =>
+    records.some((candidate) => candidate.path === record.path));
+  if (stillUsed) return;
+  await rm(pluginCachePath(record.marketplace, record.name, record.version, homeDirectory), { recursive: true, force: true });
+  await pruneEmptyCacheDirectories(record.marketplace, record.name, homeDirectory);
+}
+
+async function pruneEmptyCacheDirectories(marketplace: string, plugin: string, homeDirectory: string): Promise<void> {
+  const cacheRoot = join(pluginsDirectory(homeDirectory), "cache");
+  for (const directory of [join(cacheRoot, marketplace, plugin), join(cacheRoot, marketplace)]) {
+    try {
+      await rmdir(directory);
+    } catch {
+      return; // Not empty: another version or plugin still lives there.
+    }
+  }
+}
+
+function shortSha(sha: string): string {
+  return sha.slice(0, 12);
 }
 
 /* ------------------------------------------------------------------ */
@@ -441,7 +812,62 @@ export function renderPluginOverview(registry: MarketplaceRegistry): string {
     "- `/plugin marketplace remove <name>`",
     "- `/plugin marketplace list`",
     "- `/plugin list [marketplace]`",
+    "- `/plugin installed`",
+    "- `/plugin install <plugin>[@marketplace] [--project] [--yes]`",
+    "- `/plugin uninstall <plugin>[@marketplace] [--project]`",
   ].join("\n");
+}
+
+/**
+ * The confirmation an install is gated on. A plugin skill runs shell with the
+ * user's privileges, so the exact source, ref, version and commit are shown
+ * before anything is fetched.
+ */
+export function renderPluginInstallPlan(plan: PluginInstallPlan): string {
+  const where = plan.source.type === "directory" ? plan.source.path : plan.source.url;
+  const subdirectory = plan.source.type !== "directory" ? plan.source.path : undefined;
+  return [
+    `**Install \`${plan.key}\`?**`,
+    "",
+    `- Source: \`${where}\` (${plan.source.type})`,
+    ...(subdirectory ? [`- Subdirectory: \`${subdirectory}\``] : []),
+    ...(plan.ref ? [`- Ref: \`${plan.ref}\``] : []),
+    ...(plan.sha ? [`- Commit: \`${plan.sha}\``] : []),
+    `- Version: ${plan.version ? `\`${plan.version}\`` : "resolved at install time from the bundle manifest, else the commit"}`,
+    `- Scope: ${plan.scope}${plan.projectRoot ? ` (\`${plan.projectRoot}\`)` : ""}`,
+    ...(plan.replaces ? [`- Replaces the installed \`${plan.replaces.version}\``] : []),
+    "",
+    "A plugin's skills run shell commands with your privileges. Install only from a source you trust.",
+    "",
+    `Run \`/plugin install ${plan.key}${plan.scope === "project" ? " --project" : ""} --yes\` to install.`,
+  ].join("\n");
+}
+
+export function renderPluginInstalled(record: InstalledPluginRecord): string {
+  return [
+    `Installed **${pluginKey(record.name, record.marketplace)}** \`${record.version}\` at ${record.scope} scope.`,
+    "",
+    ...(record.commitSha ? [`- Commit: \`${record.commitSha}\``] : []),
+    `- Cache: \`${record.path}\``,
+    "",
+    "It is enabled by default and contributes its skills to new sessions.",
+  ].join("\n");
+}
+
+export function renderInstalledPlugins(registry: InstalledPluginRegistry): string {
+  const keys = Object.keys(registry.plugins).sort();
+  if (keys.length === 0) {
+    return ["**Installed plugins**", "", "No plugins installed.", "", "Install one with `/plugin install <plugin>`."].join("\n");
+  }
+  const lines = ["**Installed plugins**", ""];
+  for (const key of keys) {
+    for (const record of registry.plugins[key] ?? []) {
+      const commit = record.commitSha ? ` · \`${shortSha(record.commitSha)}\`` : "";
+      const scope = record.scope === "project" ? ` · project \`${record.projectRoot}\`` : "";
+      lines.push(`- **${key}** \`${record.version}\`${commit}${scope}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 export function renderPluginList(entries: MarketplacePluginEntry[]): string {

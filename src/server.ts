@@ -9,13 +9,21 @@ import { listenErrorMessage, parseCliCommand, usageText } from "./cli.js";
 import { builtInCommand } from "./built-in-commands.js";
 import {
   addMarketplace,
+  installPlugin,
   listMarketplacePlugins,
+  loadInstalledPlugins,
   loadMarketplaceRegistry,
   parsePluginCommand,
+  planPluginInstall,
+  pluginKey,
   removeMarketplace,
+  renderInstalledPlugins,
   renderMarketplaceList,
+  renderPluginInstalled,
+  renderPluginInstallPlan,
   renderPluginList,
   renderPluginOverview,
+  uninstallPlugin,
 } from "./plugins.js";
 import { SessionStore } from "./store.js";
 import { ProviderCatalog } from "./provider-catalog.js";
@@ -2282,7 +2290,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     if (parsed.kind === "error") return json(response, 400, { error: parsed.message });
     let body: string;
     try {
-      body = await runPluginCommand(parsed);
+      body = await runPluginCommand(parsed, session.cwd ?? workspaceRoot);
     } catch (error) {
       return json(response, 400, { error: errorMessage(error) });
     }
@@ -2380,7 +2388,11 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
   return json(response, 400, { error: `Unknown command: ${command || "(empty)"}` });
 }
 
-async function runPluginCommand(parsed: Exclude<ReturnType<typeof parsePluginCommand>, { kind: "error" }>): Promise<string> {
+/** `sessionRoot` anchors `--project`: the session's own directory, not the server's. */
+async function runPluginCommand(
+  parsed: Exclude<ReturnType<typeof parsePluginCommand>, { kind: "error" }>,
+  sessionRoot: string,
+): Promise<string> {
   if (parsed.kind === "overview") return renderPluginOverview(await loadMarketplaceRegistry());
   if (parsed.kind === "marketplace-list") return renderMarketplaceList(await loadMarketplaceRegistry());
   if (parsed.kind === "marketplace-add") {
@@ -2394,6 +2406,28 @@ async function runPluginCommand(parsed: Exclude<ReturnType<typeof parsePluginCom
   if (parsed.kind === "marketplace-remove") {
     await removeMarketplace(parsed.name);
     return `Removed marketplace **${parsed.name}**. Installed plugins from it are untouched.`;
+  }
+  if (parsed.kind === "installed") return renderInstalledPlugins(await loadInstalledPlugins());
+  if (parsed.kind === "install") {
+    const target = {
+      name: parsed.name,
+      scope: parsed.scope,
+      ...(parsed.marketplace ? { marketplace: parsed.marketplace } : {}),
+      ...(parsed.scope === "project" ? { projectRoot: sessionRoot } : {}),
+    };
+    // Installing a plugin runs third-party code, so the plan is shown and
+    // confirmed before anything is fetched.
+    if (!parsed.confirmed) return renderPluginInstallPlan(await planPluginInstall(target));
+    return renderPluginInstalled(await installPlugin(target));
+  }
+  if (parsed.kind === "uninstall") {
+    const removed = await uninstallPlugin({
+      name: parsed.name,
+      scope: parsed.scope,
+      ...(parsed.marketplace ? { marketplace: parsed.marketplace } : {}),
+      ...(parsed.scope === "project" ? { projectRoot: sessionRoot } : {}),
+    });
+    return `Uninstalled **${pluginKey(removed.name, removed.marketplace)}** \`${removed.version}\` from ${removed.scope} scope.`;
   }
   return renderPluginList(await listMarketplacePlugins(parsed.marketplace ? { marketplace: parsed.marketplace } : {}));
 }

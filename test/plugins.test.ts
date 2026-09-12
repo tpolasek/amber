@@ -7,17 +7,24 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   addMarketplace,
+  installPlugin,
+  loadInstalledPlugins,
   loadMarketplaceRegistry,
   listMarketplacePlugins,
   marketplaceCheckoutPath,
   parseMarketplaceManifest,
   parseMarketplaceSpec,
   parsePluginCommand,
+  planPluginInstall,
+  pluginCachePath,
   pluginsDirectory,
   removeMarketplace,
+  renderInstalledPlugins,
   renderMarketplaceList,
+  renderPluginInstallPlan,
   renderPluginList,
   saveMarketplaceRegistry,
+  uninstallPlugin,
 } from "../src/plugins.js";
 
 const run = promisify(execFile);
@@ -39,6 +46,34 @@ async function gitMarketplaceFixture(plugins: unknown[]): Promise<{ path: string
   await run("git", ["config", "user.name", "Test"], { cwd: root });
   await run("git", ["add", "-A"], { cwd: root });
   await run("git", ["commit", "-qm", "fixture"], { cwd: root });
+  const { stdout } = await run("git", ["rev-parse", "HEAD"], { cwd: root });
+  return { path: root, sha: stdout.trim() };
+}
+
+/** A plugin bundle: a manifest (optional), one skill, and a file discovery ignores. */
+async function bundleFixture(root: string, manifest?: Record<string, unknown>): Promise<string> {
+  await mkdir(join(root, "skills", "brainstorming"), { recursive: true });
+  await writeFile(join(root, "skills", "brainstorming", "SKILL.md"), "---\nname: brainstorming\n---\nBody\n");
+  await mkdir(join(root, "agents"), { recursive: true });
+  await writeFile(join(root, "agents", "helper.md"), "helper\n");
+  if (manifest) {
+    await mkdir(join(root, ".claude-plugin"), { recursive: true });
+    await writeFile(join(root, ".claude-plugin", "plugin.json"), JSON.stringify(manifest));
+  }
+  return root;
+}
+
+/** A git repository serving one plugin bundle, optionally under a subdirectory. */
+async function gitBundleFixture(manifest?: Record<string, unknown>, subdirectory?: string): Promise<{ path: string; sha: string }> {
+  const root = await mkdtemp(join(tmpdir(), "amber-bundle-"));
+  const bundle = subdirectory ? join(root, subdirectory) : root;
+  await mkdir(bundle, { recursive: true });
+  await bundleFixture(bundle, manifest);
+  await run("git", ["init", "-q", "-b", "main"], { cwd: root });
+  await run("git", ["config", "user.email", "test@example.com"], { cwd: root });
+  await run("git", ["config", "user.name", "Test"], { cwd: root });
+  await run("git", ["add", "-A"], { cwd: root });
+  await run("git", ["commit", "-qm", "bundle"], { cwd: root });
   const { stdout } = await run("git", ["rev-parse", "HEAD"], { cwd: root });
   return { path: root, sha: stdout.trim() };
 }
@@ -172,6 +207,27 @@ test("parses /plugin subcommands", () => {
   assert.deepEqual(parsePluginCommand("list fixture"), { kind: "list", marketplace: "fixture" });
   assert.match((parsePluginCommand("marketplace add") as { message: string }).message, /Usage/);
   assert.match((parsePluginCommand("frobnicate") as { message: string }).message, /Unknown/);
+});
+
+test("parses install and uninstall targets, scopes and confirmation", () => {
+  assert.deepEqual(parsePluginCommand("installed"), { kind: "installed" });
+  assert.deepEqual(parsePluginCommand("install superpowers"), {
+    kind: "install", name: "superpowers", scope: "user", confirmed: false,
+  });
+  assert.deepEqual(parsePluginCommand("install superpowers@fixture --yes"), {
+    kind: "install", name: "superpowers", marketplace: "fixture", scope: "user", confirmed: true,
+  });
+  assert.deepEqual(parsePluginCommand("install superpowers --project --yes"), {
+    kind: "install", name: "superpowers", scope: "project", confirmed: true,
+  });
+  assert.deepEqual(parsePluginCommand("uninstall superpowers@fixture --project"), {
+    kind: "uninstall", name: "superpowers", marketplace: "fixture", scope: "project",
+  });
+  assert.match((parsePluginCommand("install") as { message: string }).message, /Usage/);
+  assert.match((parsePluginCommand("install a b") as { message: string }).message, /Usage/);
+  assert.match((parsePluginCommand("uninstall a --yes") as { message: string }).message, /Unknown flag/);
+  assert.match((parsePluginCommand("install Bad@Name") as { message: string }).message, /<plugin>\[@marketplace\]/);
+  assert.match((parsePluginCommand("install a@b@c") as { message: string }).message, /<plugin>\[@marketplace\]/);
 });
 
 /* ------------------------------------------------------------------ */
@@ -338,4 +394,249 @@ test("renders marketplaces and plugins as markdown", () => {
   assert.match(plugins, /Skills for agents/);
   assert.match(plugins, /not installed/);
   assert.match(renderPluginList([]), /No plugins/);
+});
+
+/* ------------------------------------------------------------------ */
+/* Install and uninstall                                               */
+/* ------------------------------------------------------------------ */
+
+test("installs a git plugin into the versioned cache and records marketplace, version and sha", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const bundle = await gitBundleFixture({ name: "superpowers", version: "6.3.0" });
+  const marketplace = await marketplaceFixture([
+    { name: "superpowers", description: "Skills", source: { source: "url", url: bundle.path } },
+  ]);
+  await addMarketplace({ spec: marketplace, homeDirectory });
+
+  const record = await installPlugin({ name: "superpowers", homeDirectory });
+  assert.equal(record.marketplace, "fixture");
+  assert.equal(record.version, "6.3.0");
+  assert.equal(record.commitSha, bundle.sha);
+  assert.equal(record.scope, "user");
+  assert.equal(record.projectRoot, null);
+  assert.equal(record.path, "cache/fixture/superpowers/6.3.0");
+
+  const cache = pluginCachePath("fixture", "superpowers", "6.3.0", homeDirectory);
+  assert.equal((await stat(join(cache, "skills", "brainstorming", "SKILL.md"))).isFile(), true);
+  // Everything else in the bundle is cached verbatim; only `.git` is dropped.
+  assert.equal((await stat(join(cache, "agents", "helper.md"))).isFile(), true);
+  await assert.rejects(stat(join(cache, ".git")));
+
+  const registry = await loadInstalledPlugins(homeDirectory);
+  assert.deepEqual(Object.keys(registry.plugins), ["superpowers@fixture"]);
+  assert.equal(registry.plugins["superpowers@fixture"]?.length, 1);
+  assert.deepEqual(listedFlags(await listMarketplacePlugins({ homeDirectory })), [["superpowers", true]]);
+  assert.equal((await stat(join(pluginsDirectory(homeDirectory), "installed_plugins.json"))).mode & 0o777, 0o600);
+});
+
+function listedFlags(entries: Awaited<ReturnType<typeof listMarketplacePlugins>>): [string, boolean][] {
+  return entries.map((entry) => [entry.plugin.name, entry.installed]);
+}
+
+test("names the cache directory by the sha when nothing supplies a version", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const bundle = await gitBundleFixture();
+  const marketplace = await marketplaceFixture([
+    { name: "unpinned", description: "No version anywhere", source: { source: "url", url: bundle.path } },
+  ]);
+  await addMarketplace({ spec: marketplace, homeDirectory });
+
+  const record = await installPlugin({ name: "unpinned", homeDirectory });
+  assert.equal(record.version, bundle.sha.slice(0, 12));
+  assert.equal((await stat(pluginCachePath("fixture", "unpinned", record.version, homeDirectory))).isDirectory(), true);
+});
+
+test("checks out a pinned sha and installs a bundle from a subdirectory", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const bundle = await gitBundleFixture({ name: "mono-plugin" }, "plugins/foo");
+  // A second commit, so a pinned sha is provably not just "whatever HEAD is".
+  await writeFile(join(bundle.path, "README.md"), "later\n");
+  await run("git", ["add", "-A"], { cwd: bundle.path });
+  await run("git", ["commit", "-qm", "later"], { cwd: bundle.path });
+
+  const marketplace = await marketplaceFixture([
+    {
+      name: "mono-plugin",
+      description: "From a subdirectory",
+      version: "2.1.0",
+      source: { source: "git-subdir", url: bundle.path, path: "plugins/foo", ref: "main", sha: bundle.sha },
+    },
+  ]);
+  await addMarketplace({ spec: marketplace, homeDirectory });
+
+  const record = await installPlugin({ name: "mono-plugin", homeDirectory });
+  assert.equal(record.commitSha, bundle.sha);
+  assert.equal(record.version, "2.1.0");
+  const cache = pluginCachePath("fixture", "mono-plugin", "2.1.0", homeDirectory);
+  assert.equal((await stat(join(cache, "skills", "brainstorming", "SKILL.md"))).isFile(), true);
+  // The bundle root is the subdirectory, not the repository root.
+  await assert.rejects(stat(join(cache, "plugins")));
+  await assert.rejects(stat(join(cache, "README.md")));
+});
+
+test("installs a directory plugin from inside the marketplace checkout", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const marketplace = await marketplaceFixture([
+    { name: "local-plugin", description: "Bare string source", version: "0.1.0", source: "./plugins/local" },
+  ]);
+  await bundleFixture(join(marketplace, "plugins", "local"));
+  await addMarketplace({ spec: marketplace, homeDirectory });
+
+  const record = await installPlugin({ name: "local-plugin", homeDirectory });
+  assert.equal(record.commitSha, "");
+  assert.equal(record.version, "0.1.0");
+  assert.equal(
+    (await stat(join(pluginCachePath("fixture", "local-plugin", "0.1.0", homeDirectory), "skills", "brainstorming", "SKILL.md"))).isFile(),
+    true,
+  );
+});
+
+test("refuses a directory source that escapes the marketplace, and an unresolvable version", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const marketplace = await marketplaceFixture([
+    { name: "escapee", description: "Points outside", source: "../../etc" },
+    { name: "versionless", description: "No version and no sha", source: "./plugins/local" },
+  ]);
+  await bundleFixture(join(marketplace, "plugins", "local"));
+  await addMarketplace({ spec: marketplace, homeDirectory });
+
+  await assert.rejects(installPlugin({ name: "escapee", homeDirectory }), /escapes its marketplace directory/);
+  await assert.rejects(installPlugin({ name: "versionless", homeDirectory }), /Could not resolve a version/);
+  assert.deepEqual((await loadInstalledPlugins(homeDirectory)).plugins, {});
+  await assert.rejects(stat(join(pluginsDirectory(homeDirectory), "cache", "fixture", "versionless")));
+});
+
+test("refuses a plugin no added marketplace publishes, and an ambiguous bare name", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const first = await marketplaceFixture([{ name: "shared", description: "d", version: "1", source: "./plugins/local" }]);
+  const second = await marketplaceFixture([{ name: "shared", description: "d", version: "1", source: "./plugins/local" }]);
+  await bundleFixture(join(first, "plugins", "local"));
+  await bundleFixture(join(second, "plugins", "local"));
+
+  await assert.rejects(installPlugin({ name: "shared", homeDirectory }), /No added marketplace publishes/);
+  await addMarketplace({ spec: first, alias: "one", homeDirectory });
+  await addMarketplace({ spec: second, alias: "two", homeDirectory });
+  await assert.rejects(installPlugin({ name: "shared", homeDirectory }), /shared@<marketplace>/);
+  await assert.rejects(installPlugin({ name: "shared", marketplace: "three", homeDirectory }), /not added/);
+  await assert.rejects(installPlugin({ name: "absent", marketplace: "one", homeDirectory }), /publishes no plugin named/);
+
+  assert.equal((await installPlugin({ name: "shared", marketplace: "two", homeDirectory })).marketplace, "two");
+});
+
+test("keeps one record per scope over the one shared cache bundle", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const projectRoot = await mkdtemp(join(tmpdir(), "amber-project-"));
+  const marketplace = await marketplaceFixture([
+    { name: "local-plugin", description: "d", version: "0.1.0", source: "./plugins/local" },
+  ]);
+  await bundleFixture(join(marketplace, "plugins", "local"));
+  await addMarketplace({ spec: marketplace, homeDirectory });
+
+  await installPlugin({ name: "local-plugin", homeDirectory });
+  const scoped = await installPlugin({ name: "local-plugin", scope: "project", projectRoot, homeDirectory });
+  assert.equal(scoped.projectRoot, projectRoot);
+
+  const records = (await loadInstalledPlugins(homeDirectory)).plugins["local-plugin@fixture"] ?? [];
+  assert.deepEqual(records.map((record) => record.scope), ["project", "user"]);
+  await assert.rejects(installPlugin({ name: "local-plugin", scope: "project", homeDirectory }), /needs a project root/);
+
+  // Re-installing the same scope replaces its record rather than appending one.
+  await installPlugin({ name: "local-plugin", scope: "project", projectRoot, homeDirectory });
+  assert.equal(((await loadInstalledPlugins(homeDirectory)).plugins["local-plugin@fixture"] ?? []).length, 2);
+
+  // The project record goes; the cache stays, because the user record still holds it.
+  await uninstallPlugin({ name: "local-plugin", scope: "project", projectRoot, homeDirectory });
+  const remaining = (await loadInstalledPlugins(homeDirectory)).plugins["local-plugin@fixture"] ?? [];
+  assert.deepEqual(remaining.map((record) => record.scope), ["user"]);
+  assert.equal((await stat(pluginCachePath("fixture", "local-plugin", "0.1.0", homeDirectory))).isDirectory(), true);
+});
+
+test("uninstall leaves no trace of the plugin", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const marketplace = await marketplaceFixture([
+    { name: "local-plugin", description: "d", version: "0.1.0", source: "./plugins/local" },
+  ]);
+  await bundleFixture(join(marketplace, "plugins", "local"));
+  await addMarketplace({ spec: marketplace, homeDirectory });
+  await installPlugin({ name: "local-plugin", homeDirectory });
+
+  const removed = await uninstallPlugin({ name: "local-plugin", homeDirectory });
+  assert.equal(removed.version, "0.1.0");
+  assert.deepEqual((await loadInstalledPlugins(homeDirectory)).plugins, {});
+  await assert.rejects(stat(join(pluginsDirectory(homeDirectory), "cache", "fixture")));
+  assert.deepEqual(listedFlags(await listMarketplacePlugins({ homeDirectory })), [["local-plugin", false]]);
+  await assert.rejects(uninstallPlugin({ name: "local-plugin", homeDirectory }), /is not installed/);
+  // The marketplace checkout is untouched by an uninstall.
+  assert.equal((await stat(marketplaceCheckoutPath("fixture", homeDirectory))).isDirectory(), true);
+});
+
+test("replacing an installed version discards the cache the old record held", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const marketplace = await marketplaceFixture([
+    { name: "local-plugin", description: "d", version: "0.1.0", source: "./plugins/local" },
+  ]);
+  await bundleFixture(join(marketplace, "plugins", "local"));
+  await addMarketplace({ spec: marketplace, homeDirectory });
+  const first = await installPlugin({ name: "local-plugin", homeDirectory });
+
+  await removeMarketplace("fixture", homeDirectory);
+  await writeFile(
+    join(marketplace, ".claude-plugin", "marketplace.json"),
+    JSON.stringify({
+      name: "fixture",
+      plugins: [{ name: "local-plugin", description: "d", version: "0.2.0", source: "./plugins/local" }],
+    }),
+  );
+  await addMarketplace({ spec: marketplace, homeDirectory });
+  const second = await installPlugin({ name: "local-plugin", homeDirectory });
+
+  assert.equal(second.version, "0.2.0");
+  assert.equal(second.installedAt, first.installedAt); // first install time survives a replace
+  assert.equal(((await loadInstalledPlugins(homeDirectory)).plugins["local-plugin@fixture"] ?? []).length, 1);
+  await assert.rejects(stat(pluginCachePath("fixture", "local-plugin", "0.1.0", homeDirectory)));
+  assert.equal((await stat(pluginCachePath("fixture", "local-plugin", "0.2.0", homeDirectory))).isDirectory(), true);
+});
+
+/* ------------------------------------------------------------------ */
+/* Install confirmation                                                */
+/* ------------------------------------------------------------------ */
+
+test("plans an install without fetching, resolving the sha from the remote", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const bundle = await gitBundleFixture({ name: "superpowers", version: "6.3.0" });
+  const marketplace = await marketplaceFixture([
+    { name: "superpowers", description: "Skills", source: { source: "url", url: bundle.path, ref: "main" } },
+  ]);
+  await addMarketplace({ spec: marketplace, homeDirectory });
+
+  const plan = await planPluginInstall({ name: "superpowers", homeDirectory });
+  assert.equal(plan.key, "superpowers@fixture");
+  assert.equal(plan.sha, bundle.sha);
+  assert.equal(plan.ref, "main");
+  assert.equal(plan.version, undefined); // only the bundle manifest knows it
+  assert.equal(plan.replaces, undefined);
+  await assert.rejects(stat(join(pluginsDirectory(homeDirectory), "cache")));
+
+  const rendered = renderPluginInstallPlan(plan);
+  assert.match(rendered, /superpowers@fixture/);
+  assert.match(rendered, new RegExp(bundle.sha));
+  assert.match(rendered, /run shell commands with your privileges/);
+  assert.match(rendered, /--yes/);
+});
+
+test("renders installed plugins", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  assert.match(renderInstalledPlugins(await loadInstalledPlugins(homeDirectory)), /No plugins installed/);
+
+  const bundle = await gitBundleFixture({ name: "superpowers", version: "6.3.0" });
+  const marketplace = await marketplaceFixture([
+    { name: "superpowers", description: "Skills", source: { source: "url", url: bundle.path } },
+  ]);
+  await addMarketplace({ spec: marketplace, homeDirectory });
+  await installPlugin({ name: "superpowers", homeDirectory });
+
+  const rendered = renderInstalledPlugins(await loadInstalledPlugins(homeDirectory));
+  assert.match(rendered, /superpowers@fixture/);
+  assert.match(rendered, /6\.3\.0/);
+  assert.match(rendered, new RegExp(bundle.sha.slice(0, 12)));
 });
