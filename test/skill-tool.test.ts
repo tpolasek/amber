@@ -23,6 +23,7 @@ import {
   truncateToWidth,
   type SkillDefinition,
 } from "../src/skill-tool.js";
+import { loadSettings, sessionEnabledPlugins, writeEnabledPlugin } from "../src/settings.js";
 
 interface Fixture {
   root: string;
@@ -609,6 +610,34 @@ test("a disabled plugin contributes nothing", async () => {
 
     const skills = await discovery(fx, { enabledPlugins: { "superpowers@fixture": false } });
     assert.deepEqual(skills, []);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("settings decide a plugin's skills, at user scope and then at project scope", async () => {
+  const fx = await fixture();
+  try {
+    const bundle = await installFixturePlugin(fx, "superpowers");
+    await write(join(bundle, "skills", "brainstorming", "SKILL.md"), "---\ndescription: plugin brainstorming\n---\nBody");
+    const contributes = async () => {
+      const settings = await loadSettings(fx.home);
+      const skills = await discovery(fx, {
+        enabledPlugins: await sessionEnabledPlugins(fx.project, settings.enabled_plugins, fx.home),
+      });
+      return skills.some((skill) => skill.name === "superpowers:brainstorming");
+    };
+
+    assert.equal(await contributes(), true);
+
+    await writeEnabledPlugin({ key: "superpowers@fixture", enabled: false, homeDirectory: fx.home });
+    assert.equal(await contributes(), false);
+
+    await writeEnabledPlugin({ key: "superpowers@fixture", enabled: true, homeDirectory: fx.home });
+    assert.equal(await contributes(), true);
+
+    await writeEnabledPlugin({ key: "superpowers@fixture", enabled: false, scope: "project", projectRoot: fx.project });
+    assert.equal(await contributes(), false);
   } finally {
     await fx.cleanup();
   }

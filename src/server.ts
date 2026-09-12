@@ -9,6 +9,7 @@ import { listenErrorMessage, parseCliCommand, usageText } from "./cli.js";
 import { builtInCommand } from "./built-in-commands.js";
 import {
   addMarketplace,
+  installedPluginKey,
   installPlugin,
   listMarketplacePlugins,
   loadInstalledPlugins,
@@ -32,8 +33,10 @@ import {
   loadSettingsSource,
   parseSettingsSource,
   saveSettingsSource,
+  sessionEnabledPlugins,
   settingsForEditor,
   settingsSourceFromEditor,
+  writeEnabledPlugin,
   type AmberSettings,
 } from "./settings.js";
 import { SETTINGS_TEMPLATE_SOURCE } from "./settings-template.js";
@@ -1679,8 +1682,10 @@ function sessionDirectories(session: Session): string[] {
 
 /** Skills visible to a session, rediscovered so additions take effect immediately. */
 async function sessionSkills(session: Session): Promise<SkillDefinition[]> {
+  const cwd = sessionWorkingDirectory(session);
   const context: SkillDiscoveryContext = {
-    cwd: sessionWorkingDirectory(session),
+    cwd,
+    enabledPlugins: await sessionEnabledPlugins(cwd, settings?.enabled_plugins),
     homeDirectory: homedir(),
     // Keep skills from every directory the session can access, including the
     // server's original workspace after the user changes the session CWD.
@@ -2407,7 +2412,31 @@ async function runPluginCommand(
     await removeMarketplace(parsed.name);
     return `Removed marketplace **${parsed.name}**. Installed plugins from it are untouched.`;
   }
-  if (parsed.kind === "installed") return renderInstalledPlugins(await loadInstalledPlugins());
+  if (parsed.kind === "installed") {
+    return renderInstalledPlugins(
+      await loadInstalledPlugins(),
+      await sessionEnabledPlugins(sessionRoot, settings?.enabled_plugins),
+    );
+  }
+  if (parsed.kind === "toggle") {
+    const key = await installedPluginKey(parsed.name, parsed.marketplace);
+    const path = await writeEnabledPlugin({
+      key,
+      enabled: parsed.enabled,
+      scope: parsed.scope,
+      ...(parsed.scope === "project" ? { projectRoot: sessionRoot } : {}),
+    });
+    // The write lands on disk; the loaded settings carry the same state so the
+    // toggle applies without waiting for a settings reload.
+    if (parsed.scope === "user" && settings) {
+      settings.enabled_plugins = { ...settings.enabled_plugins, [key]: parsed.enabled };
+    }
+    return [
+      `${parsed.enabled ? "Enabled" : "Disabled"} **${key}** at ${parsed.scope} scope in \`${path}\`.`,
+      "",
+      "Skills are rediscovered on every message, so this takes effect immediately.",
+    ].join("\n");
+  }
   if (parsed.kind === "install") {
     const target = {
       name: parsed.name,

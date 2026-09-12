@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import {
   addMarketplace,
   enabledPluginBundles,
+  installedPluginKey,
   installPlugin,
   isPluginEnabled,
   loadInstalledPlugins,
@@ -232,6 +233,17 @@ test("parses install and uninstall targets, scopes and confirmation", () => {
   assert.match((parsePluginCommand("uninstall a --yes") as { message: string }).message, /Unknown flag/);
   assert.match((parsePluginCommand("install Bad@Name") as { message: string }).message, /<plugin>\[@marketplace\]/);
   assert.match((parsePluginCommand("install a@b@c") as { message: string }).message, /<plugin>\[@marketplace\]/);
+});
+
+test("parses enable and disable targets and scopes", () => {
+  assert.deepEqual(parsePluginCommand("disable superpowers"), {
+    kind: "toggle", name: "superpowers", scope: "user", enabled: false,
+  });
+  assert.deepEqual(parsePluginCommand("enable superpowers@fixture --project"), {
+    kind: "toggle", name: "superpowers", marketplace: "fixture", scope: "project", enabled: true,
+  });
+  assert.match((parsePluginCommand("enable") as { message: string }).message, /Usage/);
+  assert.match((parsePluginCommand("enable a --yes") as { message: string }).message, /Unknown flag/);
 });
 
 /* ------------------------------------------------------------------ */
@@ -643,6 +655,31 @@ test("renders installed plugins", async () => {
   assert.match(rendered, /superpowers@fixture/);
   assert.match(rendered, /6\.3\.0/);
   assert.match(rendered, new RegExp(bundle.sha.slice(0, 12)));
+  assert.doesNotMatch(rendered, /disabled/);
+
+  const disabled = renderInstalledPlugins(
+    await loadInstalledPlugins(homeDirectory),
+    { "superpowers@fixture": false },
+  );
+  assert.match(disabled, /_\(disabled\)_/);
+});
+
+test("resolves the installed key a toggle names", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const bundle = await gitBundleFixture({ name: "superpowers", version: "6.3.0" });
+  const marketplace = await marketplaceFixture([
+    { name: "superpowers", description: "Skills", source: { source: "url", url: bundle.path } },
+  ]);
+  await addMarketplace({ spec: marketplace, homeDirectory });
+  await installPlugin({ name: "superpowers", homeDirectory });
+
+  assert.equal(await installedPluginKey("superpowers", undefined, homeDirectory), "superpowers@fixture");
+  assert.equal(await installedPluginKey("superpowers", "fixture", homeDirectory), "superpowers@fixture");
+  await assert.rejects(
+    installedPluginKey("superpowers", "other", homeDirectory),
+    /superpowers@other' is not installed/,
+  );
+  await assert.rejects(installedPluginKey("missing", undefined, homeDirectory), /is not installed/);
 });
 
 /* ------------------------------------------------------------------ */

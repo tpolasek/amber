@@ -118,6 +118,7 @@ export type PluginCommand =
   | { kind: "installed" }
   | { kind: "install"; name: string; marketplace?: string; scope: PluginScope; confirmed: boolean }
   | { kind: "uninstall"; name: string; marketplace?: string; scope: PluginScope }
+  | { kind: "toggle"; name: string; marketplace?: string; scope: PluginScope; enabled: boolean }
   | { kind: "error"; message: string };
 
 /* ------------------------------------------------------------------ */
@@ -307,6 +308,24 @@ export function parsePluginCommand(argument: string): PluginCommand {
 
   if (head === "installed") {
     return rest.length === 0 ? { kind: "installed" } : { kind: "error", message: "Usage: /plugin installed" };
+  }
+
+  if (head === "enable" || head === "disable") {
+    const flags = new Set(rest.filter((word) => word.startsWith("--")));
+    const operands = rest.filter((word) => !word.startsWith("--"));
+    const usage = `Usage: /plugin ${head} <plugin>[@marketplace] [--project]`;
+    const unknown = [...flags].find((flag) => flag !== "--project");
+    if (unknown) return { kind: "error", message: `Unknown flag ${unknown}. ${usage}` };
+    const [spec] = operands;
+    if (operands.length !== 1 || !spec) return { kind: "error", message: usage };
+    const target = parsePluginTarget(spec);
+    if (!target) return { kind: "error", message: `Plugin must be named <plugin>[@marketplace]: ${spec}` };
+    return {
+      kind: "toggle",
+      ...target,
+      scope: flags.has("--project") ? "project" : "user",
+      enabled: head === "enable",
+    };
   }
 
   if (head === "install" || head === "uninstall") {
@@ -738,6 +757,18 @@ export async function uninstallPlugin(options: PluginTargetOptions): Promise<Ins
   return removed;
 }
 
+/** The installed key a toggle names; a bare name installed twice is refused. */
+export async function installedPluginKey(
+  name: string,
+  marketplace?: string,
+  homeDirectory = homedir(),
+): Promise<string> {
+  const registry = await loadInstalledPlugins(homeDirectory);
+  const key = marketplace ? pluginKey(name, marketplace) : installedKeyForName(registry, name);
+  if (!registry.plugins[key]?.length) throw new Error(`Plugin '${key}' is not installed`);
+  return key;
+}
+
 function installedKeyForName(registry: InstalledPluginRegistry, name: string): string {
   const keys = Object.keys(registry.plugins).filter((key) => key.startsWith(`${name}@`));
   if (keys.length === 0) throw new Error(`Plugin '${name}' is not installed`);
@@ -885,6 +916,8 @@ export function renderPluginOverview(registry: MarketplaceRegistry): string {
     "- `/plugin installed`",
     "- `/plugin install <plugin>[@marketplace] [--project] [--yes]`",
     "- `/plugin uninstall <plugin>[@marketplace] [--project]`",
+    "- `/plugin enable <plugin>[@marketplace] [--project]`",
+    "- `/plugin disable <plugin>[@marketplace] [--project]`",
   ].join("\n");
 }
 
@@ -924,7 +957,10 @@ export function renderPluginInstalled(record: InstalledPluginRecord): string {
   ].join("\n");
 }
 
-export function renderInstalledPlugins(registry: InstalledPluginRegistry): string {
+export function renderInstalledPlugins(
+  registry: InstalledPluginRegistry,
+  enabledPlugins?: Record<string, boolean>,
+): string {
   const keys = Object.keys(registry.plugins).sort();
   if (keys.length === 0) {
     return ["**Installed plugins**", "", "No plugins installed.", "", "Install one with `/plugin install <plugin>`."].join("\n");
@@ -934,7 +970,8 @@ export function renderInstalledPlugins(registry: InstalledPluginRegistry): strin
     for (const record of registry.plugins[key] ?? []) {
       const commit = record.commitSha ? ` · \`${shortSha(record.commitSha)}\`` : "";
       const scope = record.scope === "project" ? ` · project \`${record.projectRoot}\`` : "";
-      lines.push(`- **${key}** \`${record.version}\`${commit}${scope}`);
+      const state = isPluginEnabled(key, enabledPlugins) ? "" : " _(disabled)_";
+      lines.push(`- **${key}** \`${record.version}\`${commit}${scope}${state}`);
     }
   }
   return lines.join("\n");
