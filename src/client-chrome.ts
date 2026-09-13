@@ -81,7 +81,10 @@ export function renderContextMeter(): void {
   const session = state.session;
   const config = state.config;
   const tokens = session?.contextTokens
-    ?? session?.messages.reduce((largest, message) => Math.max(largest, message.usage?.input ?? 0), 0)
+    ?? session?.messages.reduce((largest, message) => Math.max(
+      largest,
+      message.usage ? message.usage.total ?? message.usage.input + message.usage.output : 0,
+    ), 0)
     ?? 0;
   const activeModel = config?.models.find((model) =>
     model.key === (session ? effectiveModelKey(session, config) : config.defaultModel));
@@ -92,7 +95,7 @@ export function renderContextMeter(): void {
   elements.contextMeter.classList.add(`context-${level}`);
   elements.contextMeterBar.style.width = `${Math.min(100, ratio * 100)}%`;
   elements.contextMeterValue.textContent = `${formatTokenCountInThousands(tokens)}k`;
-  elements.contextMeter.title = `${tokens.toLocaleString()} cached + uncached input tokens`
+  elements.contextMeter.title = `${tokens.toLocaleString()} active context tokens (latest input + output)`
     + (activeModel?.compactTokens ? ` · auto-compacts at ${activeModel.compactTokens.toLocaleString()}` : "");
 }
 

@@ -22,6 +22,7 @@ export type ProviderImageBlock = { type: "image"; source: ImageSource; cache_con
 export interface TokenUsage {
   input: number;
   output: number;
+  total?: number;
 }
 
 export type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";

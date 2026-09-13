@@ -275,7 +275,7 @@ test("maps reasoning, tool call deltas, usage, and finish reason from chat chunk
       '{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-new","type":"function","function":{"name":"Read","arguments":""}}]},"finish_reason":null}]}',
       '{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"file_path\\":\\"README.md\\"}"}}]},"finish_reason":null}]}',
       '{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}',
-      '{"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":30}}',
+      '{"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":30,"total_tokens":150}}',
     ]);
   });
   context.after(() => gateway.close());
@@ -295,7 +295,7 @@ test("maps reasoning, tool call deltas, usage, and finish reason from chat chunk
     { type: "tool_use_start", index: 0, id: "call-new", name: "Read" },
     { type: "tool_input_delta", index: 0, partialJson: '{"file_path":"README.md"}' },
     { type: "done", stopReason: "tool_calls" },
-    { type: "usage", usage: { input: 120, output: 30 } },
+    { type: "usage", usage: { input: 120, output: 30, total: 150 } },
   ]);
 });
 

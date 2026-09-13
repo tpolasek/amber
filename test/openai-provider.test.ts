@@ -23,7 +23,7 @@ test("streams OpenAI Responses text, reasoning, tools, and usage", async (contex
     response.write('event: response.output_item.added\r\ndata: {"type":"response.output_item.added","output_index":2,"item":{"id":"fc-new","type":"function_call","call_id":"call-new","name":"Read","arguments":""}}\r\n\r\n');
     response.write('event: response.function_call_arguments.delta\r\ndata: {"type":"response.function_call_arguments.delta","output_index":2,"delta":"{\\"file_path\\":\\"README.md\\"}"}\r\n\r\n');
     response.write('event: response.function_call_arguments.done\r\ndata: {"type":"response.function_call_arguments.done","output_index":2,"name":"Read","arguments":"{\\"file_path\\":\\"README.md\\"}"}\r\n\r\n');
-    response.end('event: response.completed\r\ndata: {"type":"response.completed","response":{"usage":{"input_tokens":120,"output_tokens":30}}}\r\n\r\n');
+    response.end('event: response.completed\r\ndata: {"type":"response.completed","response":{"usage":{"input_tokens":40,"output_tokens":30,"total_tokens":150,"input_tokens_details":{"cached_tokens":80}}}}\r\n\r\n');
   });
   gateway.listen(0, "127.0.0.1");
   await once(gateway, "listening");
@@ -107,7 +107,7 @@ test("streams OpenAI Responses text, reasoning, tools, and usage", async (contex
     { type: "delta", text: "I found it." },
     { type: "tool_use_start", index: 2, id: "call-new", name: "Read" },
     { type: "tool_input_delta", index: 2, partialJson: '{"file_path":"README.md"}' },
-    { type: "usage", usage: { input: 120, output: 30 } },
+    { type: "usage", usage: { input: 120, output: 30, total: 150 } },
     { type: "done", stopReason: "completed" },
   ]);
 });

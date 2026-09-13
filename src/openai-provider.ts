@@ -66,6 +66,7 @@ interface OpenAIOutputItem {
 interface OpenAIUsage {
   input_tokens?: number;
   output_tokens?: number;
+  total_tokens?: number;
 }
 
 export class OpenAIProvider implements LlmProvider {
@@ -446,9 +447,14 @@ function isReplayableReasoningItem(item: unknown): item is Record<string, unknow
 }
 
 function mapUsage(usage: OpenAIUsage): Partial<TokenUsage> {
+  const derivedInput = usage.total_tokens !== undefined && usage.output_tokens !== undefined
+    ? usage.total_tokens - usage.output_tokens
+    : undefined;
+  const input = derivedInput !== undefined && derivedInput >= 0 ? derivedInput : usage.input_tokens;
   return {
-    ...(usage.input_tokens !== undefined ? { input: usage.input_tokens } : {}),
+    ...(input !== undefined ? { input } : {}),
     ...(usage.output_tokens !== undefined ? { output: usage.output_tokens } : {}),
+    ...(usage.total_tokens !== undefined ? { total: usage.total_tokens } : {}),
   };
 }
 

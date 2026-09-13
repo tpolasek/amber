@@ -943,7 +943,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       assistantMessage.status = "complete";
       if (usage.input !== undefined && usage.output !== undefined) {
         assistantMessage.usage = usage as TokenUsage;
-        session.contextTokens = usage.input;
+        session.contextTokens = usage.total ?? usage.input + usage.output;
       }
       for (const draft of toolDrafts.values()) {
         try {
@@ -1755,7 +1755,10 @@ function archiveCompletedPlanningTasks(session: Session): void {
 
 function sessionContextTokens(session: Session): number {
   if (session.contextTokens !== undefined) return session.contextTokens;
-  return session.messages.reduce((largest, message) => Math.max(largest, message.usage?.input ?? 0), 0);
+  return session.messages.reduce((largest, message) => Math.max(
+    largest,
+    message.usage ? message.usage.total ?? message.usage.input + message.usage.output : 0,
+  ), 0);
 }
 
 function sessionTools(session: Session, approvalCapable = true): ToolDefinition[] {
@@ -2338,8 +2341,8 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
         `**Context · ${session.id}**`,
         "",
         `- Model: \`${providerForSession(session).model}\``,
-        `- Active context: **${currentTokens.toLocaleString()} tokens** (cached + uncached input)`,
-        `- Latest input / output: **${(latestUsage?.input ?? 0).toLocaleString()} / ${(latestUsage?.output ?? 0).toLocaleString()}**`,
+        `- Active context: **${currentTokens.toLocaleString()} tokens** (latest input + output)`,
+        `- Latest input / output / total: **${(latestUsage?.input ?? 0).toLocaleString()} / ${(latestUsage?.output ?? 0).toLocaleString()} / ${(latestUsage ? latestUsage.total ?? latestUsage.input + latestUsage.output : 0).toLocaleString()}**`,
         `- Session input: **${totalInput.toLocaleString()} tokens**`,
         `- Session output: **${totalOutput.toLocaleString()} tokens**`,
         `- Model messages: **${chatMessages.length}**`,

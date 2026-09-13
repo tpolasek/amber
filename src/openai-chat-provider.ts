@@ -43,6 +43,7 @@ interface ChatChunk {
 interface ChatUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
+  total_tokens?: number;
 }
 
 // Chat Completions has no reasoning control: reasoning models decide server-side
@@ -204,6 +205,7 @@ function mapUsage(usage: ChatUsage): Partial<TokenUsage> {
   return {
     ...(usage.prompt_tokens !== undefined ? { input: usage.prompt_tokens } : {}),
     ...(usage.completion_tokens !== undefined ? { output: usage.completion_tokens } : {}),
+    ...(usage.total_tokens !== undefined ? { total: usage.total_tokens } : {}),
   };
 }
 
