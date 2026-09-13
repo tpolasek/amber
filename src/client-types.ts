@@ -1,6 +1,6 @@
 import type { ThinkingLevel } from "./thinking-level.js";
 
-export interface TokenUsage { input: number; output: number; total?: number }
+export interface TokenUsage { input: number; output: number; total?: number; cached?: number }
 export type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
 export interface ToolStatusDisplay { text: string; appendElapsed?: boolean }
 export interface ToolReadRange { startLine: number; endLine: number; totalLines: number }

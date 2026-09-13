@@ -97,6 +97,21 @@ export function renderContextMeter(): void {
   elements.contextMeterValue.textContent = `${formatTokenCountInThousands(tokens)}k`;
   elements.contextMeter.title = `${tokens.toLocaleString()} active context tokens (latest input + output)`
     + (activeModel?.compactTokens ? ` · auto-compacts at ${activeModel.compactTokens.toLocaleString()}` : "");
+
+  const usage = [...(session?.messages ?? [])].reverse().find((message) => message.usage)?.usage;
+  const cached = usage?.cached;
+  const input = usage?.input ?? 0;
+  const cacheRatio = cached !== undefined && input > 0
+    ? Math.max(0, Math.min(1, cached / input))
+    : 0;
+  const cacheLevel = cached === undefined ? "unknown" : cacheRatio >= .85 ? "green" : cacheRatio > .5 ? "yellow" : "red";
+  elements.cacheMeter.classList.remove("cache-unknown", "cache-green", "cache-yellow", "cache-red");
+  elements.cacheMeter.classList.add(`cache-${cacheLevel}`);
+  elements.cacheMeterBar.style.width = `${cacheRatio * 100}%`;
+  elements.cacheMeterValue.textContent = cached !== undefined ? `${Math.round(cacheRatio * 100)}%` : "--";
+  elements.cacheMeter.title = cached !== undefined
+    ? `${cached.toLocaleString()} of ${input.toLocaleString()} input tokens served from cache`
+    : "Cache usage unavailable for the latest response";
 }
 
 export function setBusy(busy: boolean): void {

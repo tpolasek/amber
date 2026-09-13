@@ -44,6 +44,8 @@ interface ChatUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number };
+  prompt_cache_hit_tokens?: number;
 }
 
 // Chat Completions has no reasoning control: reasoning models decide server-side
@@ -202,10 +204,12 @@ function systemText(system: string | ProviderSystemBlock[] | undefined): string 
 }
 
 function mapUsage(usage: ChatUsage): Partial<TokenUsage> {
+  const cached = usage.prompt_tokens_details?.cached_tokens ?? usage.prompt_cache_hit_tokens;
   return {
     ...(usage.prompt_tokens !== undefined ? { input: usage.prompt_tokens } : {}),
     ...(usage.completion_tokens !== undefined ? { output: usage.completion_tokens } : {}),
     ...(usage.total_tokens !== undefined ? { total: usage.total_tokens } : {}),
+    ...(cached !== undefined ? { cached } : {}),
   };
 }
 

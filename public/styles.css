@@ -93,6 +93,14 @@ button { color: inherit; }
 .context-meter.context-yellow b { background: var(--amber); box-shadow: 0 0 5px var(--accent-a50); }
 .context-meter.context-red { color: var(--danger); }
 .context-meter.context-red b { background: var(--danger); box-shadow: 0 0 5px var(--danger-a50); }
+.cache-meter { grid-template-columns: 36px 1fr max-content; }
+.cache-meter.cache-green { color: var(--success); }
+.cache-meter.cache-green b { background: var(--success); box-shadow: 0 0 5px var(--success-glow); }
+.cache-meter.cache-yellow { color: var(--amber-hot); }
+.cache-meter.cache-yellow b { background: var(--amber); box-shadow: 0 0 5px var(--accent-a50); }
+.cache-meter.cache-red { color: var(--danger); }
+.cache-meter.cache-red b { background: var(--danger); box-shadow: 0 0 5px var(--danger-a50); }
+.cache-meter.cache-unknown b { width: 0; box-shadow: none; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 8px var(--amber); animation: pulse 2.2s infinite; }
 
 .terminal { min-width: 0; min-height: 0; max-height: 100%; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; }

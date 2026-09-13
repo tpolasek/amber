@@ -184,6 +184,7 @@ function mapUsage(usage: AnthropicUsage): Partial<TokenUsage> {
         + (usage.cache_read_input_tokens ?? 0),
     } : {}),
     ...(usage.output_tokens !== undefined ? { output: usage.output_tokens } : {}),
+    ...(usage.cache_read_input_tokens !== undefined ? { cached: usage.cache_read_input_tokens } : {}),
   };
 }
 

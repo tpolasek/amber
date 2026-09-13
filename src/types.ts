@@ -23,6 +23,7 @@ export interface TokenUsage {
   input: number;
   output: number;
   total?: number;
+  cached?: number;
 }
 
 export type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";

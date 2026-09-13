@@ -67,6 +67,7 @@ interface OpenAIUsage {
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
+  input_tokens_details?: { cached_tokens?: number };
 }
 
 export class OpenAIProvider implements LlmProvider {
@@ -455,6 +456,9 @@ function mapUsage(usage: OpenAIUsage): Partial<TokenUsage> {
     ...(input !== undefined ? { input } : {}),
     ...(usage.output_tokens !== undefined ? { output: usage.output_tokens } : {}),
     ...(usage.total_tokens !== undefined ? { total: usage.total_tokens } : {}),
+    ...(usage.input_tokens_details?.cached_tokens !== undefined
+      ? { cached: usage.input_tokens_details.cached_tokens }
+      : {}),
   };
 }
 

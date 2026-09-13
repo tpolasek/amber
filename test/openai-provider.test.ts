@@ -107,7 +107,7 @@ test("streams OpenAI Responses text, reasoning, tools, and usage", async (contex
     { type: "delta", text: "I found it." },
     { type: "tool_use_start", index: 2, id: "call-new", name: "Read" },
     { type: "tool_input_delta", index: 2, partialJson: '{"file_path":"README.md"}' },
-    { type: "usage", usage: { input: 120, output: 30, total: 150 } },
+    { type: "usage", usage: { input: 120, output: 30, total: 150, cached: 80 } },
     { type: "done", stopReason: "completed" },
   ]);
 });

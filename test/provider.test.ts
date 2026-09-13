@@ -70,7 +70,7 @@ test("uses bearer auth and parses Anthropic-compatible streaming events", async 
   assert.deepEqual(receivedOutputConfig, { effort: "max" });
   assert.deepEqual(receivedTools, tools);
   assert.deepEqual(events, [
-    { type: "usage", usage: { input: 149 } },
+    { type: "usage", usage: { input: 149, cached: 100 } },
     { type: "thinking_delta", thinking: "Working it out" },
     { type: "thinking_signature_delta", signature: "signed-thought" },
     { type: "delta", text: "Hello" },
