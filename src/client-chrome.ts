@@ -1,4 +1,5 @@
 import { compactHeaderPath, formatTokenCountInThousands } from "./client-formatters.js";
+import { cacheHitRatio, formatCacheHitPercentage } from "./cache-usage.js";
 import { elements, state } from "./client-state.js";
 import type { Config, Session } from "./client-types.js";
 import type { ThinkingLevel } from "./thinking-level.js";
@@ -98,20 +99,16 @@ export function renderContextMeter(): void {
   elements.contextMeter.title = `${tokens.toLocaleString()} active context tokens (latest input + output)`
     + (activeModel?.compactTokens ? ` · auto-compacts at ${activeModel.compactTokens.toLocaleString()}` : "");
 
-  const usage = [...(session?.messages ?? [])].reverse().find((message) => message.usage)?.usage;
-  const cached = usage?.cached;
-  const input = usage?.input ?? 0;
-  const cacheRatio = cached !== undefined && input > 0
-    ? Math.max(0, Math.min(1, cached / input))
-    : 0;
-  const cacheLevel = cached === undefined ? "unknown" : cacheRatio >= .85 ? "green" : cacheRatio > .5 ? "yellow" : "red";
+  const cacheUsage = session?.cacheUsage;
+  const cacheRatio = cacheUsage ? cacheHitRatio(cacheUsage) : 0;
+  const cacheLevel = cacheUsage === undefined ? "unknown" : cacheRatio >= .85 ? "green" : cacheRatio > .5 ? "yellow" : "red";
   elements.cacheMeter.classList.remove("cache-unknown", "cache-green", "cache-yellow", "cache-red");
   elements.cacheMeter.classList.add(`cache-${cacheLevel}`);
   elements.cacheMeterBar.style.width = `${cacheRatio * 100}%`;
-  elements.cacheMeterValue.textContent = cached !== undefined ? `${Math.round(cacheRatio * 100)}%` : "--";
-  elements.cacheMeter.title = cached !== undefined
-    ? `${cached.toLocaleString()} of ${input.toLocaleString()} input tokens served from cache`
-    : "Cache usage unavailable for the latest response";
+  elements.cacheMeterValue.textContent = cacheUsage ? formatCacheHitPercentage(cacheRatio) : "--";
+  elements.cacheMeter.title = cacheUsage
+    ? `${cacheUsage.cached.toLocaleString()} of ${cacheUsage.input.toLocaleString()} input tokens served from cache across ${cacheUsage.requests.toLocaleString()} requests`
+    : "Cache usage unavailable since the last reset";
 }
 
 export function setBusy(busy: boolean): void {

@@ -68,6 +68,7 @@ test("clears a session in place", async () => {
     content: "commit instructions",
     invokedAt: new Date().toISOString(),
   }];
+  session.cacheUsageResetThroughMessageId = "message-1";
   session.skillTouchedPaths = ["/tmp/file.txt"];
   await store.save(session);
 
@@ -76,6 +77,7 @@ test("clears a session in place", async () => {
   assert.deepEqual(cleared.messages, []);
   assert.equal(cleared.compaction, undefined);
   assert.equal(cleared.fileReadState, undefined);
+  assert.equal(cleared.cacheUsageResetThroughMessageId, undefined);
   assert.equal(cleared.invokedSkills, undefined);
   assert.equal(cleared.skillTouchedPaths, undefined);
   assert.equal(cleared.skillRoots, undefined);

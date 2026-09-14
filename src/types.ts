@@ -26,6 +26,12 @@ export interface TokenUsage {
   cached?: number;
 }
 
+export interface CacheUsage {
+  input: number;
+  cached: number;
+  requests: number;
+}
+
 export type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
 
 export interface ToolStatusDisplay {
@@ -115,6 +121,8 @@ export interface Session {
   planningTaskHighWaterMark?: number;
   planningTaskArchiveHighWaterMark?: number;
   contextTokens?: number;
+  cacheUsage?: CacheUsage;
+  cacheUsageResetThroughMessageId?: string;
   planMode?: SessionPlanMode;
   /** Nested project directories with their own skills, discovered from touched files. */
   skillRoots?: string[];

@@ -113,6 +113,7 @@ export class SessionStore {
     delete session.compaction;
     delete session.fileReadState;
     delete session.contextTokens;
+    delete session.cacheUsageResetThroughMessageId;
     delete session.planMode;
     delete session.skillRoots;
     delete session.skillTouchedPaths;

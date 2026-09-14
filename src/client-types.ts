@@ -1,6 +1,7 @@
 import type { ThinkingLevel } from "./thinking-level.js";
 
 export interface TokenUsage { input: number; output: number; total?: number; cached?: number }
+export interface CacheUsage { input: number; cached: number; requests: number }
 export type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
 export interface ToolStatusDisplay { text: string; appendElapsed?: boolean }
 export interface ToolReadRange { startLine: number; endLine: number; totalLines: number }
@@ -16,7 +17,7 @@ export const PLANNING_TASK_STATUS_LABELS: Record<PlanningTaskStatus, string> = {
 };
 export interface PlanningTask { id: string; subject: string; description: string; activeForm: string; status: PlanningTaskStatus; owner: string; blocks: string[]; blockedBy: string[]; metadata: Record<string, unknown> }
 export interface InvokedSkill { name: string; path: string; content: string; invokedAt: string }
-export interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; model?: string; thinkingLevel?: ThinkingLevel; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error" | "stopped"; planningTasks?: PlanningTask[]; planningTaskArchiveHighWaterMark?: number; contextTokens?: number; planMode?: SessionPlanMode; skillRoots?: string[]; skillTouchedPaths?: string[]; invokedSkills?: InvokedSkill[] }
+export interface Session { id: string; title: string; createdAt: string; updatedAt: string; messages: Message[]; model?: string; thinkingLevel?: ThinkingLevel; compaction?: SessionCompaction; directories?: string[]; cwd?: string; addDirInitialized?: boolean; parentSessionId?: string; agentType?: string; agentDescription?: string; agentStatus?: "running" | "complete" | "error" | "stopped"; planningTasks?: PlanningTask[]; planningTaskArchiveHighWaterMark?: number; contextTokens?: number; cacheUsage?: CacheUsage; cacheUsageResetThroughMessageId?: string; planMode?: SessionPlanMode; skillRoots?: string[]; skillTouchedPaths?: string[]; invokedSkills?: InvokedSkill[] }
 export interface AgentSessionSummary { id: string; description: string; status: NonNullable<Session["agentStatus"]> }
 export interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string }
 export interface AvailableModel { key: string; provider: string; api: "anthropic" | "openai"; model: string; displayName: string; thinkingLevel: ThinkingLevel; compactTokens?: number }

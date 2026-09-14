@@ -67,6 +67,7 @@ import {
 import { ActiveSessionRuns, abortSessionOperations } from "./session-aborts.js";
 import { SessionInputPriorityQueue, type QueuedSessionInput } from "./session-queue.js";
 import { pageSessionMessages, paginateSession } from "./session-pagination.js";
+import { aggregateCacheUsage, markCacheUsageReset } from "./cache-usage.js";
 import {
   ASK_USER_QUESTION_TOOL_NAME,
   AskUserQuestionManager,
@@ -138,7 +139,7 @@ const thinkingLevelScript = join(sourceDirectory, "thinking-level.js");
 const planHandoffScript = join(sourceDirectory, "plan-handoff.js");
 // Browser-loaded ES modules served straight from the compiled output. The
 // pattern only admits known module names, so it cannot traverse paths.
-const clientModulePattern = /^\/(client(?:-[a-z0-9-]+)?|built-in-commands|streaming-thinking|tool-display|thinking-level|plan-handoff)\.js$/;
+const clientModulePattern = /^\/(client(?:-[a-z0-9-]+)?|built-in-commands|cache-usage|streaming-thinking|tool-display|thinking-level|plan-handoff)\.js$/;
 const markdownScript = join(projectRoot, "node_modules", "markdown-it", "dist", "browser", "markdown-it.umd.min.js");
 const amberDirectory = join(homedir(), ".amber");
 const defaultDataDirectory = join(amberDirectory, "data", "sessions");
@@ -416,6 +417,10 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     const body = await readJson(request);
     const model = typeof body.model === "string" ? body.model.trim() : "";
     if (!catalog.has(model)) return json(response, 400, { error: `Model '${model}' is not configured` });
+    // Compare against the effective model: a session.model left stale by a
+    // config change already runs on the default, so re-selecting it is no change.
+    const currentModel = session.model && catalog.has(session.model) ? session.model : catalog.defaultModel;
+    if (model !== currentModel) markCacheUsageReset(session);
     session.model = model;
     await store.saveMeta(session);
     return json(response, 200, pagedSessionPayload(session));
@@ -964,7 +969,10 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           : interruptionText(cutOffReason);
       }
       await store.updateMessage(session, assistantMessage);
-      emit("assistant_complete", { message: assistantMessage });
+      emit("assistant_complete", {
+        message: assistantMessage,
+        cacheUsage: aggregateCacheUsage(session.messages, session.cacheUsageResetThroughMessageId),
+      });
       throwIfSessionAborted(controller.signal);
 
       const orderedCalls = [...toolDrafts.values()].map(({ call }) => call);

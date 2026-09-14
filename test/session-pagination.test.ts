@@ -102,3 +102,21 @@ test("paginateSession pages without mutating the source session", () => {
   assert.equal(page.session.id, session.id);
   assert.notEqual(page.session, session);
 });
+
+test("paginateSession calculates cache usage from the full session instead of the visible page", () => {
+  const session: Session = {
+    id: "session",
+    title: "session",
+    createdAt: now,
+    updatedAt: now,
+    messages: sectionedMessages(SESSION_PAGE_SIZE + 1),
+  };
+  session.messages[0]!.usage = { input: 105, output: 1, cached: 100 };
+  session.messages.at(-2)!.usage = { input: 25, output: 1, cached: 10 };
+
+  const page = paginateSession(session);
+
+  assert.deepEqual(page.session.cacheUsage, { input: 130, cached: 110, requests: 2 });
+  assert.equal(page.session.messages.some((message) => message.id === "a0"), false);
+  assert.equal(session.cacheUsage, undefined, "source session untouched");
+});

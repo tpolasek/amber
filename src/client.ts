@@ -998,10 +998,13 @@ function applySessionEvent(context: SessionStreamContext, event: string, data: u
       updateMessage(context.assistantElement, message);
     }
   } else if (event === "assistant_complete") {
-    const message = (data as { message: Message }).message;
+    const payload = data as { message: Message; cacheUsage?: Session["cacheUsage"] };
+    const message = payload.message;
     const index = context.session.messages.findIndex((candidate) => candidate.id === message.id);
     if (index >= 0) context.session.messages[index] = message;
     if (message.usage) context.session.contextTokens = message.usage.total ?? message.usage.input + message.usage.output;
+    if (payload.cacheUsage) context.session.cacheUsage = payload.cacheUsage;
+    else delete context.session.cacheUsage;
     setStreamAssistant(context, message);
     updateMessage(context.assistantElement, message);
     renderContextMeter();
