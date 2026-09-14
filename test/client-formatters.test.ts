@@ -85,6 +85,15 @@ test("suggests /plugin subcommands as the command is typed", () => {
     (pluginCommandSuggestions("/plugin marketplace u") ?? []).map((item) => item.value),
     ["/plugin marketplace update"],
   );
+  // The verb the user is typing sorts ahead of the longer word it prefixes.
+  assert.deepEqual(
+    (pluginCommandSuggestions("/plugin install") ?? []).map((item) => item.value),
+    ["/plugin install", "/plugin installed"],
+  );
+  assert.deepEqual(
+    (pluginCommandSuggestions("/plugin marketplace add") ?? []).map((item) => item.value),
+    ["/plugin marketplace add", "/plugin marketplace add anthropics/claude-plugins-official"],
+  );
   assert.deepEqual(pluginCommandSuggestions("/plugin install slack"), []);
 });
 

@@ -120,14 +120,15 @@ export function gitCommandSuggestions(input: string): GitCommandSuggestion[] | n
 }
 
 export const PLUGIN_COMMAND_SUGGESTIONS: { value: string; description: string }[] = [
+  { value: "/plugin marketplace add", description: "Add a marketplace from owner/repo, a URL, or a directory" },
   { value: "/plugin marketplace add anthropics/claude-plugins-official", description: "Add the official marketplace" },
   { value: "/plugin marketplace list", description: "List added marketplaces" },
   { value: "/plugin marketplace update", description: "Refetch every added marketplace" },
   { value: "/plugin marketplace remove", description: "Drop a marketplace by name" },
   { value: "/plugin list", description: "List plugins the marketplaces publish" },
+  { value: "/plugin install", description: "Show the plan for installing a plugin" },
   { value: "/plugin installed", description: "List installed plugins and their enable state" },
   { value: "/plugin update", description: "Report drift for every installed plugin" },
-  { value: "/plugin install", description: "Show the plan for installing a plugin" },
   { value: "/plugin uninstall", description: "Remove an installed plugin" },
   { value: "/plugin enable", description: "Turn an installed plugin back on" },
   { value: "/plugin disable", description: "Switch an installed plugin off" },
