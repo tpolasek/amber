@@ -8,6 +8,8 @@ import {
   gitCommandSuggestions,
   messageFrom,
   parseGitCommand,
+  PLUGIN_COMMAND_SUGGESTIONS,
+  pluginCommandSuggestions,
   promptFileReferenceAt,
   replacePromptFileReference,
   skillCommandSuggestions,
@@ -65,6 +67,25 @@ test("suggests supported /git parameters as the command is typed", () => {
   );
   assert.deepEqual((gitCommandSuggestions("/git commit p") ?? []).map((item) => item.value), ["/git commit push"]);
   assert.deepEqual(gitCommandSuggestions("/git log"), []);
+});
+
+test("suggests /plugin subcommands as the command is typed", () => {
+  assert.equal(pluginCommandSuggestions("/plug"), null);
+  assert.equal(pluginCommandSuggestions("/plugins"), null);
+  assert.equal(pluginCommandSuggestions("/install"), null);
+  assert.deepEqual(pluginCommandSuggestions("/plugin"), PLUGIN_COMMAND_SUGGESTIONS);
+  assert.deepEqual(pluginCommandSuggestions("/plugin  "), PLUGIN_COMMAND_SUGGESTIONS);
+  assert.deepEqual(pluginCommandSuggestions("  /Plugin"), PLUGIN_COMMAND_SUGGESTIONS);
+  assert.deepEqual(
+    (pluginCommandSuggestions("/plugin marketplace ") ?? []).map((item) => item.value),
+    PLUGIN_COMMAND_SUGGESTIONS.filter((item) => item.value.startsWith("/plugin marketplace")).map((item) => item.value),
+  );
+  assert.deepEqual((pluginCommandSuggestions("/plugin en") ?? []).map((item) => item.value), ["/plugin enable"]);
+  assert.deepEqual(
+    (pluginCommandSuggestions("/plugin marketplace u") ?? []).map((item) => item.value),
+    ["/plugin marketplace update"],
+  );
+  assert.deepEqual(pluginCommandSuggestions("/plugin install slack"), []);
 });
 
 test("suggests session skills as slash commands without built-in collisions", () => {

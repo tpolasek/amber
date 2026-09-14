@@ -8,6 +8,7 @@ import {
   gitCommandSuggestions,
   messageFrom,
   parseGitCommand,
+  pluginCommandSuggestions,
   promptFileReferenceAt,
   replacePromptFileReference,
   skillCommandSuggestions,
@@ -2075,6 +2076,18 @@ function updateCommandMenu(): void {
   const gitMatches = gitCommandSuggestions(elements.prompt.value);
   if (gitMatches) {
     matchingCommands = gitMatches.map((suggestion) => ({
+      name: suggestion.value,
+      description: suggestion.description,
+      runsDuringResponse: false,
+    }));
+    selectedCommand = 0;
+    if (matchingCommands.length === 0) return hideCommandMenu();
+    renderCommandMenu();
+    return;
+  }
+  const pluginMatches = pluginCommandSuggestions(elements.prompt.value);
+  if (pluginMatches) {
+    matchingCommands = pluginMatches.map((suggestion) => ({
       name: suggestion.value,
       description: suggestion.description,
       runsDuringResponse: false,
