@@ -2175,6 +2175,7 @@ async function updateFileCompletions(reference: PromptFileReference): Promise<vo
 }
 
 function renderCommandMenu(): void {
+  elements.commandMenu.classList.add("command-grid");
   elements.commandMenu.replaceChildren();
   matchingCommands.forEach((command, index) => {
     const button = document.createElement("button");
@@ -2193,9 +2194,11 @@ function renderCommandMenu(): void {
     elements.commandMenu.append(button);
   });
   elements.commandMenu.hidden = false;
+  elements.commandMenu.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
 }
 
 function renderDirectoryMenu(): void {
+  elements.commandMenu.classList.remove("command-grid");
   elements.commandMenu.replaceChildren();
   directoryCompletions.forEach((directory, index) => {
     const button = document.createElement("button");

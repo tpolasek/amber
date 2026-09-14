@@ -266,6 +266,8 @@ button { color: inherit; }
 .command-option + .command-option { border-top: 1px solid var(--accent-a10); }
 .command-option strong { color: var(--amber); font-weight: 500; }
 .command-option.selected { background: var(--amber-faint); color: var(--text); }
+.command-menu.command-grid { display: grid; grid-template-columns: fit-content(30%) minmax(0, 1fr); }
+.command-menu.command-grid .command-option { grid-column: span 2; grid-template-columns: subgrid; }
 .directory-option { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .directory-option strong, .directory-option span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .directory-option span { color: var(--fg-metadata); text-align: right; }
