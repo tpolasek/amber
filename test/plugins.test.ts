@@ -256,7 +256,15 @@ test("parses install and uninstall targets, scopes and confirmation", () => {
   assert.deepEqual(parsePluginCommand("uninstall superpowers@fixture --project"), {
     kind: "uninstall", name: "superpowers", marketplace: "fixture", scope: "project",
   });
-  assert.match((parsePluginCommand("install") as { message: string }).message, /Usage/);
+  // remove and delete are aliases of uninstall, with the same flags and usage.
+  assert.deepEqual(parsePluginCommand("remove superpowers"), {
+    kind: "uninstall", name: "superpowers", scope: "user",
+  });
+  assert.deepEqual(parsePluginCommand("delete superpowers --project"), {
+    kind: "uninstall", name: "superpowers", scope: "project",
+  });
+  assert.match((parsePluginCommand("delete") as { message: string }).message, /Usage: \/plugin delete/);
+  assert.match((parsePluginCommand("remove a --yes") as { message: string }).message, /Unknown flag/);
   assert.match((parsePluginCommand("install a b") as { message: string }).message, /Usage/);
   assert.match((parsePluginCommand("uninstall a --yes") as { message: string }).message, /Unknown flag/);
   assert.match((parsePluginCommand("install Bad@Name") as { message: string }).message, /<plugin>\[@marketplace\]/);

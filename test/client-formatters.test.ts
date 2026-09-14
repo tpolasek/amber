@@ -81,6 +81,8 @@ test("suggests /plugin subcommands as the command is typed", () => {
     PLUGIN_COMMAND_SUGGESTIONS.filter((item) => item.value.startsWith("/plugin marketplace")).map((item) => item.value),
   );
   assert.deepEqual((pluginCommandSuggestions("/plugin en") ?? []).map((item) => item.value), ["/plugin enable"]);
+  assert.deepEqual((pluginCommandSuggestions("/plugin rem") ?? []).map((item) => item.value), ["/plugin remove"]);
+  assert.deepEqual((pluginCommandSuggestions("/plugin del") ?? []).map((item) => item.value), ["/plugin delete"]);
   assert.deepEqual(
     (pluginCommandSuggestions("/plugin marketplace u") ?? []).map((item) => item.value),
     ["/plugin marketplace update"],

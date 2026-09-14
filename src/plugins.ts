@@ -364,7 +364,7 @@ export function parsePluginCommand(argument: string): PluginCommand {
     };
   }
 
-  if (head === "install" || head === "uninstall") {
+  if (head === "install" || head === "uninstall" || head === "remove" || head === "delete") {
     const flags = new Set(rest.filter((word) => word.startsWith("--")));
     const operands = rest.filter((word) => !word.startsWith("--"));
     const usage = `Usage: /plugin ${head} <plugin>[@marketplace] [--project]${head === "install" ? " [--yes]" : ""}`;

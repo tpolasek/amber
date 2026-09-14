@@ -66,7 +66,7 @@ Later:
 | `/plugin installed` | Installed plugins with version, commit, scope, and enable state |
 | `/plugin install <plugin>[@marketplace] [--project] [--yes]` | Shows the install plan; `--yes` performs it |
 | `/plugin update [<plugin>[@marketplace]] [--project] [--yes]` | Bare: drift report. Named: update plan; `--yes` applies it |
-| `/plugin uninstall <plugin>[@marketplace] [--project]` | Removes the record, and the bundle once unreferenced |
+| `/plugin uninstall <plugin>[@marketplace] [--project]` | Removes the record, and the bundle once unreferenced; `remove` and `delete` are aliases |
 | `/plugin enable <plugin>[@marketplace] [--project]` | Writes `true` into `enabled_plugins` |
 | `/plugin disable <plugin>[@marketplace] [--project]` | Writes `false` into `enabled_plugins` |
 

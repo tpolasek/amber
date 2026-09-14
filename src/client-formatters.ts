@@ -130,6 +130,8 @@ export const PLUGIN_COMMAND_SUGGESTIONS: { value: string; description: string }[
   { value: "/plugin installed", description: "List installed plugins and their enable state" },
   { value: "/plugin update", description: "Report drift for every installed plugin" },
   { value: "/plugin uninstall", description: "Remove an installed plugin" },
+  { value: "/plugin remove", description: "Alias of /plugin uninstall" },
+  { value: "/plugin delete", description: "Alias of /plugin uninstall" },
   { value: "/plugin enable", description: "Turn an installed plugin back on" },
   { value: "/plugin disable", description: "Switch an installed plugin off" },
 ];
