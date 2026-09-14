@@ -1336,6 +1336,18 @@ try {
       && generatedSettingsSource.includes('theme = "light+"'),
     JSON.stringify(savedSettings));
 
+  const rejectedSave = await fetch(amberUrl(amber.port, "/api/settings"), {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      "x-amber-auth-action-token": initialConfig.authActionToken,
+    },
+    body: JSON.stringify({ settings: { ...settingsDocument.settings, providers: {} } }),
+  });
+  check("rejected settings save is reported to the server log",
+    rejectedSave.status === 400 && amber.log().includes("could not save settings"),
+    `${rejectedSave.status}: ${JSON.stringify(await rejectedSave.json())}`);
+
   // Scenario 1: the reported case - ten sequential bash calls, queue once two finished.
   await runScenario(mock, amber, "sequential bash calls", "Run ten bash commands one at a time.", 2);
 

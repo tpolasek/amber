@@ -300,11 +300,14 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     try {
       ({ source, settings: nextSettings } = settingsSourceFromEditor(body.settings, settingsPath));
     } catch (error) {
-      return json(response, 400, { error: configurationErrorMessage(error) });
+      const problem = configurationErrorMessage(error);
+      console.error(`amber: could not save settings: ${problem}`);
+      return json(response, 400, { error: problem });
     }
     try {
       await saveSettingsSource(source);
     } catch (error) {
+      console.error(`amber: could not save settings: ${errorMessage(error)}`);
       return json(response, 500, { error: `Could not save settings: ${errorMessage(error)}` });
     }
     try {
@@ -352,6 +355,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       if (settings) settings.enabled_plugins = { ...settings.enabled_plugins, [key]: body.enabled };
       return json(response, 200, { ...await pluginSettingsPayload(), path });
     } catch (error) {
+      console.error(`amber: could not save plugin enable state: ${errorMessage(error)}`);
       return json(response, 500, { error: errorMessage(error) });
     }
   }
