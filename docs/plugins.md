@@ -81,6 +81,9 @@ Notes that are easy to trip over:
   installed plugins.
 - **Bare `/plugin update` takes no flags, not even `--yes`.** There is no "update everything"
   apply: each apply runs third-party code, so it is always named explicitly.
+- **Enable and disable name their scope.** A plugin installed for one project only is toggled
+  with `--project` from inside it; the user-scope form refuses rather than write a key that
+  would reach the project install.
 - **`--project`** installs or toggles for one project rather than for your user; see
   [Scopes](#scopes).
 

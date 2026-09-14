@@ -796,15 +796,23 @@ export async function uninstallPlugin(options: PluginTargetOptions): Promise<Ins
   return removed;
 }
 
-/** The installed key a toggle names; a bare name installed twice is refused. */
-export async function installedPluginKey(
-  name: string,
-  marketplace?: string,
-  homeDirectory = homedir(),
-): Promise<string> {
+/**
+ * The installed key a toggle names; a bare name installed twice is refused.
+ * A toggle writes one scope's enable table, so a record must exist there: this
+ * keeps a user-scope disable from switching off a project-only install through
+ * the key the two scopes share.
+ */
+export async function installedPluginKey(options: PluginTargetOptions): Promise<string> {
+  const homeDirectory = options.homeDirectory ?? homedir();
+  const { scope, projectRoot } = resolveScope(options);
   const registry = await loadInstalledPlugins(homeDirectory);
-  const key = marketplace ? pluginKey(name, marketplace) : installedKeyForName(registry, name);
-  if (!registry.plugins[key]?.length) throw new Error(`Plugin '${key}' is not installed`);
+  const key = options.marketplace
+    ? pluginKey(options.name, options.marketplace)
+    : installedKeyForName(registry, options.name);
+  const installed = (registry.plugins[key] ?? []).some(
+    (record) => record.scope === scope && record.projectRoot === projectRoot,
+  );
+  if (!installed) throw new Error(`Plugin '${key}' is not installed at ${scope} scope`);
   return key;
 }
 

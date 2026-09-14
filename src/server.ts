@@ -2521,7 +2521,12 @@ async function runPluginCommand(
     );
   }
   if (parsed.kind === "toggle") {
-    const key = await installedPluginKey(parsed.name, parsed.marketplace);
+    const key = await installedPluginKey({
+      name: parsed.name,
+      scope: parsed.scope,
+      ...(parsed.marketplace ? { marketplace: parsed.marketplace } : {}),
+      ...(parsed.scope === "project" ? { projectRoot: sessionRoot } : {}),
+    });
     const path = await writeEnabledPlugin({
       key,
       enabled: parsed.enabled,

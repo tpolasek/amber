@@ -807,13 +807,38 @@ test("resolves the installed key a toggle names", async () => {
   await addMarketplace({ spec: marketplace, homeDirectory });
   await installPlugin({ name: "superpowers", homeDirectory });
 
-  assert.equal(await installedPluginKey("superpowers", undefined, homeDirectory), "superpowers@fixture");
-  assert.equal(await installedPluginKey("superpowers", "fixture", homeDirectory), "superpowers@fixture");
-  await assert.rejects(
-    installedPluginKey("superpowers", "other", homeDirectory),
-    /superpowers@other' is not installed/,
+  assert.equal(await installedPluginKey({ name: "superpowers", homeDirectory }), "superpowers@fixture");
+  assert.equal(
+    await installedPluginKey({ name: "superpowers", marketplace: "fixture", homeDirectory }),
+    "superpowers@fixture",
   );
-  await assert.rejects(installedPluginKey("missing", undefined, homeDirectory), /is not installed/);
+  await assert.rejects(
+    installedPluginKey({ name: "superpowers", marketplace: "other", homeDirectory }),
+    /superpowers@other' is not installed at user scope/,
+  );
+  await assert.rejects(installedPluginKey({ name: "missing", homeDirectory }), /is not installed/);
+});
+
+test("a toggle resolves only against a record at its own scope", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const projectRoot = await mkdtemp(join(tmpdir(), "amber-project-"));
+  const marketplace = await marketplaceFixture([
+    { name: "local-plugin", description: "d", version: "0.1.0", source: "./plugins/local" },
+  ]);
+  await bundleFixture(join(marketplace, "plugins", "local"));
+  await addMarketplace({ spec: marketplace, homeDirectory });
+  await installPlugin({ name: "local-plugin", scope: "project", projectRoot, homeDirectory });
+
+  // A project-only install cannot be switched off through the user table.
+  await assert.rejects(installedPluginKey({ name: "local-plugin", homeDirectory }), /not installed at user scope/);
+  await assert.rejects(
+    installedPluginKey({ name: "local-plugin", scope: "project", projectRoot: "/elsewhere", homeDirectory }),
+    /not installed at project scope/,
+  );
+  assert.equal(
+    await installedPluginKey({ name: "local-plugin", scope: "project", projectRoot, homeDirectory }),
+    "local-plugin@fixture",
+  );
 });
 
 /* ------------------------------------------------------------------ */
