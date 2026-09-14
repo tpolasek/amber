@@ -201,6 +201,21 @@ test("rejects malformed marketplace manifests", () => {
     }, "/tmp/m.json"),
     /path must be/,
   );
+  // A version names a cache directory, so a traversal in it must never parse.
+  assert.throws(
+    () => parseMarketplaceManifest({
+      name: "ok",
+      plugins: [{ name: "a", description: "d", version: "../../evil", source: "./a" }],
+    }, "/tmp/m.json"),
+    /version must match/,
+  );
+  assert.throws(
+    () => parseMarketplaceManifest({
+      name: "ok",
+      plugins: [{ name: "a", description: "d", version: "/abs", source: "./a" }],
+    }, "/tmp/m.json"),
+    /version must match/,
+  );
 });
 
 /* ------------------------------------------------------------------ */
@@ -553,6 +568,39 @@ test("refuses a directory source that escapes the marketplace, and an unresolvab
   await assert.rejects(installPlugin({ name: "versionless", homeDirectory }), /Could not resolve a version/);
   assert.deepEqual((await loadInstalledPlugins(homeDirectory)).plugins, {});
   await assert.rejects(stat(join(pluginsDirectory(homeDirectory), "cache", "fixture", "versionless")));
+});
+
+test("refuses a bundle-manifest version that escapes the cache directory", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  // The bundle manifest is fetched at install time and never shown in the plan,
+  // so its version is the one place a traversal could hide.
+  const bundle = await gitBundleFixture({ name: "pwn", version: "../../escaped" });
+  const marketplace = await marketplaceFixture([
+    { name: "pwn", description: "Looks harmless", source: { source: "url", url: bundle.path } },
+  ]);
+  await addMarketplace({ spec: marketplace, homeDirectory });
+
+  await assert.rejects(installPlugin({ name: "pwn", homeDirectory }), /version must match/);
+  assert.deepEqual((await loadInstalledPlugins(homeDirectory)).plugins, {});
+  // Nothing was written outside the plugin's own cache root.
+  await assert.rejects(stat(join(pluginsDirectory(homeDirectory), "cache", "escaped")));
+  await assert.rejects(stat(join(pluginsDirectory(homeDirectory), "cache", "fixture", "pwn")));
+});
+
+test("accepts a version carrying build metadata", async () => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), "amber-plugins-"));
+  const bundle = await gitBundleFixture({ name: "meta", version: "1.0.0-beta+meta.7" });
+  const marketplace = await marketplaceFixture([
+    { name: "meta", description: "Semver extras", source: { source: "url", url: bundle.path } },
+  ]);
+  await addMarketplace({ spec: marketplace, homeDirectory });
+
+  const record = await installPlugin({ name: "meta", homeDirectory });
+  assert.equal(record.version, "1.0.0-beta+meta.7");
+  assert.equal(
+    (await stat(join(pluginCachePath("fixture", "meta", "1.0.0-beta+meta.7", homeDirectory), "skills", "brainstorming", "SKILL.md"))).isFile(),
+    true,
+  );
 });
 
 test("refuses a plugin no added marketplace publishes, and an ambiguous bare name", async () => {

@@ -9,6 +9,8 @@ import { promisify } from "node:util";
 const run = promisify(execFile);
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+/** A version also names a cache directory, so it may not carry path separators. */
+const VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
 const GIT_TIMEOUT_MS = 120_000;
 
 /* ------------------------------------------------------------------ */
@@ -210,6 +212,9 @@ function parseMarketplacePlugin(value: unknown, field: string): MarketplacePlugi
   if (!description) throw new Error(`${field}.description must be a non-empty string`);
   if (value.source === undefined) throw new Error(`${field}.source is required`);
   const version = optionalString(value.version);
+  if (version !== undefined && !VERSION_PATTERN.test(version)) {
+    throw new Error(`${field}.version must match [A-Za-z0-9][A-Za-z0-9._+-]*`);
+  }
   const author = personName(value.author);
   const homepage = optionalString(value.homepage);
   const category = optionalString(value.category);
@@ -467,6 +472,9 @@ export async function readPluginManifest(root: string): Promise<{ name?: string;
     if (!isRecord(parsed)) throw new Error(`${path} must contain a JSON object`);
     const name = optionalString(parsed.name);
     const version = optionalString(parsed.version);
+    if (version !== undefined && !VERSION_PATTERN.test(version)) {
+      throw new Error(`${path}: version must match [A-Za-z0-9][A-Za-z0-9._+-]*`);
+    }
     return { ...(name ? { name } : {}), ...(version ? { version } : {}) };
   }
   return undefined;
