@@ -86,6 +86,11 @@ export const SETTINGS_TEMPLATE_SOURCE = `${stringify(SETTINGS_TEMPLATE).trimEnd(
 # thinking_level = "high"
 # compact_tokens = 250000
 # Or use Login with Codex in Amber's Settings modal to add and save this automatically.
+
+# Plugins installed with /plugin are enabled unless they are switched off here.
+# /plugin enable and /plugin disable write this table.
+# [enabled_plugins]
+# "superpowers@claude-plugins-official" = false
 `;
 
 export const COMMIT_SKILL_TEMPLATE_SOURCE = `---

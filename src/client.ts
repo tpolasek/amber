@@ -8,6 +8,7 @@ import {
   gitCommandSuggestions,
   messageFrom,
   parseGitCommand,
+  pluginCommandSuggestions,
   promptFileReferenceAt,
   replacePromptFileReference,
   skillCommandSuggestions,
@@ -1409,7 +1410,7 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
   if (clearComposer) clearPrompt();
   if (!duringResponse) setBusy(true);
   try {
-    const result = await api<{ command: "add-dir" | "cwd" | "context" | "clear" | "compact" | "fork" | "name" | "tasks"; session: Session; hasMore: boolean; directory?: string; cwdChanged?: boolean; previousSessionId?: string; tasks?: BackgroundTask[] }>(
+    const result = await api<{ command: "add-dir" | "cwd" | "context" | "clear" | "compact" | "fork" | "name" | "plugin" | "tasks"; session: Session; hasMore: boolean; directory?: string; cwdChanged?: boolean; previousSessionId?: string; tasks?: BackgroundTask[] }>(
       `/api/sessions/${session.id}/commands`,
       { method: "POST", body: JSON.stringify({ command }) },
     );
@@ -2087,6 +2088,18 @@ function updateCommandMenu(): void {
     renderCommandMenu();
     return;
   }
+  const pluginMatches = pluginCommandSuggestions(elements.prompt.value);
+  if (pluginMatches) {
+    matchingCommands = pluginMatches.map((suggestion) => ({
+      name: suggestion.value,
+      description: suggestion.description,
+      runsDuringResponse: false,
+    }));
+    selectedCommand = 0;
+    if (matchingCommands.length === 0) return hideCommandMenu();
+    renderCommandMenu();
+    return;
+  }
   const value = elements.prompt.value.trim().toLowerCase();
   if (!/^\/[a-z:-]*$/.test(value)) return hideCommandMenu();
   const session = state.session;
@@ -2178,6 +2191,7 @@ async function updateFileCompletions(reference: PromptFileReference): Promise<vo
 }
 
 function renderCommandMenu(): void {
+  elements.commandMenu.classList.add("command-grid");
   elements.commandMenu.replaceChildren();
   matchingCommands.forEach((command, index) => {
     const button = document.createElement("button");
@@ -2196,9 +2210,11 @@ function renderCommandMenu(): void {
     elements.commandMenu.append(button);
   });
   elements.commandMenu.hidden = false;
+  elements.commandMenu.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
 }
 
 function renderDirectoryMenu(): void {
+  elements.commandMenu.classList.remove("command-grid");
   elements.commandMenu.replaceChildren();
   directoryCompletions.forEach((directory, index) => {
     const button = document.createElement("button");
@@ -2241,7 +2257,8 @@ function acceptDirectoryCompletion(directory: DirectoryCompletion): void {
 }
 
 function selectCommand(command: BuiltInCommand, execute: boolean): void {
-  const continuesTyping = command.name === "/add-dir" || command.name === "/cwd" || command.name === "/git";
+  const continuesTyping = command.name === "/add-dir" || command.name === "/cwd"
+    || command.name === "/git" || command.name === "/plugin";
   elements.prompt.value = continuesTyping ? `${command.name} ` : command.name;
   if (continuesTyping) updateCommandMenu();
   else hideCommandMenu();
@@ -2270,6 +2287,7 @@ function sessionPromptHistory(): string[] {
       message.role === "user"
       && message.kind !== "tool-result"
       && message.kind !== "skill"
+      && message.kind !== "skill-catalog"
       && message.kind !== "agent-notification"
     )
     .map((message) => message.content)

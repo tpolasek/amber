@@ -996,7 +996,7 @@ async function runPaginationScenario(mock, runDirectory, basePort) {
     const providerRequests = mock.requests();
 
     const renderedIds = (messages) => messages
-      .filter((message) => !["tool-result", "skill", "agent-notification"].includes(message.kind))
+      .filter((message) => !["tool-result", "skill", "skill-catalog", "agent-notification"].includes(message.kind))
       .map((message) => message.id);
 
     // The snapshot delivers only the newest page: exactly 50 rendered messages

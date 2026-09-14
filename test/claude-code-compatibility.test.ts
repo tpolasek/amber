@@ -179,14 +179,13 @@ test("injects context into array-content user messages such as image turns", () 
         { type: "text", text: "What is this?" },
       ],
     },
-  ], "<system-reminder>\nThe following skills are available\n</system-reminder>");
+  ]);
   const content = injected[0]?.content;
   assert.ok(Array.isArray(content));
-  assert.equal(content.length, 4);
-  assert.match(content[0]?.type === "text" ? content[0].text : "", /The following skills are available/);
-  assert.match(content[1]?.type === "text" ? content[1].text : "", /Current date:/);
-  assert.deepEqual(content[2], { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } });
-  assert.deepEqual(content[3], { type: "text", text: "What is this?", cache_control: { type: "ephemeral" } });
+  assert.equal(content.length, 3);
+  assert.match(content[0]?.type === "text" ? content[0].text : "", /Current date:/);
+  assert.deepEqual(content[1], { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } });
+  assert.deepEqual(content[2], { type: "text", text: "What is this?", cache_control: { type: "ephemeral" } });
 
   const structured = structureClaudeCodeUserMessages([
     {

@@ -147,11 +147,8 @@ function projectInstructionsBlock(instructions: string): string {
   ].join("\n");
 }
 
-export function injectClaudeCodeUserContext(messages: ProviderMessage[], skillReminder?: string): ProviderMessage[] {
+export function injectClaudeCodeUserContext(messages: ProviderMessage[]): ProviderMessage[] {
   let injected = false;
-  const prefix: Array<{ type: "text"; text: string }> = skillReminder
-    ? [{ type: "text", text: skillReminder }]
-    : [];
   return messages.map((message, index) => {
     if (injected || message.role !== "user") return message;
     const isLast = index === messages.length - 1;
@@ -160,7 +157,6 @@ export function injectClaudeCodeUserContext(messages: ProviderMessage[], skillRe
       return {
         ...message,
         content: [
-          ...prefix,
           currentDateReminder(),
           ...markTrailingBlock(message.content, isLast),
         ],
@@ -171,7 +167,6 @@ export function injectClaudeCodeUserContext(messages: ProviderMessage[], skillRe
     return {
       ...message,
       content: [
-        ...prefix,
         currentDateReminder(),
         promptBlock,
       ],
@@ -195,15 +190,12 @@ function currentDateReminder(): ProviderContentBlock {
   };
 }
 
-export function structureClaudeCodeUserMessages(messages: ProviderMessage[], skillReminder?: string): ProviderMessage[] {
+export function structureClaudeCodeUserMessages(messages: ProviderMessage[]): ProviderMessage[] {
   let injected = false;
   return messages.map((message, index) => {
     if (message.role !== "user") return message;
     const isLast = index === messages.length - 1;
-    const reminder: ProviderContentBlock[] = injected ? [] : [
-      ...(skillReminder ? [{ type: "text", text: skillReminder } as const] : []),
-      currentDateReminder(),
-    ];
+    const reminder: ProviderContentBlock[] = injected ? [] : [currentDateReminder()];
     injected = true;
     if (Array.isArray(message.content)) {
       return { ...message, content: [...reminder, ...markTrailingBlock(message.content, isLast)] };

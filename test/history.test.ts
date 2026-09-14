@@ -284,6 +284,58 @@ test("provider history includes a hidden background-agent notification with the 
   }]);
 });
 
+test("provider history merges the skill catalog announcement into the user turn it rode", () => {
+  const now = new Date().toISOString();
+  const messages: Message[] = [
+    { id: "user", role: "user", content: "Use a skill", createdAt: now, status: "complete" },
+    {
+      id: "catalog",
+      role: "user",
+      content: "<system-reminder>\nskills live here\n</system-reminder>",
+      createdAt: now,
+      status: "complete",
+      kind: "skill-catalog",
+    },
+    { id: "assistant", role: "assistant", content: "Done", createdAt: now, status: "complete" },
+  ];
+
+  assert.deepEqual(buildProviderHistory(messages), [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Use a skill" },
+        { type: "text", text: "<system-reminder>\nskills live here\n</system-reminder>" },
+      ],
+    },
+    { role: "assistant", content: "Done" },
+  ]);
+});
+
+test("provider history carries only the newest skill catalog announcement", () => {
+  const now = new Date().toISOString();
+  const messages: Message[] = [
+    { id: "u1", role: "user", content: "First turn", createdAt: now, status: "complete" },
+    { id: "catalog-1", role: "user", content: "stale listing", createdAt: now, status: "complete", kind: "skill-catalog" },
+    { id: "a1", role: "assistant", content: "First answer", createdAt: now, status: "complete" },
+    { id: "u2", role: "user", content: "Second turn", createdAt: now, status: "complete" },
+    { id: "catalog-2", role: "user", content: "current listing", createdAt: now, status: "complete", kind: "skill-catalog" },
+    { id: "a2", role: "assistant", content: "Second answer", createdAt: now, status: "complete" },
+  ];
+
+  assert.deepEqual(buildProviderHistory(messages), [
+    { role: "user", content: "First turn" },
+    { role: "assistant", content: "First answer" },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Second turn" },
+        { type: "text", text: "current listing" },
+      ],
+    },
+    { role: "assistant", content: "Second answer" },
+  ]);
+});
+
 test("provider history emits user images before the text block", () => {
   const now = new Date().toISOString();
   const image = { mediaType: "image/png" as const, data: "aGVsbG8=" };

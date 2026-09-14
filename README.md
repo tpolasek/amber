@@ -122,6 +122,23 @@ A repository can also ship its own **AGENTS.md**; Amber reads the nearest one fr
 
 Both files are optional and are read once when a session starts, so the prompt stays stable for the whole session and survives compaction. An empty or unreadable **AGENTS.md** is reported on the console once and the session continues without it.
 
+## Plugins
+
+Skills and commands can be installed from named marketplaces with the **/plugin** command, using the same manifest format Claude Code uses, so a marketplace written for Claude Code works unchanged.
+
+```
+/plugin marketplace add anthropics/claude-plugins-official
+/plugin list
+/plugin install superpowers          # prints the source, ref, version, and commit; installs nothing
+/plugin install superpowers --yes    # fetches and installs
+```
+
+An installed plugin is enabled by default and contributes its skills namespaced under the plugin name (**superpowers:brainstorming**). Bundles live in **~/.amber/plugins/cache**, enable state in the **[enabled_plugins]** table of **~/.amber/settings.toml** (or a project's **.amber/settings.toml**), and **/plugin update** reports and applies drift against what a marketplace publishes today.
+
+**A plugin's skills run shell commands with your privileges.** Install only from a source you trust. Install and update both show the resolved source and commit and do nothing until you confirm with **--yes**.
+
+See **[docs/plugins.md](docs/plugins.md)** for the full command reference, the trust model, scopes, and how to author and publish a plugin.
+
 ## Dependencies
 
 AMBER intentionally has only four direct runtime npm dependencies:

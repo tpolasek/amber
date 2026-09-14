@@ -7,6 +7,35 @@ import { randomUUID } from "node:crypto";
 import { browserUrl, openBrowser } from "./browser-launch.js";
 import { listenErrorMessage, parseCliCommand, usageText } from "./cli.js";
 import { builtInCommand } from "./built-in-commands.js";
+import {
+  addMarketplace,
+  checkPluginUpdates,
+  installedPluginKey,
+  installPlugin,
+  listMarketplacePlugins,
+  loadInstalledPlugins,
+  loadMarketplaceRegistry,
+  parsePluginCommand,
+  planPluginInstall,
+  planPluginUpdate,
+  pluginKey,
+  projectPluginKeys,
+  removeMarketplace,
+  renderInstalledPlugins,
+  renderMarketplaceList,
+  renderMarketplaceUpdate,
+  renderPluginInstalled,
+  renderPluginInstallPlan,
+  renderPluginList,
+  renderPluginOverview,
+  renderPluginUpdated,
+  renderPluginUpdatePlan,
+  renderPluginUpdateReport,
+  uninstallPlugin,
+  updateMarketplaces,
+  updatePlugin,
+  userPluginStates,
+} from "./plugins.js";
 import { SessionStore } from "./store.js";
 import { ProviderCatalog } from "./provider-catalog.js";
 import {
@@ -14,8 +43,10 @@ import {
   loadSettingsSource,
   parseSettingsSource,
   saveSettingsSource,
+  sessionEnabledPlugins,
   settingsForEditor,
   settingsSourceFromEditor,
+  writeEnabledPlugin,
   type AmberSettings,
 } from "./settings.js";
 import { SETTINGS_TEMPLATE_SOURCE } from "./settings-template.js";
@@ -289,6 +320,40 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       ...(configurationError ? { error: configurationError } : {}),
       config: await configPayload(),
     });
+  }
+  if (method === "GET" && url.pathname === "/api/plugins") {
+    if (!authorizeLocalSettingsAccess(request, response)) return;
+    try {
+      return json(response, 200, await pluginSettingsPayload());
+    } catch (error) {
+      return json(response, 500, { error: errorMessage(error) });
+    }
+  }
+  if (method === "PUT" && url.pathname === "/api/plugins/enabled") {
+    if (!authorizeSettingsMutation(request, response)) return;
+    const body = await readJson(request);
+    if (typeof body.key !== "string" || !body.key.trim()) {
+      return json(response, 400, { error: "A plugin key is required" });
+    }
+    if (typeof body.enabled !== "boolean") {
+      return json(response, 400, { error: "Enabled must be true or false" });
+    }
+    const key = body.key.trim();
+    try {
+      const installed = userPluginStates(await loadInstalledPlugins());
+      if (!installed.some((plugin) => plugin.key === key)) {
+        return json(response, 404, { error: `Plugin '${key}' is not installed at user scope` });
+      }
+      // The toggle edits the [enabled_plugins] table in place rather than
+      // re-serialising settings.toml, so comments and key order survive.
+      const path = await writeEnabledPlugin({ key, enabled: body.enabled });
+      // Skills are rediscovered per message but settings are not reloaded, so
+      // the in-memory table moves with the file, as `/plugin enable` does.
+      if (settings) settings.enabled_plugins = { ...settings.enabled_plugins, [key]: body.enabled };
+      return json(response, 200, { ...await pluginSettingsPayload(), path });
+    } catch (error) {
+      return json(response, 500, { error: errorMessage(error) });
+    }
   }
   if (method === "GET" && url.pathname === "/api/auth") {
     return json(response, 200, {
@@ -809,6 +874,18 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   if ((!content && images.length === 0) || content.length > 32_000) {
     return json(response, 400, { error: "Message must contain text or images; text is limited to 32,000 characters" });
   }
+  // A leading slash-word that is neither a built-in command nor a skill would
+  // otherwise travel to the model as an ordinary prompt; refuse it instead.
+  // Images keep a slash prompt on the model path, matching the client's rule.
+  const slashToken = content.split(/\s+/)[0]?.toLowerCase() ?? "";
+  if (images.length === 0 && /^\/[a-z][a-z0-9:-]*$/.test(slashToken) && !builtInCommand(slashToken)) {
+    const skills = await sessionSkills(session);
+    if (!skills.some((skill) => skill.name === slashToken.slice(1))) {
+      return json(response, 400, {
+        error: `The ${slashToken} command doesn't exist. Type / to see the commands and skills available.`,
+      });
+    }
+  }
   // The run is decoupled from this connection: a refresh or closed window
   // leaves it streaming server-side, and clients re-attach through
   // /api/sessions/:id/events. Only an explicit abort (or shutdown) stops it.
@@ -868,6 +945,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     let allowedDirectories = sessionDirectories(session);
     const currentDirectory = sessionWorkingDirectory(session);
     await captureSessionInstructions(session, currentDirectory);
+    await announceSkillCatalog(session, assistantMessage, currentDirectory);
     const toolLoopTracker = new ToolLoopTracker();
     // Skill model/effort overrides apply only to the model calls of this user turn.
     let turnModel: string | undefined;
@@ -899,10 +977,9 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       const baseHistory = buildProviderHistory(session.messages, assistantMessage.id, session.compaction, session.invokedSkills);
       const historyLimitError = providerImageLimitError(baseHistory);
       if (historyLimitError) throw new Error(historyLimitError);
-      const reminder = renderSkillReminder(invocableSkills(skills, session.skillTouchedPaths ?? [], currentDirectory), session.contextTokens);
       const history = session.agentType
-        ? structureClaudeCodeUserMessages(baseHistory, reminder)
-        : injectClaudeCodeUserContext(baseHistory, reminder);
+        ? structureClaudeCodeUserMessages(baseHistory)
+        : injectClaudeCodeUserContext(baseHistory);
       const toolDrafts = new Map<number, { call: ToolCall; inputJson: string }>();
       let usage: Partial<TokenUsage> = {};
       for await (const event of activeProvider.stream(history, controller.signal, {
@@ -1669,8 +1746,10 @@ function sessionDirectories(session: Session): string[] {
 
 /** Skills visible to a session, rediscovered so additions take effect immediately. */
 async function sessionSkills(session: Session): Promise<SkillDefinition[]> {
+  const cwd = sessionWorkingDirectory(session);
   const context: SkillDiscoveryContext = {
-    cwd: sessionWorkingDirectory(session),
+    cwd,
+    enabledPlugins: await sessionEnabledPlugins(cwd, settings?.enabled_plugins),
     homeDirectory: homedir(),
     // Keep skills from every directory the session can access, including the
     // server's original workspace after the user changes the session CWD.
@@ -1679,6 +1758,47 @@ async function sessionSkills(session: Session): Promise<SkillDefinition[]> {
     touchedPaths: session.skillTouchedPaths ?? [],
   };
   return discoverSkills(context);
+}
+
+/** Supersedes a catalog announcement when every skill has gone away. */
+const EMPTY_SKILL_CATALOG_REMINDER = "<system-reminder>\nNo skills are currently available for use with the Skill tool.\n</system-reminder>\n";
+
+/** The catalog announcement still inside the active history, superseded by none. */
+function announcedSkillCatalog(session: Session): string | undefined {
+  const boundary = session.compaction
+    ? session.messages.findIndex((message) => message.id === session.compaction?.throughMessageId)
+    : -1;
+  for (let index = session.messages.length - 1; index > boundary; index -= 1) {
+    const message = session.messages[index];
+    if (message?.kind === "skill-catalog") return message.content;
+  }
+  return undefined;
+}
+
+/**
+ * Appends the skill catalog to the conversation whenever it changes. The
+ * announcement is a persisted message rather than a per-request injection, so
+ * the start of history never rewrites — a change lands at the turn that caused
+ * it, and building history drops listings a newer one has superseded.
+ */
+async function announceSkillCatalog(session: Session, assistantMessage: Message, cwd: string): Promise<void> {
+  const reminder = renderSkillReminder(invocableSkills(await sessionSkills(session), session.skillTouchedPaths ?? [], cwd));
+  const previous = announcedSkillCatalog(session);
+  const content = reminder ?? (previous !== undefined ? EMPTY_SKILL_CATALOG_REMINDER : undefined);
+  if (content === undefined || content === previous) return;
+  const message: Message = {
+    id: randomUUID(),
+    role: "user",
+    kind: "skill-catalog",
+    content,
+    createdAt: new Date().toISOString(),
+    status: "complete",
+  };
+  // Before the streaming assistant placeholder, so the announcement rides the
+  // user turn it belongs to rather than trailing the response.
+  const assistantIndex = session.messages.findIndex((candidate) => candidate.id === assistantMessage.id);
+  session.messages.splice(assistantIndex, 0, message);
+  await store.insertMessages(session, assistantIndex < 0 ? null : assistantMessage.id, [message]);
 }
 
 /**
@@ -2278,6 +2398,19 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     }
   }
 
+  if (command === "/plugin") {
+    const parsed = parsePluginCommand(argument);
+    if (parsed.kind === "error") return json(response, 400, { error: parsed.message });
+    let body: string;
+    try {
+      body = await runPluginCommand(parsed, session.cwd ?? workspaceRoot);
+    } catch (error) {
+      return json(response, 400, { error: errorMessage(error) });
+    }
+    await appendCommandTranscript(session, rawCommand, body);
+    return json(response, 200, { command: "plugin", ...pagedSessionPayload(session) });
+  }
+
   if (argument) return json(response, 400, { error: `${command} does not accept arguments` });
 
   if (command === "/tasks" || command === "/bashes") {
@@ -2366,6 +2499,109 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     return json(response, 200, { command: "context", ...pagedSessionPayload(session) });
   }
   return json(response, 400, { error: `Unknown command: ${command || "(empty)"}` });
+}
+
+/** `sessionRoot` anchors `--project`: the session's own directory, not the server's. */
+async function runPluginCommand(
+  parsed: Exclude<ReturnType<typeof parsePluginCommand>, { kind: "error" }>,
+  sessionRoot: string,
+): Promise<string> {
+  if (parsed.kind === "overview") return renderPluginOverview(await loadMarketplaceRegistry());
+  if (parsed.kind === "marketplace-list") return renderMarketplaceList(await loadMarketplaceRegistry());
+  if (parsed.kind === "marketplace-add") {
+    const added = await addMarketplace({ spec: parsed.spec, ...(parsed.alias ? { alias: parsed.alias } : {}) });
+    return [
+      `Added marketplace **${added.name}** with ${added.manifest.plugins.length} published plugin(s).`,
+      "",
+      renderPluginList(await listMarketplacePlugins({ marketplace: added.name })),
+    ].join("\n");
+  }
+  if (parsed.kind === "marketplace-remove") {
+    await removeMarketplace(parsed.name);
+    return `Removed marketplace **${parsed.name}**. Installed plugins from it are untouched.`;
+  }
+  if (parsed.kind === "marketplace-update") {
+    return renderMarketplaceUpdate(await updateMarketplaces(parsed.name));
+  }
+  if (parsed.kind === "update-check") {
+    return renderPluginUpdateReport(await checkPluginUpdates());
+  }
+  if (parsed.kind === "update") {
+    const target = {
+      name: parsed.name,
+      scope: parsed.scope,
+      ...(parsed.marketplace ? { marketplace: parsed.marketplace } : {}),
+      ...(parsed.scope === "project" ? { projectRoot: sessionRoot } : {}),
+    };
+    // An update runs whatever the new commit brings, so it is confirmed like an install.
+    if (!parsed.confirmed) return renderPluginUpdatePlan(await planPluginUpdate(target));
+    return renderPluginUpdated(await updatePlugin(target));
+  }
+  if (parsed.kind === "installed") {
+    return renderInstalledPlugins(
+      await loadInstalledPlugins(),
+      await sessionEnabledPlugins(sessionRoot, settings?.enabled_plugins),
+    );
+  }
+  if (parsed.kind === "toggle") {
+    const key = await installedPluginKey({
+      name: parsed.name,
+      scope: parsed.scope,
+      ...(parsed.marketplace ? { marketplace: parsed.marketplace } : {}),
+      ...(parsed.scope === "project" ? { projectRoot: sessionRoot } : {}),
+    });
+    const path = await writeEnabledPlugin({
+      key,
+      enabled: parsed.enabled,
+      scope: parsed.scope,
+      ...(parsed.scope === "project" ? { projectRoot: sessionRoot } : {}),
+    });
+    // The write lands on disk; the loaded settings carry the same state so the
+    // toggle applies without waiting for a settings reload.
+    if (parsed.scope === "user" && settings) {
+      settings.enabled_plugins = { ...settings.enabled_plugins, [key]: parsed.enabled };
+    }
+    return [
+      `${parsed.enabled ? "Enabled" : "Disabled"} **${key}** at ${parsed.scope} scope in \`${path}\`.`,
+      "",
+      "Skills are rediscovered on every message, so this takes effect immediately.",
+    ].join("\n");
+  }
+  if (parsed.kind === "install") {
+    const target = {
+      name: parsed.name,
+      scope: parsed.scope,
+      ...(parsed.marketplace ? { marketplace: parsed.marketplace } : {}),
+      ...(parsed.scope === "project" ? { projectRoot: sessionRoot } : {}),
+    };
+    // Installing a plugin runs third-party code, so the plan is shown and
+    // confirmed before anything is fetched.
+    if (!parsed.confirmed) return renderPluginInstallPlan(await planPluginInstall(target));
+    return renderPluginInstalled(await installPlugin(target));
+  }
+  if (parsed.kind === "uninstall") {
+    const removed = await uninstallPlugin({
+      name: parsed.name,
+      scope: parsed.scope,
+      ...(parsed.marketplace ? { marketplace: parsed.marketplace } : {}),
+      ...(parsed.scope === "project" ? { projectRoot: sessionRoot } : {}),
+    });
+    return `Uninstalled **${pluginKey(removed.name, removed.marketplace)}** \`${removed.version}\` from ${removed.scope} scope.`;
+  }
+  return renderPluginList(await listMarketplacePlugins(parsed.marketplace ? { marketplace: parsed.marketplace } : {}));
+}
+
+/** Records a command and its rendered output as a pair of transcript messages. */
+async function appendCommandTranscript(session: Session, command: string, body: string): Promise<void> {
+  const now = new Date().toISOString();
+  const userMessage: Message = {
+    id: randomUUID(), role: "user", content: command, createdAt: now, status: "complete", kind: "command",
+  };
+  const assistantMessage: Message = {
+    id: randomUUID(), role: "assistant", content: body, createdAt: now, status: "complete", kind: "command",
+  };
+  session.messages.push(userMessage, assistantMessage);
+  await store.appendMessages(session, [userMessage, assistantMessage]);
 }
 
 async function resolveAddedDirectory(path: string): Promise<string> {
@@ -2513,6 +2749,20 @@ function configurationErrorMessage(error: unknown): string {
   const detail = errorMessage(error);
   const prefix = `${settingsPath}: `;
   return detail.startsWith(prefix) ? detail.slice(prefix.length) : detail;
+}
+
+/** The settings modal's view of plugins: user-scope installs and their enable state. */
+async function pluginSettingsPayload(): Promise<{
+  plugins: ReturnType<typeof userPluginStates>;
+  projectScoped: string[];
+  enabled_plugins: Record<string, boolean>;
+}> {
+  const registry = await loadInstalledPlugins();
+  return {
+    plugins: userPluginStates(registry, settings?.enabled_plugins),
+    projectScoped: projectPluginKeys(registry),
+    enabled_plugins: { ...settings?.enabled_plugins },
+  };
 }
 
 function authorizeLocalSettingsAccess(request: IncomingMessage, response: ServerResponse): boolean {

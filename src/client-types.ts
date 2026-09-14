@@ -7,7 +7,7 @@ export interface ToolStatusDisplay { text: string; appendElapsed?: boolean }
 export interface ToolReadRange { startLine: number; endLine: number; totalLines: number }
 export interface MessageImage { mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; data: string }
 export interface ToolCall { id: string; name: string; input: Record<string, unknown>; status: ToolStatus; output: string; startedAt?: string; completedAt?: string; durationMs?: number; exitCode?: number | null; workingDirectory?: string; timeoutMs?: number; filePath?: string; readRange?: ToolReadRange; statusDisplay?: ToolStatusDisplay; agentSessionId?: string; agentType?: string; agentModel?: string; agentThinkingLevel?: ThinkingLevel; agentNotificationDeliveredAt?: string; skillModel?: string; skillEffort?: string; images?: MessageImage[] }
-export interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; thinkingProvider?: "anthropic" | "openai"; streamingThinking?: boolean; resyncedThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result" | "skill" | "agent-notification"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean; skillName?: string; images?: MessageImage[] }
+export interface Message { id: string; role: "user" | "assistant"; content: string; thinking?: string; thinkingSignature?: string; thinkingProvider?: "anthropic" | "openai"; streamingThinking?: boolean; resyncedThinking?: boolean; createdAt: string; status: "streaming" | "complete" | "error"; kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result" | "skill" | "skill-catalog" | "agent-notification"; sourceSessionId?: string; forkedSessionId?: string; usage?: TokenUsage; toolCalls?: ToolCall[]; toolUseId?: string; toolError?: boolean; skillName?: string; images?: MessageImage[] }
 export interface SessionCompaction { summary: string; throughMessageId: string; createdAt: string; coveredMessageCount: number }
 export type PlanningTaskStatus = "pending" | "in_progress" | "completed";
 export const PLANNING_TASK_STATUS_LABELS: Record<PlanningTaskStatus, string> = {
@@ -38,9 +38,20 @@ export interface EditableSettings {
   default_provider?: string;
   default_agent_provider?: string;
   default_agent_model?: string;
+  // Round-tripped, never edited through the form: plugins are toggled one key
+  // at a time against /api/plugins so the table's comments and order survive.
+  enabled_plugins?: Record<string, boolean>;
   providers: Record<string, EditableProviderSettings>;
   agents: EditableAgentSettings[];
 }
+export interface InstalledPluginState { key: string; name: string; marketplace: string; version: string; enabled: boolean }
+export interface PluginSettings {
+  plugins: InstalledPluginState[];
+  /** Keys with a project-scope record, which only `/plugin --project` governs. */
+  projectScoped: string[];
+  enabled_plugins: Record<string, boolean>;
+}
+export interface SavedPluginSettings extends PluginSettings { path: string }
 export interface SettingsDocument { settings: EditableSettings; path: string; error?: string }
 export interface SavedSettings extends SettingsDocument { config: Config }
 export interface AuthProviderStatus { id: "openai-codex"; name: string; authName: string; configured: boolean; providerConfigured: boolean }

@@ -8,6 +8,7 @@ Amber is a minimal, Claude Code–compatible coding agent that runs as a web CLI
 - `npm test` — builds, then runs `node --test dist/test/*.test.js`
 - `npm run typecheck` — `tsc --noEmit`
 - `npm run test:e2e` — interruption end-to-end test (spawns real servers)
+- `npm run test:e2e:plugins` - plugin end-to-end test on a clean profile (spawns a real server, clones from github.com)
 - `npm start` / `./run.sh` — start the server on port 3000
 
 Run the full test suite before finishing any change.

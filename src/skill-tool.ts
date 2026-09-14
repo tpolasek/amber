@@ -6,6 +6,7 @@ import { parse as parseShellArguments } from "./shell-quote.js";
 import ignoreFactory from "./ignore.js";
 import { parse as parseYaml } from "yaml";
 import { BashExecutor, DEFAULT_BASH_TIMEOUT_MS } from "./bash-tool.js";
+import { enabledPluginBundles } from "./plugins.js";
 import type { ThinkingLevel, ToolDefinition } from "./types.js";
 
 export const SKILL_TOOL_NAME = "Skill";
@@ -68,11 +69,15 @@ export interface SkillDiscoveryContext {
   extraProjectRoots?: string[];
   /** Project paths touched this session, used to activate `paths:`-gated skills. */
   touchedPaths?: string[];
+  /** `<plugin>@<marketplace>` to enable state; a missing key means enabled. */
+  enabledPlugins?: Record<string, boolean>;
 }
 
 interface SkillDirectoryUnit {
   directory: string;
   kind: "skills" | "commands";
+  /** Set for a plugin bundle; every name the unit yields is prefixed `<plugin>:`. */
+  plugin?: string;
 }
 
 const SKILL_BUDGET_CONTEXT_PERCENT = 0.01;
@@ -148,20 +153,36 @@ function skillDirectoryUnits(context: SkillDiscoveryContext): SkillDirectoryUnit
   ];
 }
 
+/** Enabled plugin bundles, appended last so a plugin can never displace a local skill. */
+async function pluginDirectoryUnits(context: SkillDiscoveryContext): Promise<SkillDirectoryUnit[]> {
+  const bundles = await enabledPluginBundles({
+    cwd: context.cwd,
+    homeDirectory: context.homeDirectory,
+    ...(context.enabledPlugins ? { enabledPlugins: context.enabledPlugins } : {}),
+  });
+  return bundles.flatMap((bundle): SkillDirectoryUnit[] => [
+    { directory: join(bundle.bundle, "skills"), kind: "skills", plugin: bundle.name },
+    { directory: join(bundle.bundle, "commands"), kind: "commands", plugin: bundle.name },
+  ]);
+}
+
 /**
  * Discovers every skill visible to a session, in precedence order: Amber project
  * paths (deepest CWD ancestor first, then nested roots, then /add-dir roots),
- * the Amber user directory, and finally the Claude-compatible equivalents.
+ * the Amber user directory, the Claude-compatible equivalents, and finally the
+ * enabled plugin bundles, whose names are `<plugin>:`-namespaced.
  */
 export async function discoverSkills(context: SkillDiscoveryContext): Promise<SkillDefinition[]> {
   const skills: SkillDefinition[] = [];
   const seenRealPaths = new Set<string>();
   const seenNames = new Set<string>();
-  for (const unit of skillDirectoryUnits(context)) {
+  const units = [...skillDirectoryUnits(context), ...await pluginDirectoryUnits(context)];
+  for (const unit of units) {
     const found = unit.kind === "skills"
       ? await loadSkillsDirectory(unit.directory)
       : await loadCommandsDirectory(unit.directory);
-    for (const skill of found) {
+    for (const loaded of found) {
+      const skill = unit.plugin ? { ...loaded, name: `${unit.plugin}:${loaded.name}` } : loaded;
       if (seenRealPaths.has(skill.realPath) || seenNames.has(skill.name)) continue;
       seenRealPaths.add(skill.realPath);
       seenNames.add(skill.name);
