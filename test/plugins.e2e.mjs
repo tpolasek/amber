@@ -313,6 +313,15 @@ async function main() {
     check("the profile has no plugins directory yet",
       !(await pathExists(join(home, ".amber", "plugins"))));
 
+    console.log("\n== an unknown slash command is refused before it reaches the model");
+    const bogus = await postJson(
+      amberUrl(amber.port, `/api/sessions/${sessionId}/messages`),
+      { content: "/baconfish now" },
+    );
+    check("an unknown slash command is refused with its name",
+      bogus.status === 400 && (bogus.body.error ?? "").includes("The /baconfish command doesn't exist"),
+      JSON.stringify(bogus));
+
     console.log(`\n== add ${MARKETPLACE_SPEC} from GitHub`);
     const added = await pluginCommand(amber, sessionId, `marketplace add ${MARKETPLACE_SPEC}`);
     check(`the marketplace is added as ${MARKETPLACE}`,

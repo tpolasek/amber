@@ -869,6 +869,18 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   if ((!content && images.length === 0) || content.length > 32_000) {
     return json(response, 400, { error: "Message must contain text or images; text is limited to 32,000 characters" });
   }
+  // A leading slash-word that is neither a built-in command nor a skill would
+  // otherwise travel to the model as an ordinary prompt; refuse it instead.
+  // Images keep a slash prompt on the model path, matching the client's rule.
+  const slashToken = content.split(/\s+/)[0]?.toLowerCase() ?? "";
+  if (images.length === 0 && /^\/[a-z][a-z0-9:-]*$/.test(slashToken) && !builtInCommand(slashToken)) {
+    const skills = await sessionSkills(session);
+    if (!skills.some((skill) => skill.name === slashToken.slice(1))) {
+      return json(response, 400, {
+        error: `The ${slashToken} command doesn't exist. Type / to see the commands and skills available.`,
+      });
+    }
+  }
   // The run is decoupled from this connection: a refresh or closed window
   // leaves it streaming server-side, and clients re-attach through
   // /api/sessions/:id/events. Only an explicit abort (or shutdown) stops it.
