@@ -2271,6 +2271,7 @@ function sessionPromptHistory(): string[] {
       message.role === "user"
       && message.kind !== "tool-result"
       && message.kind !== "skill"
+      && message.kind !== "skill-catalog"
       && message.kind !== "agent-notification"
     )
     .map((message) => message.content)

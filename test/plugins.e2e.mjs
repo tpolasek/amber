@@ -103,10 +103,18 @@ function createMockProvider() {
   };
 }
 
+// A user turn may be a bare string or blocks (a skill-catalog announcement
+// merges into its turn), so read either shape.
+function messageText(message) {
+  return typeof message.content === "string"
+    ? message.content
+    : (message.content ?? []).map((block) => block.text ?? "").join("\n");
+}
+
 function planResponse(payload) {
   if (!payload.tools) return { text: "<summary>compacted context</summary>" };
   const turnStart = payload.messages.findLastIndex((message) =>
-    message.role === "user" && typeof message.content === "string" && message.content.includes(TURN_MARKER));
+    message.role === "user" && messageText(message).includes(TURN_MARKER));
   const turn = payload.messages.slice(turnStart + 1);
   const skillUses = turn
     .filter((message) => message.role === "assistant" && Array.isArray(message.content))

@@ -928,6 +928,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     let allowedDirectories = sessionDirectories(session);
     const currentDirectory = sessionWorkingDirectory(session);
     await captureSessionInstructions(session, currentDirectory);
+    await announceSkillCatalog(session, assistantMessage, currentDirectory);
     const toolLoopTracker = new ToolLoopTracker();
     // Skill model/effort overrides apply only to the model calls of this user turn.
     let turnModel: string | undefined;
@@ -959,10 +960,9 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       const baseHistory = buildProviderHistory(session.messages, assistantMessage.id, session.compaction, session.invokedSkills);
       const historyLimitError = providerImageLimitError(baseHistory);
       if (historyLimitError) throw new Error(historyLimitError);
-      const reminder = renderSkillReminder(invocableSkills(skills, session.skillTouchedPaths ?? [], currentDirectory), session.contextTokens);
       const history = session.agentType
-        ? structureClaudeCodeUserMessages(baseHistory, reminder)
-        : injectClaudeCodeUserContext(baseHistory, reminder);
+        ? structureClaudeCodeUserMessages(baseHistory)
+        : injectClaudeCodeUserContext(baseHistory);
       const toolDrafts = new Map<number, { call: ToolCall; inputJson: string }>();
       let usage: Partial<TokenUsage> = {};
       for await (const event of activeProvider.stream(history, controller.signal, {
@@ -1738,6 +1738,47 @@ async function sessionSkills(session: Session): Promise<SkillDefinition[]> {
     touchedPaths: session.skillTouchedPaths ?? [],
   };
   return discoverSkills(context);
+}
+
+/** Supersedes a catalog announcement when every skill has gone away. */
+const EMPTY_SKILL_CATALOG_REMINDER = "<system-reminder>\nNo skills are currently available for use with the Skill tool.\n</system-reminder>\n";
+
+/** The catalog announcement still inside the active history, superseded by none. */
+function announcedSkillCatalog(session: Session): string | undefined {
+  const boundary = session.compaction
+    ? session.messages.findIndex((message) => message.id === session.compaction?.throughMessageId)
+    : -1;
+  for (let index = session.messages.length - 1; index > boundary; index -= 1) {
+    const message = session.messages[index];
+    if (message?.kind === "skill-catalog") return message.content;
+  }
+  return undefined;
+}
+
+/**
+ * Appends the skill catalog to the conversation whenever it changes. The
+ * announcement is a persisted message rather than a per-request injection, so
+ * the start of history never rewrites — a change lands at the turn that caused
+ * it, and building history drops listings a newer one has superseded.
+ */
+async function announceSkillCatalog(session: Session, assistantMessage: Message, cwd: string): Promise<void> {
+  const reminder = renderSkillReminder(invocableSkills(await sessionSkills(session), session.skillTouchedPaths ?? [], cwd));
+  const previous = announcedSkillCatalog(session);
+  const content = reminder ?? (previous !== undefined ? EMPTY_SKILL_CATALOG_REMINDER : undefined);
+  if (content === undefined || content === previous) return;
+  const message: Message = {
+    id: randomUUID(),
+    role: "user",
+    kind: "skill-catalog",
+    content,
+    createdAt: new Date().toISOString(),
+    status: "complete",
+  };
+  // Before the streaming assistant placeholder, so the announcement rides the
+  // user turn it belongs to rather than trailing the response.
+  const assistantIndex = session.messages.findIndex((candidate) => candidate.id === assistantMessage.id);
+  session.messages.splice(assistantIndex, 0, message);
+  await store.insertMessages(session, assistantIndex < 0 ? null : assistantMessage.id, [message]);
 }
 
 /**

@@ -10,9 +10,10 @@ export function resetSessionWindow(hasMore: boolean): void {
   sessionWindow.loading = false;
 }
 
-// tool-result, skill, and agent-notification attach to the message before them.
+// tool-result, skill, skill-catalog, and agent-notification attach to the message before them.
 export function isRenderedMessage(message: Message): boolean {
-  return message.kind !== "tool-result" && message.kind !== "skill" && message.kind !== "agent-notification";
+  return message.kind !== "tool-result" && message.kind !== "skill"
+    && message.kind !== "skill-catalog" && message.kind !== "agent-notification";
 }
 
 export interface MergedSessionPage {

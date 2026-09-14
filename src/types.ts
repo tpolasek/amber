@@ -70,7 +70,7 @@ export interface Message {
   thinkingProvider?: ProviderProtocol;
   createdAt: string;
   status: MessageStatus;
-  kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result" | "skill" | "agent-notification";
+  kind?: "chat" | "command" | "fork-banner" | "agent-banner" | "plan-banner" | "compact-banner" | "tool-result" | "skill" | "skill-catalog" | "agent-notification";
   sourceSessionId?: string;
   forkedSessionId?: string;
   usage?: TokenUsage;

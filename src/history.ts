@@ -14,6 +14,7 @@ export function isProviderMessage(message: Message): boolean {
   return isModelMessage(message)
     || message.kind === "tool-result"
     || message.kind === "skill"
+    || message.kind === "skill-catalog"
     || message.kind === "agent-notification";
 }
 
@@ -33,17 +34,28 @@ export function buildProviderHistory(
   const activeMessages = boundaryIndex >= 0 ? messages.slice(boundaryIndex + 1) : messages;
   const visibleMessages = activeMessages
     .filter((candidate) => candidate.id !== excludedMessageId && candidate.status === "complete" && isProviderMessage(candidate));
+  // Only the newest skill-catalog announcement travels in a request: it lists
+  // the skills available now, so a superseded listing would only mislead.
+  let lastCatalogIndex = -1;
+  for (let index = visibleMessages.length - 1; index >= 0; index -= 1) {
+    if (visibleMessages[index]?.kind === "skill-catalog") {
+      lastCatalogIndex = index;
+      break;
+    }
+  }
+  const conversation = visibleMessages.filter((message, index) =>
+    message.kind !== "skill-catalog" || index === lastCatalogIndex);
   // A tool call without a stored result means the process died mid-execution.
   // Providers reject an unanswered tool_use — failing every later request in
   // the session — so synthesize an interruption result for it.
   const answeredToolCalls = new Set(
-    visibleMessages.flatMap((message) => (message.kind === "tool-result" && message.toolUseId ? [message.toolUseId] : [])),
+    conversation.flatMap((message) => (message.kind === "tool-result" && message.toolUseId ? [message.toolUseId] : [])),
   );
   const history: ProviderMessage[] = [];
   // Synthesized answers, held until the next user turn where providers expect
   // a tool answer to land.
   const interruptedResults: ProviderContentBlock[] = [];
-  for (const message of visibleMessages) {
+  for (const message of conversation) {
     const providerMessage: ProviderMessage = {
       role: message.role,
       content: message.kind === "tool-result" && message.toolUseId
@@ -87,11 +99,14 @@ export function buildProviderHistory(
     };
     const previous = history.at(-1);
     if (
-      (message.kind === "tool-result" || message.kind === "skill")
+      (message.kind === "tool-result" || message.kind === "skill" || message.kind === "skill-catalog")
       && previous?.role === "user" && Array.isArray(previous.content) && Array.isArray(providerMessage.content)
     ) {
       previous.content.push(...providerMessage.content);
-    } else if ((message.kind === "skill" || message.kind === "agent-notification") && previous?.role === "user") {
+    } else if (
+      (message.kind === "skill" || message.kind === "skill-catalog" || message.kind === "agent-notification")
+      && previous?.role === "user"
+    ) {
       history.pop();
       history.push({
         role: "user",
