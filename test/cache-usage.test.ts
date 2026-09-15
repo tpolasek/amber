@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { aggregateCacheUsage, cacheHitRatio, formatCacheHitPercentage, markCacheUsageReset } from "../src/cache-usage.js";
+import {
+  aggregateCacheUsage,
+  aggregateSessionTokenUsage,
+  cacheHitRatio,
+  formatCacheHitPercentage,
+  markCacheUsageReset,
+} from "../src/cache-usage.js";
 import type { Message, Session } from "../src/types.js";
 
 const now = new Date().toISOString();
@@ -23,6 +29,31 @@ test("aggregates cached tokens over total request input", () => {
   ]);
   assert.deepEqual(usage, { input: 310, cached: 280, requests: 2 });
   assert.equal(cacheHitRatio(usage!), 280 / 310);
+});
+
+test("aggregates lifetime session input, output, cache reads, and cache misses", () => {
+  const unsupported = response("unsupported", 20);
+  unsupported.usage!.output = 3;
+  unsupported.status = "error";
+  assert.deepEqual(aggregateSessionTokenUsage([
+    response("first", 105, 100),
+    response("second", 205, 180),
+    unsupported,
+  ]), {
+    input: 330,
+    output: 5,
+    cacheRead: 280,
+    cacheMiss: 50,
+  });
+});
+
+test("session cache usage keeps hit plus miss equal to input", () => {
+  assert.deepEqual(aggregateSessionTokenUsage([response("invalid-cache-count", 10, 12)]), {
+    input: 10,
+    output: 1,
+    cacheRead: 10,
+    cacheMiss: 0,
+  });
 });
 
 test("formats a request with new input below a 100% cache hit rate", () => {

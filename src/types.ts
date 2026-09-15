@@ -32,6 +32,13 @@ export interface CacheUsage {
   requests: number;
 }
 
+export interface SessionTokenUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheMiss: number;
+}
+
 export type ToolStatus = "queued" | "running" | "complete" | "error" | "timed_out";
 
 export interface ToolStatusDisplay {

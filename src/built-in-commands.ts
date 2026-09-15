@@ -7,7 +7,7 @@ export interface BuiltInCommand {
 export const BUILT_IN_COMMANDS: BuiltInCommand[] = [
   { name: "/add-dir", description: "Add a working directory for this session", runsDuringResponse: true },
   { name: "/cwd", description: "Show or change the current working directory", runsDuringResponse: false },
-  { name: "/context", description: "Show token usage for the current model context", runsDuringResponse: true },
+  { name: "/usage", description: "Show context and total session token usage", runsDuringResponse: true },
   { name: "/clear", description: "Erase this session's conversation and model context", runsDuringResponse: false },
   { name: "/compact", description: "Summarize model context while keeping the full transcript", runsDuringResponse: false },
   { name: "/fork", description: "Fork this session with its complete history", runsDuringResponse: false },

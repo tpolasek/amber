@@ -8,7 +8,7 @@ test("provider history excludes commands, fork banners, streaming messages, and 
   const messages: Message[] = [
     { ...base, id: "user", role: "user", content: "What is 9 + 9?" },
     { ...base, id: "assistant", role: "assistant", content: "18" },
-    { ...base, id: "command", role: "user", content: "/context", kind: "command" },
+    { ...base, id: "command", role: "user", content: "/usage", kind: "command" },
     { ...base, id: "banner", role: "assistant", content: "Forked from session: source", kind: "fork-banner", sourceSessionId: "source" },
     { ...base, id: "source-banner", role: "assistant", content: "Forked to session: fork", kind: "fork-banner", forkedSessionId: "fork" },
     { ...base, id: "compact-banner", role: "assistant", content: "Context compacted here", kind: "compact-banner" },

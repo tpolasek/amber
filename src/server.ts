@@ -105,7 +105,7 @@ import {
 import { ActiveSessionRuns, abortSessionOperations } from "./session-aborts.js";
 import { SessionInputPriorityQueue, type QueuedSessionInput } from "./session-queue.js";
 import { pageSessionMessages, paginateSession } from "./session-pagination.js";
-import { aggregateCacheUsage, markCacheUsageReset } from "./cache-usage.js";
+import { aggregateCacheUsage, aggregateSessionTokenUsage, markCacheUsageReset } from "./cache-usage.js";
 import {
   ASK_USER_QUESTION_TOOL_NAME,
   AskUserQuestionManager,
@@ -2554,13 +2554,12 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     await store.appendMessages(session, [sourceBanner]);
     return json(response, 201, { command: "fork", ...pagedSessionPayload(fork), previousSessionId: session.id });
   }
-  if (command === "/context") {
+  if (command === "/usage") {
     const chatMessages = session.messages.filter(isModelMessage);
     const activeHistory = buildProviderHistory(session.messages, undefined, session.compaction);
     const assistantMessages = chatMessages.filter((message) => message.role === "assistant" && message.status === "complete");
     const latestUsage = assistantMessages.slice().reverse().find((message) => message.usage)?.usage;
-    const totalInput = assistantMessages.reduce((total, message) => total + (message.usage?.input ?? 0), 0);
-    const totalOutput = assistantMessages.reduce((total, message) => total + (message.usage?.output ?? 0), 0);
+    const sessionUsage = aggregateSessionTokenUsage(chatMessages);
     const currentTokens = sessionContextTokens(session);
     const now = new Date().toISOString();
     const userMessage: Message = {
@@ -2570,13 +2569,15 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
       id: randomUUID(),
       role: "assistant",
       content: [
-        `**Context · ${session.id}**`,
+        `**Usage · ${session.id}**`,
         "",
         `- Model: \`${providerForSession(session).model}\``,
         `- Active context: **${currentTokens.toLocaleString()} tokens** (latest input + output)`,
         `- Latest input / output / total: **${(latestUsage?.input ?? 0).toLocaleString()} / ${(latestUsage?.output ?? 0).toLocaleString()} / ${(latestUsage ? latestUsage.total ?? latestUsage.input + latestUsage.output : 0).toLocaleString()}**`,
-        `- Session input: **${totalInput.toLocaleString()} tokens**`,
-        `- Session output: **${totalOutput.toLocaleString()} tokens**`,
+        `- Session input: **${sessionUsage.input.toLocaleString()} tokens**`,
+        `- Session output: **${sessionUsage.output.toLocaleString()} tokens**`,
+        `- Session cache read (hit): **${sessionUsage.cacheRead.toLocaleString()} tokens**`,
+        `- Session cache miss (input − cache read): **${sessionUsage.cacheMiss.toLocaleString()} tokens**`,
         `- Model messages: **${chatMessages.length}**`,
         `- Active provider messages: **${activeHistory.length}**${session.compaction ? ` (summary + messages after compaction)` : ""}`,
         ...(session.compaction ? [`- Compacted messages: **${session.compaction.coveredMessageCount}**`] : []),
@@ -2587,7 +2588,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     };
     session.messages.push(userMessage, assistantMessage);
     await store.appendMessages(session, [userMessage, assistantMessage]);
-    return json(response, 200, { command: "context", ...pagedSessionPayload(session) });
+    return json(response, 200, { command: "usage", ...pagedSessionPayload(session) });
   }
   return json(response, 400, { error: `Unknown command: ${command || "(empty)"}` });
 }

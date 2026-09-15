@@ -1,4 +1,21 @@
-import type { CacheUsage, Message, Session } from "./types.js";
+import type { CacheUsage, Message, Session, SessionTokenUsage } from "./types.js";
+
+export function aggregateSessionTokenUsage(messages: Message[]): SessionTokenUsage {
+  let input = 0;
+  let output = 0;
+  let cacheRead = 0;
+  let cacheMiss = 0;
+  for (const message of messages) {
+    const usage = message.usage;
+    if (!usage) continue;
+    const requestCacheRead = Math.max(0, Math.min(usage.input, usage.cached ?? 0));
+    input += usage.input;
+    output += usage.output;
+    cacheRead += requestCacheRead;
+    cacheMiss += usage.input - requestCacheRead;
+  }
+  return { input, output, cacheRead, cacheMiss };
+}
 
 export function aggregateCacheUsage(messages: Message[], resetThroughMessageId?: string): CacheUsage | undefined {
   let boundary = -1;

@@ -15,10 +15,10 @@ test("takes returns and removes the queued message", () => {
 test("queuing again replaces a message that has not been delivered", () => {
   const queue = new SessionInputPriorityQueue();
   queue.enqueueUser("session", { content: "first", kind: "message" });
-  queue.enqueueUser("session", { content: "/context", kind: "command" });
+  queue.enqueueUser("session", { content: "/usage", kind: "command" });
 
   assert.deepEqual(queue.takeReady("session"), [{
-    content: "/context", kind: "command", priority: 2,
+    content: "/usage", kind: "command", priority: 2,
   }]);
 });
 

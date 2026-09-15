@@ -543,10 +543,18 @@ async function runQueuedCommandScenario(mock, amber) {
   );
 
   const instant = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/commands`), {
-    command: "/context",
+    command: "/usage",
   });
   check("non-blocking command runs during a response",
-    instant.status === 200 && instant.body.command === "context", JSON.stringify(instant));
+    instant.status === 200 && instant.body.command === "usage", JSON.stringify(instant));
+  const usageMessage = instant.body.session?.messages.find((message) =>
+    message.role === "assistant" && message.kind === "command" && message.content.startsWith("**Usage ·"));
+  check("usage command reports the lifetime cost inputs",
+    usageMessage?.content.includes("- Session input: **10 tokens**")
+      && usageMessage.content.includes("- Session output: **2 tokens**")
+      && usageMessage.content.includes("- Session cache read (hit): **0 tokens**")
+      && usageMessage.content.includes("- Session cache miss (input − cache read): **10 tokens**"),
+    usageMessage?.content);
 
   const queued = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/queued-message`), {
     content: "/name queued-title",
@@ -559,7 +567,7 @@ async function runQueuedCommandScenario(mock, amber) {
   check("queued command was not sent to the model",
     !snapshot.session.messages.some((message) => message.role === "user" && message.content === "/name queued-title"));
   check("non-blocking command was rendered as command UI",
-    snapshot.session.messages.some((message) => message.content === "/context" && message.kind === "command"));
+    snapshot.session.messages.some((message) => message.content === "/usage" && message.kind === "command"));
   check("queued command ended the interrupted model run", mock.requests().length === 1, `${mock.requests().length} requests`);
 
   const command = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/commands`), {

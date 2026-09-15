@@ -1430,7 +1430,7 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
   if (!duringResponse) setBusy(true);
   let goalStartMessage: string | undefined;
   try {
-    const result = await api<{ command: "add-dir" | "cwd" | "context" | "clear" | "compact" | "fork" | "goal" | "name" | "plugin" | "tasks"; session: Session; hasMore: boolean; directory?: string; cwdChanged?: boolean; previousSessionId?: string; tasks?: BackgroundTask[]; message?: string }>(
+    const result = await api<{ command: "add-dir" | "cwd" | "usage" | "clear" | "compact" | "fork" | "goal" | "name" | "plugin" | "tasks"; session: Session; hasMore: boolean; directory?: string; cwdChanged?: boolean; previousSessionId?: string; tasks?: BackgroundTask[]; message?: string }>(
       `/api/sessions/${session.id}/commands`,
       { method: "POST", body: JSON.stringify({ command }) },
     );
