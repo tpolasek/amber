@@ -132,6 +132,10 @@ export interface Session {
   invokedSkills?: SessionInvokedSkill[];
   /** AGENTS.md snapshots captured once when the session started. */
   instructions?: SessionInstructions;
+  /** Active session goal; repeated at every natural stop until GoalComplete or /goal clear. */
+  goal?: string;
+  /** When the current goal was set; drives the client GOAL(Xm) indicator. */
+  goalSetAt?: string;
 }
 
 export interface SessionInstructions {

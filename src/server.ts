@@ -85,6 +85,13 @@ import {
 import { clearReadCache, executeFileTool, FILE_TOOLS } from "./file-tools.js";
 import { executeGrep, GREP_TOOL, parseGrepInput } from "./grep-tool.js";
 import { executeGlob, GLOB_TOOL, parseGlobInput } from "./glob-tool.js";
+import {
+  formatGoalReminder,
+  GOAL_COMPLETE_TOOL,
+  GOAL_COMPLETE_TOOL_NAME,
+  MAX_GOAL_LENGTH,
+  parseGoalCompleteInput,
+} from "./goal.js";
 import { completeDirectories, completeDirectoryRoots, completeFiles } from "./directory-completion.js";
 import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
 import {
@@ -986,8 +993,12 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         : injectClaudeCodeUserContext(baseHistory);
       const toolDrafts = new Map<number, { call: ToolCall; inputJson: string }>();
       let usage: Partial<TokenUsage> = {};
+      const tools = sessionTools(session, approvalCapable);
+      // The goal these tools were advertised against; a live /goal may have
+      // replaced or cleared it by the time a GoalComplete call executes.
+      const goalSnapshot = session.goal;
       for await (const event of activeProvider.stream(history, controller.signal, {
-        tools: sessionTools(session, approvalCapable),
+        tools,
         system: sessionSystemPrompt(session, currentDirectory, activeProvider.model),
         ...(session.agentType ? { temperature: 1 } : {}),
         ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
@@ -1373,6 +1384,37 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             }
             call.durationMs = Date.now() - started;
             call.completedAt = new Date().toISOString();
+          } else if (call.name === GOAL_COMPLETE_TOOL_NAME) {
+            const started = Date.now();
+            call.status = "running";
+            call.startedAt = new Date(started).toISOString();
+            emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
+            try {
+              parseGoalCompleteInput(call.input);
+              if (session.goal !== goalSnapshot) {
+                call.status = "error";
+                call.statusDisplay = { text: "GOAL CHANGED" };
+                call.output = session.goal === undefined
+                  ? "The goal was already cleared while you were responding; no goal is active and no further reminders will be sent."
+                  : `The goal was replaced while you were responding. The previous goal was not cleared; the active goal is now: "${session.goal}"`;
+                resultText = call.output;
+              } else {
+                // Clear and persist before the tool result lands, so a crash
+                // between them can at worst lose the reminder, not resurrect the goal.
+                delete session.goal;
+                await store.saveMeta(session);
+                call.status = "complete";
+                call.output = "Goal cleared. Give your final response; no further goal reminders will be sent.";
+                call.statusDisplay = { text: "GOAL CLEARED" };
+                resultText = call.output;
+              }
+            } catch (error) {
+              call.status = "error";
+              call.output = errorMessage(error);
+              resultText = call.output;
+            }
+            call.durationMs = Date.now() - started;
+            call.completedAt = new Date().toISOString();
           } else if (PLANNING_TASK_TOOLS.some((tool) => tool.name === call.name)) {
             const started = Date.now();
             call.status = "running";
@@ -1637,12 +1679,32 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       if ((orderedCalls.length === 0 || endTurnAfterToolResult)
         && interruption?.kind !== "message"
         && !autoCompactionContinuedTurn) {
-        if (session.parentSessionId) {
-          session.agentStatus = "complete";
-          await store.saveMeta(session);
+        // An active goal turns a natural stop into another round: the reminder
+        // is an ordinary persisted user message, so it survives refreshes and
+        // compaction like any other. Plan-mode handoffs and queued commands
+        // still return control above; a live /goal clear falls to `done`.
+        if (!session.parentSessionId && orderedCalls.length === 0 && session.goal) {
+          const goalReminder: Message = {
+            id: randomUUID(),
+            role: "user",
+            content: formatGoalReminder(session.goal),
+            createdAt: new Date().toISOString(),
+            status: "complete",
+          };
+          session.messages.push(goalReminder);
+          // The reminder starts a fresh user turn for skill override purposes.
+          turnModel = undefined;
+          turnEffort = undefined;
+          await store.appendMessages(session, [goalReminder]);
+          emit("user_message", { message: goalReminder });
+        } else {
+          if (session.parentSessionId) {
+            session.agentStatus = "complete";
+            await store.saveMeta(session);
+          }
+          emit("done", { message: assistantMessage, ...pagedSessionPayload(session) });
+          return;
         }
-        emit("done", { message: assistantMessage, ...pagedSessionPayload(session) });
-        return;
       }
 
       const loop = !roundWasInterrupted && planModeCalls.length === 0
@@ -1898,7 +1960,8 @@ function sessionTools(session: Session, approvalCapable = true): ToolDefinition[
     const definition = getAgentDefinition(agentDefinitions, session.agentType);
     return toolsForAgentMode(session.planMode?.active === true || definition.readOnly);
   }
-  return toolsForPlanMode(claudeCodeTools, session.planMode?.active === true, approvalCapable);
+  const tools = toolsForPlanMode(claudeCodeTools, session.planMode?.active === true, approvalCapable);
+  return session.goal ? [...tools, GOAL_COMPLETE_TOOL] : tools;
 }
 
 function sessionSystemPrompt(
@@ -2379,6 +2442,30 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     } catch (error) {
       return json(response, 400, { error: `Could not change directory: ${errorMessage(error)}` });
     }
+  }
+
+  if (command === "/goal") {
+    if (argument.toLowerCase() === "clear") {
+      delete session.goal;
+      delete session.goalSetAt;
+      await store.saveMeta(session);
+      return json(response, 200, { command: "goal", ...pagedSessionPayload(session) });
+    }
+    if (!argument) return json(response, 400, { error: "Usage: /goal <text> or /goal clear" });
+    if (argument.length > MAX_GOAL_LENGTH) {
+      return json(response, 400, { error: `Goals are limited to ${MAX_GOAL_LENGTH.toLocaleString()} characters` });
+    }
+    session.goal = argument;
+    session.goalSetAt = new Date().toISOString();
+    await store.saveMeta(session);
+    // An idle set starts a turn from the reminder; a live set is read by the
+    // active run's next natural stop, so no start message is returned.
+    const idle = !activeSessions.has(sessionId);
+    return json(response, 200, {
+      command: "goal",
+      ...(idle ? { message: formatGoalReminder(argument) } : {}),
+      ...pagedSessionPayload(session),
+    });
   }
 
   if (command === "/name") {

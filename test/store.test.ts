@@ -70,6 +70,7 @@ test("clears a session in place", async () => {
   }];
   session.cacheUsageResetThroughMessageId = "message-1";
   session.skillTouchedPaths = ["/tmp/file.txt"];
+  session.goal = "make the release green";
   await store.save(session);
 
   const cleared = await store.clear(session);
@@ -81,6 +82,7 @@ test("clears a session in place", async () => {
   assert.equal(cleared.invokedSkills, undefined);
   assert.equal(cleared.skillTouchedPaths, undefined);
   assert.equal(cleared.skillRoots, undefined);
+  assert.equal(cleared.goal, undefined);
   assert.deepEqual((await store.get(session.id))?.messages, []);
   // A fresh process must not resurrect the cleared history from the log.
   const reopened = new SessionStore(directory);
@@ -128,6 +130,7 @@ test("forks a session with independent history and a provenance banner", async (
   };
   original.skillRoots = ["/tmp/example-workspace/packages/nested"];
   original.skillTouchedPaths = ["/tmp/example-workspace/file.txt"];
+  original.goal = "make the release green";
   original.invokedSkills = [{
     name: "commit",
     path: "/tmp/example-workspace/.amber/skills/commit/SKILL.md",
@@ -150,6 +153,7 @@ test("forks a session with independent history and a provenance banner", async (
   assert.deepEqual(fork.messages, [original.messages[0], banner]);
   assert.deepEqual(fork.compaction, original.compaction);
   assert.notEqual(fork.compaction, original.compaction);
+  assert.equal(fork.goal, undefined);
   assert.deepEqual(fork.directories, original.directories);
   assert.notEqual(fork.directories, original.directories);
   assert.equal(fork.cwd, original.cwd);
@@ -174,6 +178,29 @@ test("forks a session with independent history and a provenance banner", async (
   await reopened.initialize();
   assert.deepEqual((await reopened.get(fork.id))?.messages, [original.messages[0], banner]);
   assert.equal((await reopened.get(fork.id))?.compaction?.summary, "The user asked to be kept.");
+});
+
+test("persists the session goal across reopening, while clear removes it", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const session = await store.create();
+  session.goal = "make the release green";
+  session.goalSetAt = "2026-09-15T00:00:00.000Z";
+  await store.saveMeta(session);
+
+  const reopened = new SessionStore(directory);
+  await reopened.initialize();
+  const loaded = await reopened.get(session.id);
+  assert.equal(loaded?.goal, "make the release green");
+  assert.equal(loaded?.goalSetAt, "2026-09-15T00:00:00.000Z");
+
+  const cleared = await reopened.clear(loaded!);
+  assert.equal(cleared.goal, undefined);
+  assert.equal(cleared.goalSetAt, undefined);
+  const afterClear = new SessionStore(directory);
+  await afterClear.initialize();
+  assert.equal((await afterClear.get(session.id))?.goal, undefined);
 });
 
 test("rejects invalid session identifiers", async () => {

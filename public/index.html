@@ -6,7 +6,7 @@
     <meta name="description" content="AMBER — browser terminal for persistent LLM agent sessions">
     <title>AMBER // Agent Terminal</title>
     <link rel="stylesheet" href="/themes.css?v=1">
-    <link rel="stylesheet" href="/styles.css?v=58">
+    <link rel="stylesheet" href="/styles.css?v=59">
   </head>
   <body>
     <div class="noise" aria-hidden="true"></div>
@@ -82,6 +82,7 @@
               </button>
               <input id="file-input" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple hidden>
               <button id="queue-button" type="button" class="send-button queue-button" hidden><span>QUEUED SEND</span><i>↵</i></button>
+              <button id="goal-button" type="button" class="send-button goal-button" hidden aria-label="Show the active goal"><span></span></button>
               <button id="submit-button" type="submit" class="send-button"><span>SEND</span><i>↵</i></button>
             </div>
             <canvas id="screensaver" class="composer-screensaver" aria-hidden="true"></canvas>
@@ -259,6 +260,23 @@
           <div class="git-dialog-actions">
             <button id="git-commit" class="question-submit-button" type="button" hidden>COMMIT</button>
             <button id="git-commit-push" class="question-submit-button" type="button" hidden>COMMIT + PUSH</button>
+          </div>
+        </footer>
+      </section>
+    </div>
+    <div id="goal-dialog" class="tasks-overlay" hidden>
+      <section class="tasks-dialog goal-dialog" role="dialog" aria-modal="true" aria-labelledby="goal-dialog-title">
+        <header class="tasks-dialog-header">
+          <span class="session-dialog-icon" aria-hidden="true">◎</span>
+          <strong id="goal-dialog-title">Active goal</strong>
+          <button id="goal-close" class="tasks-dialog-button" type="button" aria-label="Close goal dialog">×</button>
+        </header>
+        <div id="goal-dialog-body" class="tasks-dialog-body goal-dialog-body"></div>
+        <footer class="tasks-dialog-footer">
+          <span>Esc close</span>
+          <div class="git-dialog-actions">
+            <button id="goal-clear" class="plan-mode-decline-button" type="button">CLEAR</button>
+            <button id="goal-continue" class="question-submit-button" type="button">CONTINUE</button>
           </div>
         </footer>
       </section>

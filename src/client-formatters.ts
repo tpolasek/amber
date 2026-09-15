@@ -143,6 +143,24 @@ export function pluginCommandSuggestions(input: string): { value: string; descri
   return PLUGIN_COMMAND_SUGGESTIONS.filter((suggestion) => suggestion.value.startsWith(typed));
 }
 
+export const GOAL_COMMAND_SUGGESTIONS: { value: string; description: string }[] = [
+  { value: "/goal", description: "Set a goal the model keeps working toward" },
+  { value: "/goal clear", description: "Clear the active goal without starting a turn" },
+];
+
+export function goalCommandSuggestions(input: string): { value: string; description: string }[] | null {
+  const value = input.trimStart();
+  if (!/^\/goal(?:\s|$)/i.test(value)) return null;
+  const typed = value.replace(/\s+/g, " ").replace(/\s+$/, "").toLowerCase();
+  return GOAL_COMMAND_SUGGESTIONS.filter((suggestion) => suggestion.value.startsWith(typed));
+}
+
+/** Composer indicator label: whole minutes since the goal was set. */
+export function goalButtonLabel(goalSetAt: string | undefined, now: number = Date.now()): string {
+  const minutes = goalSetAt ? Math.max(0, Math.floor((now - Date.parse(goalSetAt)) / 60_000)) : 0;
+  return `GOAL(${minutes}m)`;
+}
+
 export function parseGitCommand(command: string): GitCommandRequest | null {
   const parts = command.trim().split(/\s+/);
   if (parts[0]?.toLowerCase() !== "/git") return null;

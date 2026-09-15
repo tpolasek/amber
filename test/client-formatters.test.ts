@@ -6,6 +6,9 @@ import {
   formatTokenCountInThousands,
   GIT_COMMAND_SUGGESTIONS,
   gitCommandSuggestions,
+  GOAL_COMMAND_SUGGESTIONS,
+  goalButtonLabel,
+  goalCommandSuggestions,
   messageFrom,
   parseGitCommand,
   PLUGIN_COMMAND_SUGGESTIONS,
@@ -20,9 +23,11 @@ import { BUILT_IN_COMMANDS, builtInCommand } from "../src/built-in-commands.js";
 test("classifies built-in commands that can run during a response", () => {
   assert.deepEqual(
     BUILT_IN_COMMANDS.filter((command) => command.runsDuringResponse).map((command) => command.name),
-    ["/add-dir", "/context", "/tasks"],
+    ["/add-dir", "/context", "/goal", "/tasks"],
   );
   assert.equal(builtInCommand(" /CONTEXT ")?.runsDuringResponse, true);
+  assert.equal(builtInCommand("/GOAL clear")?.name, "/goal");
+  assert.equal(builtInCommand("/goal make the tests pass")?.runsDuringResponse, true);
   assert.equal(builtInCommand("/compact")?.runsDuringResponse, false);
   assert.equal(builtInCommand("/bashes")?.name, "/tasks");
   assert.equal(builtInCommand("ordinary message"), undefined);
@@ -97,6 +102,25 @@ test("suggests /plugin subcommands as the command is typed", () => {
     ["/plugin marketplace add", "/plugin marketplace add anthropics/claude-plugins-official"],
   );
   assert.deepEqual(pluginCommandSuggestions("/plugin install slack"), []);
+});
+
+test("suggests /goal clear while the command is typed", () => {
+  assert.equal(goalCommandSuggestions("/goa"), null);
+  assert.equal(goalCommandSuggestions("/goalist"), null);
+  assert.deepEqual(goalCommandSuggestions("/goal"), GOAL_COMMAND_SUGGESTIONS);
+  assert.deepEqual(goalCommandSuggestions("  /Goal "), GOAL_COMMAND_SUGGESTIONS);
+  assert.deepEqual((goalCommandSuggestions("/goal c") ?? []).map((item) => item.value), ["/goal clear"]);
+  assert.deepEqual((goalCommandSuggestions("/goal clear") ?? []).map((item) => item.value), ["/goal clear"]);
+  assert.deepEqual(goalCommandSuggestions("/goal done"), []);
+});
+
+test("labels the goal button with whole minutes since the goal was set", () => {
+  const now = Date.parse("2026-09-15T12:30:00.000Z");
+  assert.equal(goalButtonLabel("2026-09-15T12:30:00.000Z", now), "GOAL(0m)");
+  assert.equal(goalButtonLabel("2026-09-15T12:25:30.000Z", now), "GOAL(4m)");
+  assert.equal(goalButtonLabel("2026-09-15T10:00:00.000Z", now), "GOAL(150m)");
+  assert.equal(goalButtonLabel("2026-09-15T12:35:00.000Z", now), "GOAL(0m)");
+  assert.equal(goalButtonLabel(undefined, now), "GOAL(0m)");
 });
 
 test("suggests session skills as slash commands without built-in collisions", () => {

@@ -6,6 +6,8 @@ import {
 import {
   formatTime,
   gitCommandSuggestions,
+  goalButtonLabel,
+  goalCommandSuggestions,
   messageFrom,
   parseGitCommand,
   pluginCommandSuggestions,
@@ -77,6 +79,13 @@ import {
   runGitDialogCommit,
   setCommitSender,
 } from "./client-git-dialog.js";
+import {
+  clearGoalFromDialog,
+  closeGoalDialog,
+  handleGoalDialogKeydown,
+  openGoalDialog,
+  setGoalClearer,
+} from "./client-goal-dialog.js";
 import {
   closeModelDialog,
   cycleThinkingLevel,
@@ -191,6 +200,7 @@ const planHandoffs = new PlanHandoffDispatcher(
 // modules so they never need to import client.ts.
 setPlanHandoffDispatcher(planHandoffs);
 setCommitSender((content) => sendMessage(content));
+setGoalClearer(() => runCommand("/goal clear", false));
 setSessionDialogHost({ loadSession, openLandingDialog });
 
 const composerScreensaver = new ComposerScreensaver(
@@ -202,6 +212,7 @@ composerScreensaver.restartIdle();
 
 void initialize();
 window.setInterval(updateElapsedToolStatuses, 1_000);
+window.setInterval(renderGoalButton, 30_000);
 
 async function initialize(): Promise<void> {
   wireEvents();
@@ -229,6 +240,7 @@ function wireEvents(): void {
     if (handleQuestionDialogKeydown(event)) return;
     if (handleTasksDialogKeydown(event)) return;
     if (handleGitDialogKeydown(event)) return;
+    if (handleGoalDialogKeydown(event)) return;
     if (handleSessionDialogKeydown(event)) return;
     if (handleModelDialogKeydown(event)) return;
     if (event.key === "Escape" && (state.streaming || isAgentSessionRunning())) {
@@ -281,6 +293,13 @@ function wireEvents(): void {
   elements.gitCommitPush.addEventListener("click", () => runGitDialogCommit(true));
   elements.gitDialog.addEventListener("click", (event) => {
     if (event.target === elements.gitDialog) closeGitDialog();
+  });
+  elements.goalButton.addEventListener("click", openGoalDialog);
+  elements.goalClose.addEventListener("click", closeGoalDialog);
+  elements.goalContinue.addEventListener("click", closeGoalDialog);
+  elements.goalClear.addEventListener("click", () => void clearGoalFromDialog());
+  elements.goalDialog.addEventListener("click", (event) => {
+    if (event.target === elements.goalDialog) closeGoalDialog();
   });
   elements.questionClose.addEventListener("click", () => void declineQuestions());
   elements.questionSubmit.addEventListener("click", advanceOrSubmitQuestions);
@@ -1409,8 +1428,9 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
   }
   if (clearComposer) clearPrompt();
   if (!duringResponse) setBusy(true);
+  let goalStartMessage: string | undefined;
   try {
-    const result = await api<{ command: "add-dir" | "cwd" | "context" | "clear" | "compact" | "fork" | "name" | "plugin" | "tasks"; session: Session; hasMore: boolean; directory?: string; cwdChanged?: boolean; previousSessionId?: string; tasks?: BackgroundTask[] }>(
+    const result = await api<{ command: "add-dir" | "cwd" | "context" | "clear" | "compact" | "fork" | "goal" | "name" | "plugin" | "tasks"; session: Session; hasMore: boolean; directory?: string; cwdChanged?: boolean; previousSessionId?: string; tasks?: BackgroundTask[]; message?: string }>(
       `/api/sessions/${session.id}/commands`,
       { method: "POST", body: JSON.stringify({ command }) },
     );
@@ -1426,6 +1446,10 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
     } else if (result.command === "fork") {
       history.pushState({}, "", `/s/${result.session.id}`);
       notify(`Session forked · ${result.session.id}`);
+    } else if (result.command === "goal") {
+      const goal = result.session.goal;
+      notify(goal ? `Goal set · ${goal.replace(/\s+/g, " ").slice(0, 80)}` : "Goal cleared");
+      goalStartMessage = result.message;
     } else if (result.command === "name") {
       notify(`Session named · ${result.session.title}`);
     } else if (result.command === "tasks") {
@@ -1439,6 +1463,9 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
     if (!duringResponse) setBusy(false);
     elements.prompt.focus();
   }
+  // Only an idle set returns the reminder: launch it once the command's busy
+  // state is cleaned up, so the stream starts from a normal composer send.
+  if (goalStartMessage !== undefined) await sendMessage(goalStartMessage);
 }
 
 async function runCompactCommand(command: string, clearComposer = true): Promise<void> {
@@ -1500,6 +1527,7 @@ function renderSession(): void {
   closeHistorySearch(false);
   renderHeader();
   renderComposer();
+  renderGoalButton();
   renderPlanMode();
   renderPlanningTasks();
   syncAgentSessionsForCurrentSession();
@@ -1552,6 +1580,7 @@ function updateRenderedSession(session: Session): void {
   elements.emptyState.hidden = session.messages.length > 0;
   renderHeader();
   renderComposer();
+  renderGoalButton();
   renderPlanMode();
   renderPlanningTasks();
   syncAgentSessionsForCurrentSession();
@@ -2054,6 +2083,15 @@ function renderComposer(): void {
   elements.submit.querySelector("span")!.textContent = running ? "STOP" : "SEND";
 }
 
+/** The GOAL indicator exists only while a goal is active; hidden otherwise. */
+function renderGoalButton(): void {
+  const session = state.session;
+  elements.goalButton.hidden = !session?.goal;
+  if (session?.goal) {
+    elements.goalButton.querySelector("span")!.textContent = goalButtonLabel(session.goalSetAt);
+  }
+}
+
 function resizePrompt(): void {
   elements.prompt.style.height = "auto";
   elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 180)}px`;
@@ -2094,6 +2132,18 @@ function updateCommandMenu(): void {
       name: suggestion.value,
       description: suggestion.description,
       runsDuringResponse: false,
+    }));
+    selectedCommand = 0;
+    if (matchingCommands.length === 0) return hideCommandMenu();
+    renderCommandMenu();
+    return;
+  }
+  const goalMatches = goalCommandSuggestions(elements.prompt.value);
+  if (goalMatches) {
+    matchingCommands = goalMatches.map((suggestion) => ({
+      name: suggestion.value,
+      description: suggestion.description,
+      runsDuringResponse: true,
     }));
     selectedCommand = 0;
     if (matchingCommands.length === 0) return hideCommandMenu();
@@ -2258,7 +2308,7 @@ function acceptDirectoryCompletion(directory: DirectoryCompletion): void {
 
 function selectCommand(command: BuiltInCommand, execute: boolean): void {
   const continuesTyping = command.name === "/add-dir" || command.name === "/cwd"
-    || command.name === "/git" || command.name === "/plugin";
+    || command.name === "/git" || command.name === "/goal" || command.name === "/plugin";
   elements.prompt.value = continuesTyping ? `${command.name} ` : command.name;
   if (continuesTyping) updateCommandMenu();
   else hideCommandMenu();

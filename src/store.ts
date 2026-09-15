@@ -118,6 +118,8 @@ export class SessionStore {
     delete session.skillRoots;
     delete session.skillTouchedPaths;
     delete session.invokedSkills;
+    delete session.goal;
+    delete session.goalSetAt;
     await this.save(session);
     return session;
   }

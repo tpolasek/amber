@@ -128,6 +128,27 @@ function createMockProvider() {
   };
 }
 
+function countToolUses(messages, name) {
+  return messages
+    .filter((message) => message.role === "assistant" && Array.isArray(message.content))
+    .flatMap((message) => message.content.filter((block) => block.type === "tool_use" && block.name === name))
+    .length;
+}
+
+function countTextBlocks(messages, predicate) {
+  return messages
+    .filter((message) => message.role === "assistant")
+    .flatMap((message) => {
+      if (typeof message.content === "string") return [message.content];
+      if (Array.isArray(message.content)) {
+        return message.content.filter((block) => block.type === "text").map((block) => block.text ?? "");
+      }
+      return [];
+    })
+    .filter((text) => predicate(text))
+    .length;
+}
+
 function planResponse(payload) {
   const messages = payload.messages;
   if (!payload.tools) return { text: "<summary>compacted context</summary>" };
@@ -146,6 +167,28 @@ function planResponse(payload) {
   const firstUser = messages.find((message) => message.role === "user");
   const firstText = typeof firstUser?.content === "string" ? firstUser.content
     : Array.isArray(firstUser?.content) ? firstUser.content.map((block) => block.text ?? "").join(" ") : "";
+  // Goal scenarios key on the reminder text itself: the first user message of
+  // a goal run is the reminder returned by /goal.
+  if (firstText?.includes("GOAL MAIN")) {
+    const goalCompletes = countToolUses(messages, "GoalComplete");
+    const progress = countTextBlocks(messages, (text) => text.startsWith("goal progress"));
+    if (goalCompletes > 0) return { text: "goal finished final answer" };
+    if (progress >= 2) return { tools: [{ id: "goal-complete", name: "GoalComplete", input: {} }] };
+    return { text: `goal progress ${progress + 1}` };
+  }
+  if (firstText?.includes("GOAL RACE")) {
+    const goalCompletes = countToolUses(messages, "GoalComplete");
+    const acks = countTextBlocks(messages, (text) => text.startsWith("race replacement acknowledged"));
+    if (goalCompletes === 0) {
+      return { tools: [{ id: "race-goal-complete", name: "GoalComplete", input: {} }], holdOpenMs: 2_500 };
+    }
+    if (acks === 0) return { text: "race replacement acknowledged" };
+    if (goalCompletes === 1) return { tools: [{ id: "race-goal-complete-2", name: "GoalComplete", input: {} }] };
+    return { text: "race scenario finished" };
+  }
+  if (firstText?.includes("GOAL LIVE PROMPT")) {
+    return { text: "live goal commands accepted", delayMs: 1_500 };
+  }
   if (firstText.includes("BACKGROUND CHILD DELAY")) {
     return { text: "background child complete", delayMs: 1_500 };
   }
@@ -1255,6 +1298,144 @@ async function runRedundantManualCompactionScenario(mock, amber) {
     snapshot.session.messages.some((message) => message.content === "continued after automatic compaction"));
 }
 
+function goalReminder(goal) {
+  return `We have a goal set, before you stop make sure that this goal has been met. Once it has been met, run GoalComplete to clear the goal. Goal: "${goal}"`;
+}
+
+async function sessionSnapshot(amber, sessionId) {
+  return (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+}
+
+async function startSessionStream(amber, sessionId, content) {
+  const response = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  if (!response.ok) throw new Error(`message stream failed: ${await response.text()}`);
+  return response;
+}
+
+/**
+ * A persistent goal: /goal starts a turn from its reminder, every natural stop
+ * re-injects it, GoalComplete is offered while the goal is active and clears
+ * it, and the final response then terminates without another reminder.
+ */
+async function runGoalScenario(mock, amber) {
+  console.log("\n== persistent goal runs");
+  mock.reset();
+  const events = [];
+  const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), { name: "persistent goal runs", path: tmpdir() });
+  const sessionId = body.session.id;
+  const goal = "GOAL MAIN finish the deployment";
+  const reminder = goalReminder(goal);
+
+  const set = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/commands`), { command: `/goal ${goal}` });
+  check("idle /goal returns the reminder start message",
+    set.status === 200 && set.body.command === "goal" && set.body.message === reminder,
+    JSON.stringify({ status: set.status, command: set.body.command, message: set.body.message }));
+  check("the set goal is persisted on the session",
+    set.body.session?.goal === goal && typeof set.body.session?.goalSetAt === "string",
+    JSON.stringify({ goal: set.body.session?.goal, goalSetAt: set.body.session?.goalSetAt }));
+
+  const usage = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/commands`), { command: "/goal" });
+  check("missing goal text is a usage error", usage.status === 400, JSON.stringify(usage));
+
+  const streamResponse = await startSessionStream(amber, sessionId, reminder);
+  await readStream(streamResponse, (event, data) => events.push({ event, ...data }));
+
+  const injected = events.filter((event) => event.event === "user_message" && event.message?.content === reminder);
+  check("every natural stop injected another reminder", injected.length === 2, `${injected.length}`);
+
+  const advertised = mock.requests().filter((request) => request.tools)
+    .map((request) => request.tools.some((tool) => tool.name === "GoalComplete"));
+  check("GoalComplete was offered while the goal was active and withdrawn after clearing it",
+    advertised.length === 4 && advertised.slice(0, 3).every(Boolean) && !advertised[3],
+    JSON.stringify(advertised));
+
+  const snapshot = await sessionSnapshot(amber, sessionId);
+  const calls = snapshot.session.messages.flatMap((message) => message.toolCalls ?? [])
+    .filter((call) => call.name === "GoalComplete");
+  check("GoalComplete executed and cleared the persisted goal",
+    calls.length === 1 && calls[0].status === "complete" && snapshot.session.goal === undefined,
+    `${calls.map((call) => call.status)} goal=${snapshot.session.goal}`);
+
+  const messages = snapshot.session.messages;
+  const finalAnswer = messages.filter((message) => message.role === "assistant").at(-1);
+  const afterFinal = messages.slice(messages.findIndex((message) => message.id === finalAnswer?.id) + 1);
+  check("the final response terminated without another reminder",
+    finalAnswer?.content === "goal finished final answer"
+      && !afterFinal.some((message) => message.role === "user" && message.content === reminder),
+    `${finalAnswer?.content} trailing=${afterFinal.length}`);
+  const clearedAt = events.findIndex((event) =>
+    event.toolCall?.name === "GoalComplete" && event.toolCall.status === "complete");
+  check("no reminder event followed the successful GoalComplete",
+    clearedAt >= 0 && !events.slice(clearedAt + 1).some((event) => event.event === "user_message"));
+}
+
+/** /goal set and clear are both accepted while a response streams. */
+async function runLiveGoalCommandScenario(mock, amber) {
+  console.log("\n== live /goal set and clear during a response");
+  mock.reset();
+  const events = [];
+  const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), { name: "live goal commands", path: tmpdir() });
+  const sessionId = body.session.id;
+  const streamResponse = await startSessionStream(amber, sessionId, "GOAL LIVE PROMPT run while goal commands arrive");
+  const finished = readStream(streamResponse, (event, data) => events.push({ event, ...data }));
+
+  const liveSet = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/commands`), { command: "/goal GOAL LIVE temporary" });
+  check("live /goal set is accepted without a start message",
+    liveSet.status === 200 && liveSet.body.message === undefined && liveSet.body.session?.goal === "GOAL LIVE temporary",
+    JSON.stringify({ status: liveSet.status, message: liveSet.body?.message, goal: liveSet.body?.session?.goal }));
+  const liveClear = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/commands`), { command: "/goal clear" });
+  check("live /goal clear is accepted while streaming",
+    liveClear.status === 200 && liveClear.body.session?.goal === undefined, JSON.stringify({ status: liveClear.status }));
+  await finished;
+
+  check("the cleared live goal injected no reminder",
+    !events.some((event) => event.event === "user_message"));
+  check("the run ended normally after the live clear",
+    events.some((event) => event.event === "done")
+      && (await sessionSnapshot(amber, sessionId)).session.goal === undefined);
+}
+
+/** A live /goal replacing the goal mid-response survives a stale GoalComplete. */
+async function runGoalReplacementRaceScenario(mock, amber) {
+  console.log("\n== goal replaced while GoalComplete streams");
+  mock.reset();
+  const events = [];
+  const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), { name: "goal replacement race", path: tmpdir() });
+  const sessionId = body.session.id;
+  const original = goalReminder("GOAL RACE original target");
+  const replacement = goalReminder("GOAL RACE replacement target");
+  const set = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/commands`), { command: "/goal GOAL RACE original target" });
+  check("idle set for the race returns the start message", set.body.message === original);
+
+  const streamResponse = await startSessionStream(amber, sessionId, original);
+  const finished = readStream(streamResponse, (event, data) => events.push({ event, ...data }));
+  await waitFor(
+    () => events.some((event) => event.toolCall?.name === "GoalComplete" && event.toolCall.status === "queued"),
+    30_000,
+    "the streamed GoalComplete call to appear while the response is held open",
+  );
+  const replaced = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/commands`), { command: "/goal GOAL RACE replacement target" });
+  check("replacing the goal mid-response returns no start message",
+    replaced.status === 200 && replaced.body.message === undefined);
+  await finished;
+
+  const snapshot = await sessionSnapshot(amber, sessionId);
+  const calls = snapshot.session.messages.flatMap((message) => message.toolCalls ?? [])
+    .filter((call) => call.name === "GoalComplete");
+  check("the stale GoalComplete was rejected without clearing the replacement",
+    calls.length === 2 && calls[0].status === "error" && calls[0].output.includes("replaced") && calls[1].status === "complete",
+    JSON.stringify(calls.map((call) => [call.status, call.output?.slice(0, 40)])));
+  check("the replacement goal drove its own reminder",
+    events.some((event) => event.event === "user_message" && event.message?.content === replacement));
+  check("the race scenario finished with no goal remaining",
+    snapshot.session.goal === undefined
+      && snapshot.session.messages.filter((message) => message.role === "assistant").at(-1)?.content === "race scenario finished");
+}
+
 async function writeBrowserStubs(runDirectory) {
   // A stub on PATH records any browser launch the server attempts, so the run
   // can prove that e2e mode opens no window. Covers the linux and darwin openers.
@@ -1373,6 +1554,9 @@ try {
   await runDisconnectedClientScenario(mock, amber);
   await runTerminalToolCompactionScenario(mock, amber);
   await runRedundantManualCompactionScenario(mock, amber);
+  await runGoalScenario(mock, amber);
+  await runLiveGoalCommandScenario(mock, amber);
+  await runGoalReplacementRaceScenario(mock, amber);
 
   // The queue endpoint rejects an idle session.
   const idle = await postJson(amberUrl(amber.port, `/api/sessions/${multi.sessionId}/queued-message`), {
