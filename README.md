@@ -1,5 +1,8 @@
 # Amber Agent - Claude code compatible web CLI
-<img width="auto" height="633" alt="amber_gold" src="https://github.com/user-attachments/assets/657cf2c9-17a8-4e07-9fc1-2e77daf409f2" />
+
+### Light+ Snake Demo
+<img width="1120" height="716" alt="amber_light_plus_demo" src="https://github.com/user-attachments/assets/a97cdddb-f1bd-4be6-8b53-ead52c509c38" />
+
 I built Amber because I wanted a coding agent that felt like a terminal, but with a browser UI to take advantage of linking. Also Claude Code has a serious amount of bloat that I wanted to cut out.
 
 So I reverse-engineered Claude Code and rebuilt it from scratch as a minimal web CLI, with prompt-accurate reproduction of the workflow.
@@ -12,11 +15,15 @@ What makes it different:
 * Only 4 runtime npm dependencies — **diff**, **markdown-it**, **smol-toml**, and **yaml**. No framework, no database, no bloat.
 * Easily configurable sub-agents. You can even **customize the model per each agent.**
 * Claude Code, rebuilt. **Reverse-engineered from Claude Code's behavior**, reproducing the prompt flow accurately while stripping it down to a lightweight tool.
+* Supports **Claude Code Plugins**
 
 ## Themes 
 It supports 4 themes out of the box. `light+` follows the VS Code Light+ palette; the other alternate themes are shown below.
-### Theme = hacker
 
+### Theme = Amber
+<img width="auto" height="633" alt="amber_gold" src="https://github.com/user-attachments/assets/657cf2c9-17a8-4e07-9fc1-2e77daf409f2" />
+
+### Theme = hacker
 <img width="auto" height="633" alt="amber_hacker" src="https://github.com/user-attachments/assets/802655e8-bdb4-4445-8a1b-f5b75f6d3489" />
 
 ### Theme = light
@@ -63,49 +70,6 @@ Open Settings with the gear beside the selected model. The modal is the primary 
 - Editable API provider and per-model override lists
 - Editable agent definitions, prompts, tool access, model/thinking overrides, and compaction
 - OpenAI Codex login and connection status
-
-The UI regenerates the TOML file, so hand-written formatting and comments are not preserved. Every save is validated and written atomically before Amber reloads its theme, provider catalog, model defaults, and agents. If startup configuration is invalid, the modal remains open until a working configuration is saved (and a default Codex provider is connected).
-
-API-key providers use either the **Anthropic Messages** or **OpenAI Responses** protocol and default to a 200,000-token compaction threshold. Both protocols discover available models from **/v1/models**. OpenAI-protocol providers prefer the Responses API and automatically fall back to **Chat Completions** for compatible local servers such as LM Studio, Ollama, vLLM, and llama.cpp. OpenAI provider/model ids may contain slashes, so OpenRouter-style backends work.
-
-Each response is capped at 32,000 output tokens. Reasoning models count their reasoning against that cap, so a model that deliberates at length can be cut off mid-thought with "Ran out of tokens." Raise the cap per provider (or per model) with **max_output_tokens**; it is sent as `max_tokens` on Anthropic Messages and Chat Completions and as `max_output_tokens` on OpenAI Responses:
-
-```toml
-[providers.deepseek]
-api = "openai"
-auth_key = "<INSERT_DEEPSEEK_KEY_HERE>"
-auth_url = "https://api.deepseek.com"
-default_model = "deepseek-flash"
-max_output_tokens = 65536 # optional; defaults to 32000
-```
-
-Agent model precedence is the per-agent model override, then the default agent model within the default agent provider, then that provider's default model. Without agent defaults, agents inherit the session model. An agent thinking-level override takes precedence over the selected model's level. Agent auto-compaction is opt-in.
-
-### ChatGPT Plus/Pro OAuth for OpenAI Codex
-
-Amber can use a ChatGPT Plus/Pro subscription through OpenAI's Codex OAuth flow. **Login with Codex** creates and immediately saves this preset, makes it the default provider, and starts browser authentication:
-
-```toml
-default_provider = "openai-codex"
-
-[providers.openai-codex]
-api = "openai"
-auth = "openai-codex"
-# auth_url defaults to https://chatgpt.com/backend-api
-thinking_level = "high"
-compact_tokens = 250000
-```
-
-After login, Amber discovers the available Codex models and uses the first model as the default unless you select another one.
-
-The Codex provider card shows connection status and provides both authentication methods:
-
-- **Browser login** — Authorization Code + PKCE through `auth.openai.com`, with a state-validated callback on `localhost:1455`. Remote sessions can paste the final redirect URL or authorization code.
-- **Device code** — displays a code for `https://auth.openai.com/codex/device` and waits for authorization.
-
-Amber supports one Codex OAuth provider. Removing it from Settings also disconnects and deletes its stored ChatGPT credential.
-
-Amber uses OpenAI Codex's public native-client ID and sends `originator=amber`. OAuth credentials are stored in **~/.amber/auth.json** with user-only permissions. Access tokens are refreshed automatically when fewer than five minutes remain; refreshes are serialized so concurrent requests cannot overwrite a rotated refresh token. The file contains plaintext access and refresh tokens, so protect access to your user account and home directory.
 
 ## Instructions in **AGENTS.md**
 
