@@ -270,6 +270,9 @@ function planResponse(payload) {
   if (firstText.includes("DELETE DURING COMPACTION")) {
     return { text: "ready to compact" };
   }
+  if (firstText.includes("MANUAL COMPACT OBSERVER")) {
+    return { text: "ready to compact" };
+  }
   // A "DISTINCT" prompt issues one differently-input bash call per round, so
   // the tool-loop detector lets the run finish on its own.
   if (firstText.includes("DISTINCT")) {
@@ -1306,6 +1309,53 @@ async function runRedundantManualCompactionScenario(mock, amber) {
     snapshot.session.messages.some((message) => message.content === "continued after automatic compaction"));
 }
 
+/**
+ * A manual /compact registers its run only after the command request arrives,
+ * so a client that subscribes before then is told the session is idle and the
+ * observer stream ends. The client must attach once the snapshot reports the
+ * run, and from there the live compaction events arrive.
+ */
+async function runManualCompactionObserverScenario(mock, amber) {
+  console.log("\n== manual compaction observed after its run registers");
+  mock.reset();
+  const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
+    name: "manual compaction observer",
+    path: tmpdir(),
+  });
+  const sessionId = body.session.id;
+  await readStream(await startSessionStream(amber, sessionId, "MANUAL COMPACT OBSERVER"), () => undefined);
+
+  mock.delayNextCompaction(1_500);
+  const compactRequest = postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/commands`), { command: "/compact" });
+  await waitFor(
+    async () => Boolean((await sessionSnapshot(amber, sessionId)).compaction),
+    10_000,
+    "the manual compaction to register",
+  );
+
+  const events = [];
+  const observer = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/events`));
+  if (!observer.ok) throw new Error(`observer stream failed: ${await observer.text()}`);
+  const observerRead = readStream(observer, (event, data) => events.push({ event, ...data }));
+
+  const result = await compactRequest;
+  check("the manual compaction command succeeds", result.status === 200, JSON.stringify(result));
+  check("the command response carries the compacted banner",
+    result.body.session?.messages?.some((message) => message.kind === "compact-banner"),
+    JSON.stringify(result.body.session?.messages?.map((message) => message.kind)));
+  await waitFor(
+    () => events.some((event) => event.event === "done"),
+    30_000,
+    "the observer to see the manual compaction finish",
+  );
+  await observerRead.catch(() => undefined);
+  check("a late observer still sees live compaction progress",
+    events.some((event) => event.event === "compaction_progress"),
+    JSON.stringify(events.map((event) => event.event)));
+  check("a late observer sees the compaction complete",
+    events.some((event) => event.event === "compaction_complete"));
+}
+
 function goalReminder(goal) {
   return `We have a goal set, before you stop make sure that this goal has been met. Once it has been met, run GoalComplete to clear the goal. Goal: "${goal}"`;
 }
@@ -1562,6 +1612,7 @@ try {
   await runDisconnectedClientScenario(mock, amber);
   await runTerminalToolCompactionScenario(mock, amber);
   await runRedundantManualCompactionScenario(mock, amber);
+  await runManualCompactionObserverScenario(mock, amber);
   await runGoalScenario(mock, amber);
   await runLiveGoalCommandScenario(mock, amber);
   await runGoalReplacementRaceScenario(mock, amber);

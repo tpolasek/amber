@@ -907,6 +907,9 @@ interface CompactProgress { message: Message; element: HTMLElement }
 /** Tracks the in-transcript progress banner shared by /compact and server auto-compaction. */
 let compactProgress: CompactProgress | null = null;
 
+/** Session with a manual /compact command whose request is still in flight. */
+let compactCommandSessionId: string | null = null;
+
 /** Returns the live progress banner, creating or re-attaching to a rendered one as needed. */
 function ensureCompactProgress(session: Session): CompactProgress {
   const rendered = session.messages.find((message) => message.kind === "compact-banner" && message.status === "streaming");
@@ -1468,14 +1471,29 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
   if (goalStartMessage !== undefined) await sendMessage(goalStartMessage);
 }
 
+/**
+ * Opens the observe stream once the server-side compaction run registers.
+ * Subscribing first races the still-idle session, which ends the stream before
+ * any compaction_* event is broadcast.
+ */
+async function observeCompactionStart(sessionId: string): Promise<void> {
+  for (let attempt = 0; compactCommandSessionId === sessionId && attempt < 20; attempt += 1) {
+    const snapshot = await api<SessionSnapshot>(`/api/sessions/${sessionId}`).catch(() => null);
+    if (compactCommandSessionId !== sessionId || state.session?.id !== sessionId) return;
+    if (snapshot?.compaction) break;
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+  }
+  if (compactCommandSessionId === sessionId && state.session?.id === sessionId) syncSessionRunUpdates();
+}
+
 async function runCompactCommand(command: string, clearComposer = true): Promise<void> {
   const session = state.session;
   if (!session || state.streaming) return;
   if (clearComposer) clearPrompt();
   setStreaming(true);
   compactProgress = ensureCompactProgress(session);
-  // Open the /events observe stream; progress arrives via compaction_* broadcasts.
-  syncSessionRunUpdates();
+  compactCommandSessionId = session.id;
+  void observeCompactionStart(session.id);
 
   try {
     const result = await api<{ command: "compact"; session: Session; hasMore: boolean }>(`/api/sessions/${session.id}/commands`, {
@@ -1491,6 +1509,7 @@ async function runCompactCommand(command: string, clearComposer = true): Promise
   } finally {
     // The banner lifecycle is finished by the event/response render.
     compactProgress = null;
+    compactCommandSessionId = null;
     if (state.controller === null) setStreaming(false);
     sendQueuedMessage(session.id);
     await loadSessionList();
