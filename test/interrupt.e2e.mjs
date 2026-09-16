@@ -1340,9 +1340,11 @@ async function runManualCompactionObserverScenario(mock, amber) {
 
   const result = await compactRequest;
   check("the manual compaction command succeeds", result.status === 200, JSON.stringify(result));
-  check("the command response carries the compacted banner",
-    result.body.session?.messages?.some((message) => message.kind === "compact-banner"),
+  const banner = result.body.session?.messages?.find((message) => message.kind === "compact-banner");
+  check("the command response carries the compacted banner", Boolean(banner),
     JSON.stringify(result.body.session?.messages?.map((message) => message.kind)));
+  check("the banner records the summary its disclosure renders",
+    banner?.compactSummary === "Summary:\ncompacted context", JSON.stringify(banner?.compactSummary));
   await waitFor(
     () => events.some((event) => event.event === "done"),
     30_000,

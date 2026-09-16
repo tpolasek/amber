@@ -32,6 +32,14 @@ export function formatTime(value: string): string {
   return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 }
 
+/** Disclosure label for a compact banner's recorded summary, like a tool's output line. */
+export function formatCompactionResultLabel(summary: string): string {
+  const lines = summary.split("\n").length;
+  const tokens = Math.ceil(summary.length / 4);
+  // en-US grouping matches the banner's own token counts, which are rendered server-side.
+  return `Compaction result · ${lines.toLocaleString("en-US")} ${lines === 1 ? "line" : "lines"} · ≈${tokens.toLocaleString("en-US")} tokens`;
+}
+
 export function relativeTime(value: string, now = Date.now()): string {
   const seconds = Math.round((new Date(value).getTime() - now) / 1000);
   const unit: Intl.RelativeTimeFormatUnit = Math.abs(seconds) < 60

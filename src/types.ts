@@ -97,6 +97,8 @@ export interface Message {
   images?: MessageImage[];
   /** Skill name for hidden `kind: "skill"` messages. */
   skillName?: string;
+  /** Summary a `kind: "compact-banner"` message recorded, shown in its disclosure. */
+  compactSummary?: string;
 }
 
 export interface SessionCompaction {

@@ -2342,6 +2342,7 @@ async function compactSession(
     createdAt: now,
     status: "complete",
     kind: "compact-banner",
+    compactSummary: summary,
   };
   session.messages.push(compactionBanner);
   await store.appendMessages(session, [compactionBanner]);

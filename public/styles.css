@@ -244,10 +244,18 @@ button { color: inherit; }
 .fork-banner .message-content::before { content: "◆ "; }
 .fork-banner .message-content a { color: var(--active-ink); text-decoration-color: var(--active-link-underline); font-weight: 800; }
 .fork-banner .message-content a:hover { color: var(--absolute-black); }
-.compact-banner { display: block; padding-top: 16px; }
+.compact-banner { padding-top: 16px; }
 .compact-banner .message-rail, .compact-banner header { display: none; }
-.compact-banner .message-content { padding: 9px 13px; border: 1px solid var(--compact-border); background: var(--bg-compact); color: var(--compact-text); font-size: 12px; font-weight: 700; letter-spacing: .04em; }
+/* Without the rail the grid would place the main column in the 60px track. */
+.compact-banner .message-main { grid-column: 2; }
+/* Spans the main column like .message-tools, instead of .message-content's 104ch. */
+.compact-banner .message-content { max-width: none; padding: 9px 13px; border: 1px solid var(--compact-border); background: var(--bg-compact); color: var(--compact-text); font-size: 12px; font-weight: 700; letter-spacing: .04em; }
 .compact-banner .message-content::before { content: "◇ "; }
+.compact-result { margin-top: 7px; border-top-color: var(--compact-border); }
+/* --fg-disclosure is too dim on --bg-compact; the banner's own ink stays readable. */
+.compact-result summary { padding: 5px 0; color: var(--compact-text); font-weight: 400; letter-spacing: .04em; }
+/* Overrides .message-content pre, whose rail-style border and indent do not belong here. */
+.compact-result .tool-output { margin: 0; padding: 0 0 2px; border: 0; background: transparent; }
 .cursor-block { display: inline-block; width: 7px; height: 13px; margin-left: 3px; vertical-align: -2px; background: var(--amber); animation: blink .8s steps(1) infinite; box-shadow: 0 0 7px var(--amber); }
 
 .composer-shell { grid-row: 4; position: relative; z-index: 6; padding: 8px var(--content-gutter) 10px; background: var(--surface); }

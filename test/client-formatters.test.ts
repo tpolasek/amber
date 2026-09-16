@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   compactHeaderPath,
+  formatCompactionResultLabel,
   formatDuration,
   formatTokenCountInThousands,
   GIT_COMMAND_SUGGESTIONS,
@@ -55,6 +56,12 @@ test("formats client counts, durations, runtimes, and errors", () => {
   assert.equal(taskRuntime({ startedAt: "2026-01-01T00:00:00.000Z", durationMs: 500 }, 0), 500);
   assert.equal(messageFrom(new Error("Broken")), "Broken");
   assert.equal(messageFrom("Broken"), "Something went wrong");
+});
+
+test("labels the compaction result disclosure with its size", () => {
+  assert.equal(formatCompactionResultLabel("summary"), "Compaction result · 1 line · ≈2 tokens");
+  assert.equal(formatCompactionResultLabel("a\nb\nc"), "Compaction result · 3 lines · ≈2 tokens");
+  assert.equal(formatCompactionResultLabel("x".repeat(4_000)), "Compaction result · 1 line · ≈1,000 tokens");
 });
 
 test("suggests supported /git parameters as the command is typed", () => {

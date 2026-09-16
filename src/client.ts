@@ -4,6 +4,7 @@ import {
   StreamingThinkingReveal,
 } from "./streaming-thinking.js";
 import {
+  formatCompactionResultLabel,
   formatTime,
   gitCommandSuggestions,
   goalButtonLabel,
@@ -1846,12 +1847,15 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
     return;
   }
   if (message.kind === "compact-banner") {
+    const expanded = content.querySelector<HTMLDetailsElement>(".compact-result")?.open ?? false;
     content.replaceChildren(document.createTextNode(message.content));
     if (message.status === "streaming") {
       const cursor = document.createElement("span");
       cursor.className = "cursor-block";
       content.append(cursor);
+      return;
     }
+    if (message.compactSummary) content.append(compactResultDetails(message.compactSummary, expanded));
     return;
   }
   content.innerHTML = markdown.render(message.content) + (message.status === "streaming" ? '<span class="cursor-block"></span>' : "");
@@ -1859,6 +1863,20 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
     link.target = "_blank";
     link.rel = "noopener noreferrer";
   });
+}
+
+/** The summary a compact banner recorded, disclosed like a tool's output. */
+function compactResultDetails(summary: string, expanded: boolean): HTMLDetailsElement {
+  const details = document.createElement("details");
+  details.className = "tool-output-details compact-result";
+  details.open = expanded;
+  const label = document.createElement("summary");
+  label.textContent = formatCompactionResultLabel(summary);
+  const output = document.createElement("pre");
+  output.className = "tool-output";
+  output.textContent = summary;
+  details.append(label, output);
+  return details;
 }
 
 function updateStreamingThinkingReveal(
