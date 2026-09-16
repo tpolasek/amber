@@ -79,4 +79,7 @@ export interface SessionSnapshot {
 }
 export interface QuestionSelection { labels: Set<string>; other: string; otherSelected: boolean; focusIndex: number }
 export interface DirectoryCompletion { value: string; absolutePath: string; kind?: "directory" | "file" }
-export interface MarkdownRenderer { render(source: string): string }
+export interface MarkdownRenderer {
+  render(source: string): string;
+  linkify: { set(options: { fuzzyLink?: boolean; fuzzyEmail?: boolean; fuzzyIP?: boolean }): unknown };
+}
