@@ -5,7 +5,7 @@ import { basename, dirname, join, relative } from "node:path";
 import { parse as parseShellArguments } from "./shell-quote.js";
 import ignoreFactory from "./ignore.js";
 import { parse as parseYaml } from "yaml";
-import { BashExecutor, DEFAULT_BASH_TIMEOUT_MS } from "./bash-tool.js";
+import { BashExecutor, DEFAULT_BASH_TIMEOUT_S } from "./bash-tool.js";
 import { enabledPluginBundles } from "./plugins.js";
 import type { ThinkingLevel, ToolDefinition } from "./types.js";
 
@@ -754,13 +754,13 @@ async function runSkillShell(
 
 async function runBash(command: string, options: SkillExpansionOptions): Promise<string> {
   const result = await new BashExecutor().run(
-    { command, workingDirectory: options.cwd, timeoutMs: DEFAULT_BASH_TIMEOUT_MS },
+    { command, workingDirectory: options.cwd, timeoutMs: DEFAULT_BASH_TIMEOUT_S * 1_000 },
     [options.cwd],
     options.signal,
     { onRunning: () => undefined, onOutput: () => undefined },
   );
   if (result.status === "timed_out") {
-    throw new Error(`Shell command timed out after ${DEFAULT_BASH_TIMEOUT_MS} ms: ${command}`);
+    throw new Error(`Shell command timed out after ${DEFAULT_BASH_TIMEOUT_S} seconds: ${command}`);
   }
   if (result.status !== "complete") {
     throw new Error(`Shell command failed: ${result.output || `exit ${result.exitCode ?? "unknown"}`}`);
@@ -795,8 +795,8 @@ async function runPowerShell(command: string, options: SkillExpansionOptions): P
     });
     const timeout = setTimeout(() => {
       child.kill();
-      reject(new Error(`Shell command timed out after ${DEFAULT_BASH_TIMEOUT_MS} ms: ${command}`));
-    }, DEFAULT_BASH_TIMEOUT_MS);
+      reject(new Error(`Shell command timed out after ${DEFAULT_BASH_TIMEOUT_S} seconds: ${command}`));
+    }, DEFAULT_BASH_TIMEOUT_S * 1_000);
     child.on("close", () => clearTimeout(timeout));
   });
   return output;

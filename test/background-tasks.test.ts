@@ -187,8 +187,8 @@ test("task tool parsers use Claude Code argument conventions", () => {
   assert.match(TASK_OUTPUT_TOOL.description, /Numeric-string planning task IDs.*not accepted/);
   assert.match(TASK_STOP_TOOL.description, /accepts only b-prefixed IDs/);
   assert.match(TASK_STOP_TOOL.description, /TaskStop cannot stop agents/);
-  assert.deepEqual(parseTaskOutputInput({ task_id: "b123", block: false, timeout: 500 }), {
-    taskId: "b123", block: false, timeoutMs: 500,
+  assert.deepEqual(parseTaskOutputInput({ task_id: "b123", block: false, timeout: 60 }), {
+    taskId: "b123", block: false, timeoutMs: 60_000,
   });
   assert.deepEqual(parseTaskOutputInput({ task_id: "b123" }), {
     taskId: "b123", block: true, timeoutMs: 30_000,
@@ -196,7 +196,7 @@ test("task tool parsers use Claude Code argument conventions", () => {
   assert.equal(parseTaskStopInput({ task_id: "b123" }), "b123");
   assert.equal(parseTaskStopInput({ shell_id: "legacy" }), "legacy");
   assert.throws(() => parseTaskOutputInput({ task_id: "b123", timeout: -1 }), /timeout/);
-  assert.throws(() => parseTaskOutputInput({ task_id: "b123", timeout: 290_001 }), /from 0 to 290000/);
+  assert.throws(() => parseTaskOutputInput({ task_id: "b123", timeout: 291 }), /one of 5, 30, 60, 120, 240, 290 seconds/);
   assert.throws(() => parseTaskStopInput({}), /task_id/);
 });
 

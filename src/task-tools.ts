@@ -2,7 +2,7 @@ import type { ToolDefinition } from "./types.js";
 import type { BackgroundTask, BackgroundTaskManager } from "./background-tasks.js";
 import { taskNotFoundError } from "./task-errors.js";
 
-const MAX_TASK_OUTPUT_WAIT_MS = 290_000;
+const TASK_OUTPUT_WAIT_TIMES_S = [5, 30, 60, 120, 240, 290];
 
 export {
   PLANNING_TASK_TOOLS,
@@ -46,7 +46,7 @@ export const TASK_OUTPUT_TOOL: ToolDefinition = {
     properties: {
       task_id: { type: "string", description: "A b-prefixed background Bash ID or linked background-agent session ID. Numeric planning task IDs are not accepted." },
       block: { type: "boolean", default: true, description: "Whether to wait for completion. Defaults to true." },
-      timeout: { type: "integer", minimum: 0, maximum: MAX_TASK_OUTPUT_WAIT_MS, default: 30_000, description: "Maximum wait time in milliseconds. Defaults to 30000." },
+      timeout: { type: "integer", enum: TASK_OUTPUT_WAIT_TIMES_S, default: 30, description: "Maximum wait time in seconds. Defaults to 30." },
     },
     required: ["task_id"],
     additionalProperties: false,
@@ -97,11 +97,11 @@ export interface BackgroundAgentSource {
 export function parseTaskOutputInput(input: Record<string, unknown>): TaskOutputInput {
   if (typeof input.task_id !== "string" || !input.task_id.trim()) throw new Error("TaskOutput task_id is required");
   if (input.block !== undefined && typeof input.block !== "boolean") throw new Error("TaskOutput block must be a boolean");
-  const timeout = input.timeout ?? 30_000;
-  if (!Number.isInteger(timeout) || (timeout as number) < 0 || (timeout as number) > MAX_TASK_OUTPUT_WAIT_MS) {
-    throw new Error(`TaskOutput timeout must be an integer from 0 to ${MAX_TASK_OUTPUT_WAIT_MS}`);
+  const timeout = input.timeout ?? 30;
+  if (!Number.isInteger(timeout) || !TASK_OUTPUT_WAIT_TIMES_S.includes(timeout as number)) {
+    throw new Error(`TaskOutput timeout must be one of ${TASK_OUTPUT_WAIT_TIMES_S.join(", ")} seconds`);
   }
-  return { taskId: input.task_id.trim(), block: input.block !== false, timeoutMs: timeout as number };
+  return { taskId: input.task_id.trim(), block: input.block !== false, timeoutMs: (timeout as number) * 1_000 };
 }
 
 export function parseTaskStopInput(input: Record<string, unknown>): string {

@@ -23,20 +23,22 @@ test("defines the Bash tool and parses its input with the default timeout", () =
     command: "pwd", timeoutMs: 120_000, runInBackground: false,
   });
   assert.deepEqual(parseBashInput({
-    command: "npm test", timeout: 5_000, description: "Run tests", run_in_background: true,
+    command: "npm test", timeout: 600, description: "Run tests", run_in_background: true,
   }), {
-    command: "npm test", timeoutMs: 5_000, description: "Run tests", runInBackground: true,
+    command: "npm test", timeoutMs: 600_000, description: "Run tests", runInBackground: true,
   });
-  assert.throws(() => parseBashInput({ command: "pwd", timeout: 50 }), /timeout/);
+  assert.throws(() => parseBashInput({ command: "pwd", timeout: 0 }), /timeout/);
   assert.throws(() => parseBashInput({ command: "" }), /non-empty command/);
 });
 
 test("caps foreground Bash timeout below the read-cache TTL while allowing long background runs", () => {
-  assert.throws(() => parseBashInput({ command: "pwd", timeout: 290_001 }), /from 100 to 290000/);
-  assert.deepEqual(parseBashInput({ command: "pwd", timeout: 290_000 }), {
+  assert.throws(() => parseBashInput({ command: "pwd", timeout: 291 }), /one of 30, 60, 120, 240, 290 seconds for foreground/);
+  assert.throws(() => parseBashInput({ command: "pwd", timeout: 600 }), /one of 30, 60, 120, 240, 290 seconds for foreground/);
+  assert.deepEqual(parseBashInput({ command: "pwd", timeout: 290 }), {
     command: "pwd", timeoutMs: 290_000, runInBackground: false,
   });
-  assert.deepEqual(parseBashInput({ command: "pwd", timeout: 1_200_000, run_in_background: true }), {
+  assert.throws(() => parseBashInput({ command: "pwd", timeout: 30, run_in_background: true }), /one of 60, 120, 240, 600, 1200 seconds for background/);
+  assert.deepEqual(parseBashInput({ command: "pwd", timeout: 1_200, run_in_background: true }), {
     command: "pwd", timeoutMs: 1_200_000, runInBackground: true,
   });
 });
