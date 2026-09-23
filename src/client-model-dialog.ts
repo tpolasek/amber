@@ -1,4 +1,5 @@
 import { api, notify } from "./client-api.js";
+import { refreshConfig } from "./client-auth.js";
 import {
   effectiveModelKey,
   effectiveThinkingLevel,
@@ -34,6 +35,21 @@ export function openModelDialog(): void {
   elements.modelDialog.hidden = false;
   elements.modelSearch.focus();
   elements.modelList.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
+  void refreshModels();
+}
+
+/** Re-fetches the config (re-discovering models server-side) and re-renders the open picker. */
+async function refreshModels(): Promise<void> {
+  const previous = filteredModels()[modelDialogSelection];
+  await refreshConfig(true);
+  if (elements.modelDialog.hidden || !state.config || !state.session) return;
+  const models = filteredModels();
+  const targetKey = previous && models.some((model) => model.key === previous.key)
+    ? previous.key
+    : effectiveModelKey(state.session, state.config);
+  const index = models.findIndex((model) => model.key === targetKey);
+  modelDialogSelection = index >= 0 ? index : 0;
+  renderModelList();
 }
 
 export function closeModelDialog(): void {

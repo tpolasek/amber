@@ -257,7 +257,7 @@ export function createOpenAICodexDriver(authResolver: OpenAIAuthResolver): Provi
       const url = new URL(codexApiUrl(connection.baseUrl, "models"));
       // The backend gates models by minimal_client_version against this value,
       // so it must track a current Codex CLI release rather than Amber's own version.
-      url.searchParams.set("client_version", codexClientVersion());
+      url.searchParams.set("client_version", await codexClientVersion(fetcher));
       const response = await fetcher(url, {
         headers: codexHeaders(auth),
       });
@@ -303,11 +303,36 @@ function codexApiUrl(baseUrl: string, path: string): string {
 }
 
 // Codex CLI release the models request identifies as. Overridable for testing
-// or when the backend requires a newer minimal_client_version.
-const CODEX_CLIENT_VERSION = "0.150.1";
+// or when the backend requires a newer minimal_client_version. The latest
+// release is resolved from GitHub so newly gated models appear without an
+// Amber change; this constant is only the fallback.
+const CODEX_CLIENT_VERSION = "0.156.1";
+const CODEX_VERSION_TTL_MS = 6 * 60 * 60 * 1000;
+let codexVersionCache: { version: string; resolvedAt: number } | undefined;
 
-function codexClientVersion(): string {
-  return process.env.AMBER_CODEX_CLIENT_VERSION ?? CODEX_CLIENT_VERSION;
+async function codexClientVersion(fetcher: typeof fetch): Promise<string> {
+  const override = process.env.AMBER_CODEX_CLIENT_VERSION;
+  if (override) return override;
+  if (codexVersionCache && Date.now() - codexVersionCache.resolvedAt < CODEX_VERSION_TTL_MS) {
+    return codexVersionCache.version;
+  }
+  const resolved = await resolveLatestCodexVersion(fetcher);
+  if (resolved) codexVersionCache = { version: resolved, resolvedAt: Date.now() };
+  return resolved ?? CODEX_CLIENT_VERSION;
+}
+
+async function resolveLatestCodexVersion(fetcher: typeof fetch): Promise<string | undefined> {
+  try {
+    const response = await fetcher("https://api.github.com/repos/openai/codex/releases/latest", {
+      headers: { accept: "application/vnd.github+json" },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) return undefined;
+    const tag = ((await response.json()) as { tag_name?: unknown }).tag_name;
+    return typeof tag === "string" ? tag.match(/^rust-v(\d+\.\d+\.\d+)$/)?.[1] : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function codexHeaders(auth: ResolvedOpenAIAuth): Record<string, string> {

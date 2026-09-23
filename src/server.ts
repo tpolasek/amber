@@ -193,6 +193,7 @@ const settingsPath = join(amberDirectory, "settings.toml");
 let settings: AmberSettings | undefined;
 let configurationError: string | undefined;
 let providerCatalog: ProviderCatalog | undefined;
+let providerCatalogLoadedAt = 0;
 let provider: LlmProvider | undefined;
 let agentDefinitions: AgentDefinition[] = [];
 const loginCatalogActivations = new Map<string, Promise<void>>();
@@ -275,6 +276,10 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 
   if (method === "GET" && url.pathname === "/api/config") {
+    // The model picker awaits a refreshed catalog; other callers get the cached
+    // one immediately while discovery runs in the background.
+    if (url.searchParams.get("refresh") === "1") await refreshStaleModelCatalog();
+    else void refreshStaleModelCatalog();
     return json(response, 200, await configPayload());
   }
   if (method === "GET" && url.pathname === "/api/settings") {
@@ -2755,6 +2760,7 @@ async function reloadSettingsFromDisk(): Promise<void> {
 function activateConfiguration(nextSettings: AmberSettings, nextCatalog: ProviderCatalog): void {
   settings = nextSettings;
   providerCatalog = nextCatalog;
+  providerCatalogLoadedAt = Date.now();
   provider = nextCatalog.provider(undefined);
   agentDefinitions = nextSettings.agents;
   claudeCodeTools = createClaudeCodeTools(agentDefinitions);
@@ -2775,6 +2781,31 @@ async function loadProviderCatalog(candidate: AmberSettings): Promise<ProviderCa
   return ProviderCatalog.load(candidate, fetch, {
     openAICodexAuth: (signal) => openAICodexAuth.resolveAuth(signal),
   });
+}
+
+const MODEL_CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
+let modelCatalogRefresh: Promise<void> | undefined;
+
+/** Re-discovers models when the in-memory catalog is stale, keeping the current catalog on failure. */
+async function refreshStaleModelCatalog(): Promise<void> {
+  const catalogSettings = settings;
+  if (!catalogSettings || !providerCatalog) return;
+  if (Date.now() - providerCatalogLoadedAt < MODEL_CATALOG_TTL_MS) return;
+  if (!modelCatalogRefresh) {
+    modelCatalogRefresh = (async () => {
+      try {
+        const nextCatalog = await loadProviderCatalog(catalogSettings);
+        validateAgentModels(nextCatalog, catalogSettings.agents);
+        // Settings may have been re-saved while discovery was in flight; do not revert them.
+        if (settings === catalogSettings) activateConfiguration(catalogSettings, nextCatalog);
+      } catch (error) {
+        console.error(`Model catalog refresh failed: ${errorMessage(error)}`);
+      } finally {
+        modelCatalogRefresh = undefined;
+      }
+    })();
+  }
+  await modelCatalogRefresh;
 }
 
 function validateAgentModels(catalog: ProviderCatalog, definitions: AgentDefinition[]): void {

@@ -367,6 +367,24 @@ test("discovers supported Codex models with OAuth request headers", async () => 
   ]);
 });
 
+test("identifies as the latest Codex CLI release published on GitHub", async () => {
+  const requested: string[] = [];
+  const driver = createOpenAICodexDriver(async () => ({ accessToken: "access", accountId: "account" }));
+  await driver.discoverModels({
+    name: "OpenAI Codex",
+    authKey: "",
+    baseUrl: "https://chatgpt.com/backend-api",
+  }, async (input) => {
+    requested.push(String(input));
+    if (String(input).includes("api.github.com")) return Response.json({ tag_name: "rust-v0.157.0" });
+    return Response.json({ models: [{ slug: "gpt-codex", visibility: "list" }] });
+  });
+
+  const modelsUrl = requested.find((url) => url.includes("backend-api/codex/models"));
+  assert.ok(modelsUrl, "models endpoint was not requested");
+  assert.equal(new URL(modelsUrl).searchParams.get("client_version"), "0.157.0");
+});
+
 test("can disable OpenAI reasoning for non-reasoning models", async (context) => {
   let requestBody: Record<string, unknown> = {};
   const gateway = createServer(async (request, response) => {

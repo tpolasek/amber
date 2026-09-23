@@ -251,9 +251,9 @@ export async function completeAuthLogin(): Promise<void> {
   notify("OpenAI Codex connected");
 }
 
-export async function refreshConfig(): Promise<void> {
+export async function refreshConfig(refreshModels = false): Promise<void> {
   try {
-    state.config = await api<Config>("/api/config");
+    state.config = await api<Config>(refreshModels ? "/api/config?refresh=1" : "/api/config");
     document.documentElement.dataset.theme = state.config.theme;
     renderConfig();
   } catch {
