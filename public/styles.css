@@ -480,6 +480,16 @@ button { color: inherit; }
 .tasks-stop-button:hover { border-color: var(--error-text); background: var(--danger-a14); }
 .tasks-stop-button:disabled { opacity: .45; cursor: wait; }
 .git-dialog { width: min(940px, 100%); }
+.btw-dialog { width: min(760px, 100%); }
+.btw-dialog-body { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 120px; }
+.btw-form { display: flex; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--accent-a14); }
+.btw-form input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--amber-hot); font: 12px/1.4 var(--mono); }
+.btw-form input::placeholder { color: var(--fg-placeholder-alt); }
+.btw-answer { padding: 12px 14px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--amber-dim) transparent; }
+.btw-answer .btw-error { color: var(--error-muted); }
+.btw-progress { position: relative; height: 2px; margin-bottom: 12px; overflow: hidden; background: var(--amber-faint); }
+.btw-progress i { position: absolute; top: 0; left: 0; width: 40%; height: 100%; background: var(--amber); animation: btw-sweep 1.1s ease-in-out infinite; }
+@keyframes btw-sweep { 0% { left: -40%; } 100% { left: 100%; } }
 .git-dialog-tall { height: calc(100vh - 48px); max-height: calc(100vh - 48px); }
 .git-dialog-body { min-height: 0; padding: 10px 14px; }
 .git-dialog-tall .git-dialog-body { display: flex; flex-direction: column; }

@@ -125,5 +125,11 @@ export const elements = {
   planModeDecline: required<HTMLButtonElement>("plan-mode-decline"),
   planModeApprove: required<HTMLButtonElement>("plan-mode-approve"),
   planModeNewSession: required<HTMLButtonElement>("plan-mode-new-session"),
+  btwDialog: required<HTMLElement>("btw-dialog"),
+  btwForm: required<HTMLFormElement>("btw-form"),
+  btwQuestion: required<HTMLInputElement>("btw-question"),
+  btwAsk: required<HTMLButtonElement>("btw-ask"),
+  btwAnswer: required<HTMLElement>("btw-answer"),
+  btwClose: required<HTMLButtonElement>("btw-close"),
   toast: required<HTMLElement>("toast"),
 };

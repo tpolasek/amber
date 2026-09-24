@@ -67,6 +67,11 @@ import {
   submitPlanModeNewSessionDecision,
 } from "./client-plan-mode-dialog.js";
 import {
+  handleBtwDialogKeydown,
+  openBtwDialog,
+  wireBtwDialog,
+} from "./client-btw-dialog.js";
+import {
   closeTasksDialog,
   handleTasksDialogKeydown,
   openTasksDialog,
@@ -235,6 +240,7 @@ async function initialize(): Promise<void> {
 
 function wireEvents(): void {
   document.addEventListener("keydown", (event) => {
+    if (handleBtwDialogKeydown(event)) return;
     if (handleSettingsDialogKeydown(event)) return;
     if (handlePlanModeDialogKeydown(event)) return;
     if (handleNewSessionDialogKeydown(event)) return;
@@ -295,6 +301,7 @@ function wireEvents(): void {
   elements.gitDialog.addEventListener("click", (event) => {
     if (event.target === elements.gitDialog) closeGitDialog();
   });
+  wireBtwDialog();
   elements.goalButton.addEventListener("click", openGoalDialog);
   elements.goalClose.addEventListener("click", closeGoalDialog);
   elements.goalContinue.addEventListener("click", closeGoalDialog);
@@ -1417,6 +1424,11 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
   const session = state.session;
   const duringResponse = state.streaming;
   if (!session || (duringResponse && !builtInCommand(command)?.runsDuringResponse)) return;
+  if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/btw") {
+    if (clearComposer) clearPrompt();
+    openBtwDialog(command.slice(4).trim());
+    return;
+  }
   if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/compact") return runCompactCommand(command, clearComposer);
   if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/git") {
     const request = parseGitCommand(command);
@@ -2347,7 +2359,7 @@ function acceptDirectoryCompletion(directory: DirectoryCompletion): void {
 }
 
 function selectCommand(command: BuiltInCommand, execute: boolean): void {
-  const continuesTyping = command.name === "/add-dir" || command.name === "/cwd"
+  const continuesTyping = command.name === "/add-dir" || command.name === "/btw" || command.name === "/cwd"
     || command.name === "/git" || command.name === "/goal" || command.name === "/plugin";
   elements.prompt.value = continuesTyping ? `${command.name} ` : command.name;
   if (continuesTyping) updateCommandMenu();

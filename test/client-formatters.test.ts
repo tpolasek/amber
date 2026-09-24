@@ -24,9 +24,10 @@ import { BUILT_IN_COMMANDS, builtInCommand } from "../src/built-in-commands.js";
 test("classifies built-in commands that can run during a response", () => {
   assert.deepEqual(
     BUILT_IN_COMMANDS.filter((command) => command.runsDuringResponse).map((command) => command.name),
-    ["/add-dir", "/usage", "/goal", "/tasks"],
+    ["/add-dir", "/btw", "/usage", "/goal", "/tasks"],
   );
   assert.equal(builtInCommand(" /USAGE ")?.runsDuringResponse, true);
+  assert.equal(builtInCommand("/BTW what happened")?.name, "/btw");
   assert.equal(builtInCommand("/GOAL clear")?.name, "/goal");
   assert.equal(builtInCommand("/goal make the tests pass")?.runsDuringResponse, true);
   assert.equal(builtInCommand("/compact")?.runsDuringResponse, false);

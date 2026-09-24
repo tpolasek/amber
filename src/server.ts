@@ -145,6 +145,7 @@ import {
   chatModeSystemBlocks,
   parseChatModeToggleInput,
 } from "./chat-mode.js";
+import { btwSystemReminder, parseBtwInput } from "./btw.js";
 import type { LlmProvider, ThinkingLevel, ToolDefinition } from "./types.js";
 import type { Message, MessageImage, Session, SessionInvokedSkill, TokenUsage, ToolCall } from "./types.js";
 import { MAX_MESSAGE_BODY_BYTES, parseMessageImages, providerImageLimitError } from "./message-images.js";
@@ -621,6 +622,11 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     }
   }
 
+  const btwMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/btw$`));
+  if (method === "POST" && btwMatch?.[1]) {
+    return streamBtwAnswer(request, response, btwMatch[1]);
+  }
+
   const messageMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/messages$`));
   if (method === "GET" && messageMatch?.[1]) {
     const session = activeSessions.session(messageMatch[1]) ?? await store.get(messageMatch[1]);
@@ -898,6 +904,58 @@ async function runPrompt(request: IncomingMessage, response: ServerResponse): Pr
     if (!response.destroyed && !response.writableEnded) {
       json(response, 502, { error: errorMessage(error), sessionId: session.id });
     }
+  }
+}
+
+/**
+ * Streams a /btw side answer: the session's history plus the question, with no
+ * tools and nothing persisted — neither the question nor the answer enters the
+ * session log, so the main conversation is untouched. Safe to run while the
+ * session itself is streaming; only the live connection's lifetime is tracked.
+ */
+async function streamBtwAnswer(request: IncomingMessage, response: ServerResponse, sessionId: string): Promise<void> {
+  if (!providerCatalog) return configurationRequired(response);
+  let question: string;
+  try {
+    question = parseBtwInput(await readJson(request, MAX_MESSAGE_BODY_BYTES)).question;
+  } catch (error) {
+    return json(response, 400, { error: errorMessage(error) });
+  }
+  const session = activeSessions.session(sessionId) ?? await store.get(sessionId);
+  if (!session) return json(response, 404, { error: "Session not found" });
+  if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
+
+  response.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive",
+    "x-accel-buffering": "no",
+  });
+  // Closing the modal (or the tab) aborts the provider request with the stream.
+  const controller = new AbortController();
+  request.on("close", () => controller.abort());
+  try {
+    const provider = providerForSession(session);
+    const base = buildProviderHistory(session.messages, undefined, session.compaction, session.invokedSkills);
+    const history = injectClaudeCodeUserContext([...base, { role: "user", content: question }]);
+    const system = sessionSystemPrompt(session, sessionWorkingDirectory(session), provider.model);
+    const blocks = Array.isArray(system) ? [...system, btwSystemReminder()] : [
+      { type: "text" as const, text: system },
+      btwSystemReminder(),
+    ];
+    for await (const event of provider.stream(history, controller.signal, {
+      tools: [],
+      system: blocks,
+      ...(session.thinkingLevel !== undefined ? { thinkingLevel: session.thinkingLevel } : {}),
+    })) {
+      if (event.type === "delta") sendEvent(response, "delta", { text: event.text });
+      // No tools are advertised, so nothing else the provider emits has an effect.
+    }
+    sendEvent(response, "done", {});
+  } catch (error) {
+    sendEvent(response, "error", { error: errorMessage(error) });
+  } finally {
+    response.end();
   }
 }
 
