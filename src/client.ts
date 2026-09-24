@@ -32,7 +32,7 @@ import {
   renderContextMeter,
   renderHeader,
   renderModelStatus,
-  renderPlanMode,
+  renderModes,
   setBusy,
 } from "./client-chrome.js";
 import {
@@ -304,11 +304,14 @@ function wireEvents(): void {
   });
   elements.questionClose.addEventListener("click", () => void declineQuestions());
   elements.questionSubmit.addEventListener("click", advanceOrSubmitQuestions);
+  elements.modeChat.addEventListener("change", () => {
+    if (elements.modeChat.checked) void changeSessionMode("chat-mode", true, "Chat mode");
+  });
   elements.modePlan.addEventListener("change", () => {
-    if (elements.modePlan.checked) void changePlanMode(true);
+    if (elements.modePlan.checked) void changeSessionMode("plan-mode", true, "Plan mode");
   });
   elements.modeNormal.addEventListener("change", () => {
-    if (elements.modeNormal.checked) void changePlanMode(false);
+    if (elements.modeNormal.checked) void changeSessionMode(state.session?.chatMode ? "chat-mode" : "plan-mode", false);
   });
   elements.planModeClose.addEventListener("click", () => void cancelPlanModeRequest());
   elements.planModeDecline.addEventListener("click", () => void submitPlanModeDecision(false));
@@ -507,7 +510,7 @@ function openLandingDialog(): void {
   renderHistoryStatus();
   syncAgentSessionsForCurrentSession();
   renderModelStatus();
-  renderPlanMode();
+  renderModes();
   newSessionReturnsToLanding = false;
   elements.newSessionDialog.hidden = true;
   elements.sessionDialog.hidden = true;
@@ -1066,7 +1069,7 @@ function applySessionEvent(context: SessionStreamContext, event: string, data: u
     openPlanModeDialog(data as PlanModeRequest);
   } else if (event === "plan_mode_state") {
     context.session.planMode = (data as { planMode: SessionPlanMode }).planMode;
-    renderPlanMode();
+    renderModes();
   } else if (event === "continuation") {
     const message = (data as { assistantMessage: Message }).assistantMessage;
     context.session.messages.push(message);
@@ -1548,7 +1551,7 @@ function renderSession(): void {
   renderHeader();
   renderComposer();
   renderGoalButton();
-  renderPlanMode();
+  renderModes();
   renderPlanningTasks();
   syncAgentSessionsForCurrentSession();
   renderContextMeter();
@@ -1601,7 +1604,7 @@ function updateRenderedSession(session: Session): void {
   renderHeader();
   renderComposer();
   renderGoalButton();
-  renderPlanMode();
+  renderModes();
   renderPlanningTasks();
   syncAgentSessionsForCurrentSession();
   renderContextMeter();
@@ -1612,21 +1615,21 @@ function updateRenderedSession(session: Session): void {
   else elements.transcript.scrollTop = previousScrollTop;
 }
 
-async function changePlanMode(active: boolean): Promise<void> {
+async function changeSessionMode(path: "plan-mode" | "chat-mode", active: boolean, label?: string): Promise<void> {
   const session = state.session;
-  if (!session || session.parentSessionId || state.streaming) return renderPlanMode();
+  if (!session || session.parentSessionId || state.streaming) return renderModes();
   setBusy(true);
   try {
-    const result = await api<{ session: Session; hasMore: boolean }>(`/api/sessions/${session.id}/plan-mode`, {
+    const result = await api<{ session: Session; hasMore: boolean }>(`/api/sessions/${session.id}/${path}`, {
       method: "POST",
       body: JSON.stringify({ active }),
     });
     state.session = applySessionPage(state.session, result.session, result.hasMore).session;
-    renderPlanMode();
+    renderModes();
     await loadSessionList();
-    notify(active ? "Plan mode enabled" : "Normal mode enabled");
+    notify(active && label ? `${label} enabled` : "Normal mode enabled");
   } catch (error) {
-    renderPlanMode();
+    renderModes();
     notify(messageFrom(error));
   } finally {
     setBusy(false);
@@ -2091,7 +2094,7 @@ function setStreaming(streaming: boolean): void {
   elements.submit.querySelector("span")!.textContent = streaming ? "STOP" : "SEND";
   elements.prompt.disabled = false;
   renderModelStatus();
-  renderPlanMode();
+  renderModes();
   if (streaming) {
     syncAgentSessionsForCurrentSession();
     scheduleAgentSessionsRefresh(0);

@@ -59,18 +59,29 @@ export function renderModelStatus(): void {
   elements.thinkingLevelButton.disabled = !config.configured || !session || Boolean(session.parentSessionId) || state.streaming;
 }
 
-export function renderPlanMode(): void {
+export function renderModes(): void {
   const session = state.session;
   const planMode = state.session?.planMode;
-  const active = planMode?.active === true;
+  const planActive = planMode?.active === true;
+  const chatActive = session?.chatMode === true;
   const canChange = Boolean(session) && !session?.parentSessionId && !state.streaming;
-  elements.modePlan.checked = active;
-  elements.modeNormal.checked = !active;
+  elements.modeChat.checked = chatActive;
+  elements.modePlan.checked = planActive;
+  elements.modeNormal.checked = !chatActive && !planActive;
+  elements.modeChat.disabled = !canChange;
   elements.modePlan.disabled = !canChange;
   elements.modeNormal.disabled = !canChange;
-  elements.modeBanner.hidden = !active;
+  elements.modeBanner.hidden = !chatActive && !planActive;
   elements.modeBanner.replaceChildren();
-  if (!active || !planMode) return;
+  if (chatActive) {
+    const status = document.createElement("span");
+    status.textContent = "◇ CHAT MODE";
+    const hint = document.createElement("code");
+    hint.textContent = "BASH ONLY";
+    elements.modeBanner.append(status, hint);
+    return;
+  }
+  if (!planActive || !planMode) return;
   const status = document.createElement("span");
   status.textContent = "◇ PLAN MODE";
   const path = document.createElement("code");
@@ -119,5 +130,5 @@ export function setBusy(busy: boolean): void {
   elements.submit.querySelector("span")!.textContent = busy ? "WAIT" : "SEND";
   elements.prompt.disabled = busy;
   renderModelStatus();
-  renderPlanMode();
+  renderModes();
 }

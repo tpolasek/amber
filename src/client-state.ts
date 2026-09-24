@@ -47,6 +47,7 @@ export const elements = {
   thinkingLevelButton: required<HTMLButtonElement>("thinking-level-button"),
   providerDot: required<HTMLElement>("provider-dot"),
   modeBanner: required<HTMLElement>("mode-banner"),
+  modeChat: required<HTMLInputElement>("mode-chat"),
   modePlan: required<HTMLInputElement>("mode-plan"),
   modeNormal: required<HTMLInputElement>("mode-normal"),
   contextMeter: required<HTMLElement>("context-meter"),

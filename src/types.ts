@@ -133,6 +133,8 @@ export interface Session {
   cacheUsage?: CacheUsage;
   cacheUsageResetThroughMessageId?: string;
   planMode?: SessionPlanMode;
+  /** Chat mode active: minimal system prompt and Bash as the only tool. */
+  chatMode?: boolean;
   /** Nested project directories with their own skills, discovered from touched files. */
   skillRoots?: string[];
   /** Project paths touched this session, activating `paths:`-gated skills. */

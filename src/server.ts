@@ -140,6 +140,11 @@ import {
   planModeSystemBlock,
   readPlanSnapshot,
 } from "./plan-mode.js";
+import {
+  CHAT_MODE_TOOLS,
+  chatModeSystemBlocks,
+  parseChatModeToggleInput,
+} from "./chat-mode.js";
 import type { LlmProvider, ThinkingLevel, ToolDefinition } from "./types.js";
 import type { Message, MessageImage, Session, SessionInvokedSkill, TokenUsage, ToolCall } from "./types.js";
 import { MAX_MESSAGE_BODY_BYTES, parseMessageImages, providerImageLimitError } from "./message-images.js";
@@ -582,8 +587,32 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
         const filePath = session.planMode?.planFilePath ?? planFilePath(planDirectory, session.id);
         await ensurePlanFile(filePath);
         session.planMode = { active: true, planFilePath: filePath };
+        session.chatMode = false;
       } else if (session.planMode) {
         session.planMode.active = false;
+      }
+      await store.saveMeta(session);
+      return json(response, 200, pagedSessionPayload(session));
+    } catch (error) {
+      return json(response, 400, { error: errorMessage(error) });
+    }
+  }
+
+  const chatModeToggleMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/chat-mode$`));
+  if (method === "POST" && chatModeToggleMatch?.[1]) {
+    if (activeSessions.has(chatModeToggleMatch[1])) {
+      return json(response, 409, { error: "Chat mode can only be changed when the session is ready for a new prompt" });
+    }
+    const session = await store.get(chatModeToggleMatch[1]);
+    if (!session) return json(response, 404, { error: "Session not found" });
+    if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
+    try {
+      const { active } = parseChatModeToggleInput(await readJson(request));
+      if (active) {
+        session.chatMode = true;
+        if (session.planMode) session.planMode.active = false;
+      } else {
+        session.chatMode = false;
       }
       await store.saveMeta(session);
       return json(response, 200, pagedSessionPayload(session));
@@ -961,7 +990,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     let allowedDirectories = sessionDirectories(session);
     const currentDirectory = sessionWorkingDirectory(session);
     await captureSessionInstructions(session, currentDirectory);
-    await announceSkillCatalog(session, assistantMessage, currentDirectory);
+    if (!session.chatMode) await announceSkillCatalog(session, assistantMessage, currentDirectory);
     const toolLoopTracker = new ToolLoopTracker();
     // Skill model/effort overrides apply only to the model calls of this user turn.
     let turnModel: string | undefined;
@@ -1165,6 +1194,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                 const filePath = session.planMode?.planFilePath ?? planFilePath(planDirectory, session.id);
                 await ensurePlanFile(filePath);
                 session.planMode = { active: true, planFilePath: filePath };
+                session.chatMode = false;
                 allowedDirectories = sessionDirectories(session);
                 emit("plan_mode_state", { planMode: session.planMode });
                 call.status = "complete";
@@ -1961,6 +1991,7 @@ function sessionContextTokens(session: Session): number {
 }
 
 function sessionTools(session: Session, approvalCapable = true): ToolDefinition[] {
+  if (session.chatMode) return [...CHAT_MODE_TOOLS];
   if (session.agentType) {
     const definition = getAgentDefinition(agentDefinitions, session.agentType);
     return toolsForAgentMode(session.planMode?.active === true || definition.readOnly);
@@ -1974,6 +2005,7 @@ function sessionSystemPrompt(
   currentDirectory: string,
   model: string,
 ): string | import("./types.js").ProviderSystemBlock[] {
+  if (session.chatMode) return chatModeSystemBlocks();
   const system = !session.agentType
     ? buildClaudeCodeSystemPrompt(
         currentDirectory,

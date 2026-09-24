@@ -1,5 +1,5 @@
 import { api, notify } from "./client-api.js";
-import { renderPlanMode } from "./client-chrome.js";
+import { renderModes } from "./client-chrome.js";
 import { messageFrom } from "./client-formatters.js";
 import { markdown } from "./client-markdown.js";
 import type { PlanHandoffDispatcher } from "./plan-handoff.js";
@@ -123,7 +123,7 @@ export async function submitPlanModeDecision(approved: boolean, cancelled = fals
     );
     if (approved && request.kind === "exit" && session.planMode) {
       session.planMode.active = false;
-      renderPlanMode();
+      renderModes();
     }
     closePlanModeDialog();
   } catch (error) {
@@ -146,7 +146,7 @@ export async function submitPlanModeNewSessionDecision(): Promise<void> {
     );
     if (session.planMode) {
       session.planMode.active = false;
-      renderPlanMode();
+      renderModes();
     }
     if (result.decision.newSessionId) {
       // The run ends the moment this decision settles, so the event stream may

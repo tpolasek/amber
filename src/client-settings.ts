@@ -12,7 +12,7 @@ import {
   startAuthLogin,
   stopAuthPolling,
 } from "./client-auth.js";
-import { renderModelStatus, renderPlanMode } from "./client-chrome.js";
+import { renderModelStatus, renderModes } from "./client-chrome.js";
 import { messageFrom } from "./client-formatters.js";
 import {
   settingsCheckboxField,
@@ -59,7 +59,7 @@ export function renderConfig(): void {
   elements.settingsButton.classList.toggle("attention", needsSettings);
   renderSettingsBusyState();
   renderModelStatus();
-  renderPlanMode();
+  renderModes();
 }
 
 export async function openSettingsDialog(): Promise<void> {

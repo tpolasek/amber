@@ -6,7 +6,7 @@
     <meta name="description" content="AMBER — browser terminal for persistent LLM agent sessions">
     <title>AMBER // Agent Terminal</title>
     <link rel="stylesheet" href="/themes.css?v=1">
-    <link rel="stylesheet" href="/styles.css?v=59">
+    <link rel="stylesheet" href="/styles.css?v=60">
   </head>
   <body>
     <div class="noise" aria-hidden="true"></div>
@@ -24,6 +24,10 @@
         </div>
         <div class="sidebar-label"><span>SELECT MODE</span><span class="line"></span></div>
         <fieldset class="mode-selector" aria-label="Select mode">
+          <label class="mode-choice">
+            <input id="mode-chat" type="radio" name="mode" value="chat">
+            <span>CHAT</span>
+          </label>
           <label class="mode-choice">
             <input id="mode-plan" type="radio" name="mode" value="plan">
             <span>PLAN</span>

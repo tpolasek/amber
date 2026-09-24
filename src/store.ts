@@ -115,6 +115,7 @@ export class SessionStore {
     delete session.contextTokens;
     delete session.cacheUsageResetThroughMessageId;
     delete session.planMode;
+    delete session.chatMode;
     delete session.skillRoots;
     delete session.skillTouchedPaths;
     delete session.invokedSkills;
@@ -186,6 +187,7 @@ export class SessionStore {
       ...(session.model ? { model: session.model } : {}),
       ...(session.thinkingLevel ? { thinkingLevel: session.thinkingLevel } : {}),
       ...(forkPlanMode ? { planMode: forkPlanMode } : {}),
+      ...(session.chatMode !== undefined ? { chatMode: session.chatMode } : {}),
       ...(session.skillRoots ? { skillRoots: structuredClone(session.skillRoots) } : {}),
       ...(session.skillTouchedPaths ? { skillTouchedPaths: structuredClone(session.skillTouchedPaths) } : {}),
       ...(session.invokedSkills ? { invokedSkills: structuredClone(session.invokedSkills) } : {}),
