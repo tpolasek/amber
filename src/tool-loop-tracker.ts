@@ -9,6 +9,8 @@ export interface TrackedToolCall {
   input: Record<string, unknown>;
   status: string;
   output: string;
+  /** True when the call was a blocking wait that expired on a still-running task. */
+  waiting?: boolean;
 }
 
 export interface ToolLoopDetection {
@@ -33,6 +35,9 @@ export class ToolLoopTracker {
 
   record(calls: TrackedToolCall[]): ToolLoopDetection | null {
     if (calls.length === 0) return null;
+    // A round spent blocking on still-running tasks is a legitimate wait, not a
+    // repeat: waiting is the only way to let a long task make progress.
+    if (calls.every((call) => call.waiting)) return null;
     const completedAt = this.#now();
     this.#rounds.push({
       fingerprint: fingerprint(calls),
@@ -65,6 +70,12 @@ export function formatToolLoopError(detection: ToolLoopDetection): string {
   const tools = detection.toolNames.join(", ") || "unknown tool";
   const cycle = detection.cycleLength === 1 ? "the same tool call" : `a ${detection.cycleLength}-round tool cycle`;
   return `Agent stopped after repeating ${cycle} ${detection.repetitions} times without progress (${tools})`;
+}
+
+export function formatToolLoopNudge(detection: ToolLoopDetection): string {
+  const tools = detection.toolNames.join(", ") || "unknown tool";
+  const cycle = detection.cycleLength === 1 ? "the same tool call" : `a ${detection.cycleLength}-round tool cycle`;
+  return `You have repeated ${cycle} ${detection.repetitions} times with identical results (${tools}). Waiting on a task is fine, but repeating a finished call is not. Change your approach: wait longer, vary the input, use a different tool, stop a task that is no longer useful, or report the current state and end your turn. The run will be stopped if the same repetition is detected again.`;
 }
 
 function fingerprint(calls: TrackedToolCall[]): string {

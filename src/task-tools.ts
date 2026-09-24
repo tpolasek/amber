@@ -116,12 +116,13 @@ export async function executeTaskOutput(
   sessionId: string,
   input: TaskOutputInput,
   signal?: AbortSignal,
-): Promise<{ output: string; resultText: string }> {
+): Promise<{ output: string; resultText: string; retrievalStatus: "success" | "timeout" | "not_ready" }> {
   if (manager.get(sessionId, input.taskId)) {
     const retrieval = await manager.output(sessionId, input.taskId, input.block, input.timeoutMs, signal);
     return {
       output: formatVisibleOutput(retrieval.task),
       resultText: formatTaskOutputResult(retrieval.retrievalStatus, retrieval.task),
+      retrievalStatus: retrieval.retrievalStatus,
     };
   }
 
@@ -130,6 +131,7 @@ export async function executeTaskOutput(
     return {
       output: formatAgentVisibleOutput(agent.task),
       resultText: formatAgentTaskOutputResult(agent.retrievalStatus, agent.task),
+      retrievalStatus: agent.retrievalStatus,
     };
   }
   throw taskNotFoundError(input.taskId);

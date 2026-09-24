@@ -93,7 +93,7 @@ import {
   parseGoalCompleteInput,
 } from "./goal.js";
 import { completeDirectories, completeDirectoryRoots, completeFiles } from "./directory-completion.js";
-import { ToolLoopTracker, formatToolLoopError } from "./tool-loop-tracker.js";
+import { ToolLoopTracker, formatToolLoopError, formatToolLoopNudge } from "./tool-loop-tracker.js";
 import {
   AGENT_TOOL_NAME,
   getAgentDefinition,
@@ -1050,6 +1050,8 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     await captureSessionInstructions(session, currentDirectory);
     if (!session.chatMode) await announceSkillCatalog(session, assistantMessage, currentDirectory);
     const toolLoopTracker = new ToolLoopTracker();
+    const waitingToolCallIds = new Set<string>();
+    let loopWarned = false;
     // Skill model/effort overrides apply only to the model calls of this user turn.
     let turnModel: string | undefined;
     let turnEffort: ThinkingLevel | undefined;
@@ -1452,6 +1454,9 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               call.status = "complete";
               call.output = result.output;
               resultText = result.resultText;
+              // A blocking wait that expired on a still-running task is waiting,
+              // not repetition; the loop tracker exempts such rounds.
+              if (result.retrievalStatus === "timeout") waitingToolCallIds.add(call.id);
             } catch (error) {
               call.status = "error";
               call.output = errorMessage(error);
@@ -1806,9 +1811,28 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             input: call.input,
             status: call.status,
             output: call.output,
+            waiting: waitingToolCallIds.has(call.id),
           })))
         : null;
-      if (loop) throw new Error(formatToolLoopError(loop));
+      // The first detection course-corrects with a nudge; only a repeated
+      // detection after the warning ends the run.
+      if (loop) {
+        if (loopWarned) throw new Error(formatToolLoopError(loop));
+        loopWarned = true;
+        const loopNudge: Message = {
+          id: randomUUID(),
+          role: "user",
+          content: formatToolLoopNudge(loop),
+          createdAt: new Date().toISOString(),
+          status: "complete",
+        };
+        session.messages.push(loopNudge);
+        // The nudge starts a fresh user turn for skill override purposes.
+        turnModel = undefined;
+        turnEffort = undefined;
+        await store.appendMessages(session, [loopNudge]);
+        emit("user_message", { message: loopNudge });
+      }
       assistantMessage = createAssistantMessage();
       session.messages.push(assistantMessage);
       await store.appendMessages(session, [assistantMessage]);
