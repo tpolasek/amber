@@ -163,6 +163,19 @@ export function goalCommandSuggestions(input: string): { value: string; descript
   return GOAL_COMMAND_SUGGESTIONS.filter((suggestion) => suggestion.value.startsWith(typed));
 }
 
+export const COMPACT_COMMAND_SUGGESTIONS: { value: string; description: string }[] = [
+  { value: "/compact", description: "Summarize model context while keeping the full transcript" },
+  { value: "/compact on", description: "Re-enable auto-compaction for this session" },
+  { value: "/compact off", description: "Disable auto-compaction for this session" },
+];
+
+export function compactCommandSuggestions(input: string): { value: string; description: string }[] | null {
+  const value = input.trimStart();
+  if (!/^\/compact(?:\s|$)/i.test(value)) return null;
+  const typed = value.replace(/\s+/g, " ").replace(/\s+$/, "").toLowerCase();
+  return COMPACT_COMMAND_SUGGESTIONS.filter((suggestion) => suggestion.value.startsWith(typed));
+}
+
 /** Composer indicator label: whole minutes since the goal was set. */
 export function goalButtonLabel(goalSetAt: string | undefined, now: number = Date.now()): string {
   const minutes = goalSetAt ? Math.max(0, Math.floor((now - Date.parse(goalSetAt)) / 60_000)) : 0;

@@ -2389,6 +2389,7 @@ async function listDirectoryCompletions(response: ServerResponse, sessionId: str
 }
 
 function shouldAutoCompactSession(session: Session): boolean {
+  if (session.autoCompactDisabled) return false;
   if (!compactionTarget(session)) return false;
   // Agent sub-sessions only compact when the agent opts in; disabled by default.
   if (session.agentType && !agentDefinitions.find((agent) => agent.type === session.agentType)?.compact) return false;
@@ -2620,6 +2621,16 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     }
     await appendCommandTranscript(session, rawCommand, body);
     return json(response, 200, { command: "plugin", ...pagedSessionPayload(session) });
+  }
+
+  if (command === "/compact" && argument) {
+    const setting = argument.toLowerCase();
+    if (setting !== "on" && setting !== "off") {
+      return json(response, 400, { error: "Usage: /compact [on|off]" });
+    }
+    session.autoCompactDisabled = setting === "off";
+    await store.saveMeta(session);
+    return json(response, 200, { command: "compact", ...pagedSessionPayload(session) });
   }
 
   if (argument) return json(response, 400, { error: `${command} does not accept arguments` });

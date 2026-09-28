@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  COMPACT_COMMAND_SUGGESTIONS,
+  compactCommandSuggestions,
   compactHeaderPath,
   formatCompactionResultLabel,
   formatDuration,
@@ -31,6 +33,10 @@ test("classifies built-in commands that can run during a response", () => {
   assert.equal(builtInCommand("/GOAL clear")?.name, "/goal");
   assert.equal(builtInCommand("/goal make the tests pass")?.runsDuringResponse, true);
   assert.equal(builtInCommand("/compact")?.runsDuringResponse, false);
+  assert.equal(builtInCommand("/compact off")?.runsDuringResponse, true);
+  assert.equal(builtInCommand(" /COMPACT  ON ")?.runsDuringResponse, true);
+  assert.equal(builtInCommand("/compact forever")?.runsDuringResponse, false);
+  assert.equal(builtInCommand("/compact off now")?.runsDuringResponse, false);
   assert.equal(builtInCommand("/bashes")?.name, "/tasks");
   assert.equal(builtInCommand("ordinary message"), undefined);
 });
@@ -120,6 +126,17 @@ test("suggests /goal clear while the command is typed", () => {
   assert.deepEqual((goalCommandSuggestions("/goal c") ?? []).map((item) => item.value), ["/goal clear"]);
   assert.deepEqual((goalCommandSuggestions("/goal clear") ?? []).map((item) => item.value), ["/goal clear"]);
   assert.deepEqual(goalCommandSuggestions("/goal done"), []);
+});
+
+test("suggests /compact on and /compact off while the command is typed", () => {
+  assert.equal(compactCommandSuggestions("/comp"), null);
+  assert.equal(compactCommandSuggestions("/compaction"), null);
+  assert.deepEqual(compactCommandSuggestions("/compact"), COMPACT_COMMAND_SUGGESTIONS);
+  assert.deepEqual(compactCommandSuggestions("  /Compact "), COMPACT_COMMAND_SUGGESTIONS);
+  assert.deepEqual((compactCommandSuggestions("/compact o") ?? []).map((item) => item.value), ["/compact on", "/compact off"]);
+  assert.deepEqual((compactCommandSuggestions("/compact of") ?? []).map((item) => item.value), ["/compact off"]);
+  assert.deepEqual((compactCommandSuggestions("/compact OFF") ?? []).map((item) => item.value), ["/compact off"]);
+  assert.deepEqual(compactCommandSuggestions("/compact now"), []);
 });
 
 test("labels the goal button with whole minutes since the goal was set", () => {

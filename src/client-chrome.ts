@@ -106,9 +106,14 @@ export function renderContextMeter(): void {
   elements.contextMeter.classList.remove("context-green", "context-yellow", "context-red");
   elements.contextMeter.classList.add(`context-${level}`);
   elements.contextMeterBar.style.width = `${Math.min(100, ratio * 100)}%`;
-  elements.contextMeterValue.textContent = `${formatTokenCountInThousands(tokens)}k`;
+  // With auto-compaction off there is no ceiling in reach: the value becomes
+  // infinity while the bar keeps tracking the model's compact threshold.
+  const autoCompactOff = session?.autoCompactDisabled === true;
+  elements.contextMeterValue.textContent = autoCompactOff ? "∞" : `${formatTokenCountInThousands(tokens)}k`;
   elements.contextMeter.title = `${tokens.toLocaleString()} active context tokens (latest input + output)`
-    + (activeModel?.compactTokens ? ` · auto-compacts at ${activeModel.compactTokens.toLocaleString()}` : "");
+    + (autoCompactOff
+      ? " · auto-compaction off"
+      : activeModel?.compactTokens ? ` · auto-compacts at ${activeModel.compactTokens.toLocaleString()}` : "");
 
   const cacheUsage = session?.cacheUsage;
   const cacheRatio = cacheUsage ? cacheHitRatio(cacheUsage) : 0;

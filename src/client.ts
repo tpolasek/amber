@@ -4,6 +4,7 @@ import {
   StreamingThinkingReveal,
 } from "./streaming-thinking.js";
 import {
+  compactCommandSuggestions,
   formatCompactionResultLabel,
   formatTime,
   gitCommandSuggestions,
@@ -1429,7 +1430,13 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
     openBtwDialog(command.slice(4).trim());
     return;
   }
-  if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/compact") return runCompactCommand(command, clearComposer);
+  // /compact on|off only flips the auto-compaction flag; it runs through the
+  // generic command path so it also works mid-response. Anything else (/compact,
+  // /compact <invalid>) takes the compaction run path.
+  if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/compact"
+    && !/^\/compact\s+(on|off)$/i.test(command.trim())) {
+    return runCompactCommand(command, clearComposer);
+  }
   if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/git") {
     const request = parseGitCommand(command);
     if (!request) {
@@ -1461,7 +1468,11 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
     } else if (result.command === "clear") {
       notify("Session cleared");
     } else if (result.command === "compact") {
-      notify("Context compacted · full history retained");
+      // Only /compact on|off reaches this path; the run itself goes through
+      // runCompactCommand, which carries its own notification.
+      notify(result.session.autoCompactDisabled
+        ? "Auto-compaction off · context is unlimited"
+        : "Auto-compaction on");
     } else if (result.command === "fork") {
       history.pushState({}, "", `/s/${result.session.id}`);
       notify(`Session forked · ${result.session.id}`);
@@ -2202,6 +2213,18 @@ function updateCommandMenu(): void {
     renderCommandMenu();
     return;
   }
+  const compactMatches = compactCommandSuggestions(elements.prompt.value);
+  if (compactMatches) {
+    matchingCommands = compactMatches.map((suggestion) => ({
+      name: suggestion.value,
+      description: suggestion.description,
+      runsDuringResponse: false,
+    }));
+    selectedCommand = 0;
+    if (matchingCommands.length === 0) return hideCommandMenu();
+    renderCommandMenu();
+    return;
+  }
   const value = elements.prompt.value.trim().toLowerCase();
   if (!/^\/[a-z:-]*$/.test(value)) return hideCommandMenu();
   const session = state.session;
@@ -2359,8 +2382,8 @@ function acceptDirectoryCompletion(directory: DirectoryCompletion): void {
 }
 
 function selectCommand(command: BuiltInCommand, execute: boolean): void {
-  const continuesTyping = command.name === "/add-dir" || command.name === "/btw" || command.name === "/cwd"
-    || command.name === "/git" || command.name === "/goal" || command.name === "/plugin";
+  const continuesTyping = command.name === "/add-dir" || command.name === "/btw" || command.name === "/compact"
+    || command.name === "/cwd" || command.name === "/git" || command.name === "/goal" || command.name === "/plugin";
   elements.prompt.value = continuesTyping ? `${command.name} ` : command.name;
   if (continuesTyping) updateCommandMenu();
   else hideCommandMenu();

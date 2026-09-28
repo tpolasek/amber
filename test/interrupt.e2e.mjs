@@ -152,21 +152,29 @@ function countTextBlocks(messages, predicate) {
 function planResponse(payload) {
   const messages = payload.messages;
   if (!payload.tools) return { text: "<summary>compacted context</summary>" };
+  const bashUses = messages
+    .filter((message) => message.role === "assistant" && Array.isArray(message.content))
+    .flatMap((message) => message.content.filter((block) => block.type === "tool_use" && block.name === "Bash"));
+  const firstUser = messages.find((message) => message.role === "user");
+  const firstText = typeof firstUser?.content === "string" ? firstUser.content
+    : Array.isArray(firstUser?.content) ? firstUser.content.map((block) => block.text ?? "").join(" ") : "";
+  // A "COMPACT REARM" prompt answers with one bash call first, so a session
+  // whose auto-compaction was switched back on crosses the threshold at a tool
+  // boundary even when its history already carries a compaction summary.
+  if (firstText.includes("COMPACT REARM")) {
+    return bashUses.length >= 1
+      ? { text: "rearm finished" }
+      : { tools: [{ id: "rearm-bash", command: "echo rearm" }] };
+  }
   if (JSON.stringify(messages).includes("compacted context")) {
     return { text: "continued after automatic compaction" };
   }
   if (JSON.stringify(messages).includes("<task-notification>")) {
     return { text: "parent received background result" };
   }
-  const bashUses = messages
-    .filter((message) => message.role === "assistant" && Array.isArray(message.content))
-    .flatMap((message) => message.content.filter((block) => block.type === "tool_use" && block.name === "Bash"));
   const interrupted = messages.some((message) =>
     message.role === "user" && typeof message.content === "string" && message.content === INTERRUPT_TEXT);
   if (interrupted) return { text: `ACK interrupt after ${bashUses.length} bash calls` };
-  const firstUser = messages.find((message) => message.role === "user");
-  const firstText = typeof firstUser?.content === "string" ? firstUser.content
-    : Array.isArray(firstUser?.content) ? firstUser.content.map((block) => block.text ?? "").join(" ") : "";
   // Goal scenarios key on the reminder text itself: the first user message of
   // a goal run is the reminder returned by /goal.
   if (firstText?.includes("GOAL MAIN")) {
@@ -1358,6 +1366,65 @@ async function runManualCompactionObserverScenario(mock, amber) {
     events.some((event) => event.event === "compaction_complete"));
 }
 
+/** /compact off disables server-inserted auto-compaction, live during a run. */
+async function runCompactToggleScenario(mock, amber) {
+  console.log("\n== /compact on and /compact off toggle auto-compaction");
+  mock.reset();
+  const events = [];
+  const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
+    name: "compact toggle",
+    path: tmpdir(),
+  });
+  const sessionId = body.session.id;
+
+  const badUsage = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/commands`), { command: "/compact maybe" });
+  check("/compact rejects unknown arguments", badUsage.status === 400, JSON.stringify(badUsage));
+
+  const streamResponse = await startSessionStream(amber, sessionId, `UNQUEUE SCENARIO with compact off ${"x".repeat(3_000)}`);
+  const finished = readStream(streamResponse, (event, data) => events.push({ event, ...data }));
+  await waitFor(
+    () => events.some((event) => event.toolCall?.name === "Bash" && event.toolCall.status === "running"),
+    30_000,
+    "the compact-toggle bash call to start",
+  );
+
+  const off = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/commands`), { command: "/compact off" });
+  check("live /compact off is accepted while streaming",
+    off.status === 200 && off.body.command === "compact" && off.body.session?.autoCompactDisabled === true,
+    JSON.stringify({ status: off.status, disabled: off.body.session?.autoCompactDisabled }));
+  await finished;
+
+  check("auto-compaction never started while disabled",
+    !events.some((event) => event.event === "compaction_start" || event.event === "compaction_complete"));
+  check("no compaction request reached the provider",
+    mock.requests().every((request) => request.tools), `${mock.requests().length} requests`);
+
+  const snapshot = await sessionSnapshot(amber, sessionId);
+  check("the disabled flag persisted and no compaction was recorded",
+    snapshot.session.autoCompactDisabled === true && snapshot.session.compaction === undefined,
+    JSON.stringify({ disabled: snapshot.session.autoCompactDisabled, compaction: snapshot.session.compaction }));
+
+  const manual = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/commands`), { command: "/compact" });
+  check("manual /compact still works with auto-compaction off",
+    manual.status === 200 && manual.body.session?.compaction?.summary === "Summary:\ncompacted context",
+    JSON.stringify({ status: manual.status }));
+
+  const on = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/commands`), { command: "/compact on" });
+  check("/compact on clears the disabled flag",
+    on.status === 200 && on.body.session?.autoCompactDisabled === false,
+    JSON.stringify({ status: on.status, disabled: on.body.session?.autoCompactDisabled }));
+
+  const rearmEvents = [];
+  const rearmFinished = readStream(
+    await startSessionStream(amber, sessionId, `COMPACT REARM after /compact on ${"x".repeat(3_000)}`),
+    (event, data) => rearmEvents.push({ event, ...data }),
+  );
+  await rearmFinished;
+  check("auto-compaction returned once re-enabled",
+    rearmEvents.some((event) => event.event === "compaction_complete"),
+    JSON.stringify(rearmEvents.filter((event) => event.event.startsWith("compaction"))));
+}
+
 function goalReminder(goal) {
   return `We have a goal set, before you stop make sure that this goal has been met. Once it has been met, run GoalComplete to clear the goal. Goal: "${goal}"`;
 }
@@ -1615,6 +1682,7 @@ try {
   await runTerminalToolCompactionScenario(mock, amber);
   await runRedundantManualCompactionScenario(mock, amber);
   await runManualCompactionObserverScenario(mock, amber);
+  await runCompactToggleScenario(mock, amber);
   await runGoalScenario(mock, amber);
   await runLiveGoalCommandScenario(mock, amber);
   await runGoalReplacementRaceScenario(mock, amber);

@@ -10,7 +10,7 @@ export const BUILT_IN_COMMANDS: BuiltInCommand[] = [
   { name: "/cwd", description: "Show or change the current working directory", runsDuringResponse: false },
   { name: "/usage", description: "Show context and total session token usage", runsDuringResponse: true },
   { name: "/clear", description: "Erase this session's conversation and model context", runsDuringResponse: false },
-  { name: "/compact", description: "Summarize model context while keeping the full transcript", runsDuringResponse: false },
+  { name: "/compact", description: "Summarize model context while keeping the full transcript; on/off toggles auto-compaction", runsDuringResponse: false },
   { name: "/fork", description: "Fork this session with its complete history", runsDuringResponse: false },
   { name: "/git", description: "Inspect the repository: diff, show, status; commit [push]", runsDuringResponse: false },
   { name: "/goal", description: "Set a goal the model keeps working toward, or clear it", runsDuringResponse: true },
@@ -20,7 +20,14 @@ export const BUILT_IN_COMMANDS: BuiltInCommand[] = [
 ];
 
 export function builtInCommand(input: string): BuiltInCommand | undefined {
-  const name = input.trim().split(/\s+/, 1)[0]?.toLowerCase();
+  const trimmed = input.trim();
+  const name = trimmed.split(/\s+/, 1)[0]?.toLowerCase();
   if (name === "/bashes") return BUILT_IN_COMMANDS.find((command) => command.name === "/tasks");
-  return BUILT_IN_COMMANDS.find((command) => command.name === name);
+  const command = BUILT_IN_COMMANDS.find((candidate) => candidate.name === name);
+  if (!command) return undefined;
+  // /compact on|off only flips the per-session auto-compaction flag, so it is safe mid-response.
+  if (command.name === "/compact" && /^\/compact\s+(on|off)$/i.test(trimmed)) {
+    return { ...command, runsDuringResponse: true };
+  }
+  return command;
 }

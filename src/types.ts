@@ -147,6 +147,8 @@ export interface Session {
   goal?: string;
   /** When the current goal was set; drives the client GOAL(Xm) indicator. */
   goalSetAt?: string;
+  /** Set by /compact off; suppresses auto-compaction. Manual /compact still works. */
+  autoCompactDisabled?: boolean;
 }
 
 export interface SessionInstructions {
