@@ -984,7 +984,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   automaticNameRuns.get(sessionId)?.sessions.add(session);
   const shouldAutoName = shouldAutoNameSession(session);
   let assistantMessage = createAssistantMessage(now);
-  session.messages.push(userMessage, assistantMessage);
   await store.appendMessages(session, [userMessage, assistantMessage]);
 
   response.writeHead(200, {
@@ -1036,21 +1035,11 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       stopReason = "";
       const agentNotifications = await completedBackgroundAgentNotifications(session);
       if (agentNotifications.notifications.length > 0 || agentNotifications.updatedMessages.length > 0) {
-        const assistantIndex = session.messages.findIndex((message) => message.id === assistantMessage.id);
-        session.messages.splice(
-          assistantIndex < 0 ? session.messages.length : assistantIndex,
-          0,
-          ...agentNotifications.notifications,
-        );
         if (agentNotifications.updatedMessages.length > 0) {
           await store.updateMessages(session, agentNotifications.updatedMessages);
         }
         if (agentNotifications.notifications.length > 0) {
-          await store.insertMessages(
-            session,
-            assistantIndex < 0 ? null : assistantMessage.id,
-            agentNotifications.notifications,
-          );
+          await store.insertMessages(session, assistantMessage.id, agentNotifications.notifications);
         }
       }
       const skills = await sessionSkills(session);
@@ -1259,7 +1248,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                   kind: "plan-banner",
                   ...(decision.newSessionId ? { forkedSessionId: decision.newSessionId } : {}),
                 };
-                session.messages.push(planBanner);
                 await store.appendMessages(session, [planBanner]);
                 emit("plan_mode_state", { planMode: session.planMode });
                 call.status = "complete";
@@ -1547,7 +1535,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           ...(resultImages?.length ? { images: resultImages } : {}),
         };
         const appendedSkillMessages = pendingSkillMessages.splice(0);
-        session.messages.push(toolResultMessage, ...appendedSkillMessages);
         await store.appendMessages(session, [toolResultMessage, ...appendedSkillMessages]);
         await store.updateMessage(session, assistantMessage);
         if (abortAfterResult) throw abortAfterResult;
@@ -1579,7 +1566,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             createdAt: new Date().toISOString(),
             status: "complete",
           };
-          session.messages.push(continuationMessage);
           await store.appendMessages(session, [continuationMessage]);
           emit("user_message", { message: continuationMessage });
           autoCompactionContinuedTurn = true;
@@ -1604,7 +1590,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           status: "complete",
           ...(interruption.images?.length ? { images: interruption.images } : {}),
         };
-        session.messages.push(queuedUserMessage);
         // The interruption starts a fresh user turn: skill model/effort
         // overrides from the interrupted turn no longer apply.
         turnModel = undefined;
@@ -1634,7 +1619,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             createdAt: new Date().toISOString(),
             status: "complete",
           };
-          session.messages.push(goalReminder);
           // The reminder starts a fresh user turn for skill override purposes.
           turnModel = undefined;
           turnEffort = undefined;
@@ -1671,7 +1655,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           createdAt: new Date().toISOString(),
           status: "complete",
         };
-        session.messages.push(loopNudge);
         // The nudge starts a fresh user turn for skill override purposes.
         turnModel = undefined;
         turnEffort = undefined;
@@ -1679,7 +1662,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         emit("user_message", { message: loopNudge });
       }
       assistantMessage = createAssistantMessage();
-      session.messages.push(assistantMessage);
       await store.appendMessages(session, [assistantMessage]);
       emit("continuation", { assistantMessage });
     }
@@ -1824,9 +1806,7 @@ async function announceSkillCatalog(session: Session, assistantMessage: Message,
   };
   // Before the streaming assistant placeholder, so the announcement rides the
   // user turn it belongs to rather than trailing the response.
-  const assistantIndex = session.messages.findIndex((candidate) => candidate.id === assistantMessage.id);
-  session.messages.splice(assistantIndex, 0, message);
-  await store.insertMessages(session, assistantIndex < 0 ? null : assistantMessage.id, [message]);
+  await store.insertMessages(session, assistantMessage.id, [message]);
 }
 
 /**
@@ -2298,7 +2278,6 @@ async function compactSession(
     kind: "compact-banner",
     compactSummary: summary,
   };
-  session.messages.push(compactionBanner);
   await store.appendMessages(session, [compactionBanner]);
 }
 
@@ -2515,7 +2494,6 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
       kind: "fork-banner",
       forkedSessionId: fork.id,
     };
-    session.messages.push(sourceBanner);
     await store.appendMessages(session, [sourceBanner]);
     return json(response, 201, { command: "fork", ...pagedSessionPayload(fork), previousSessionId: session.id });
   }
@@ -2551,7 +2529,6 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
       status: "complete",
       kind: "command",
     };
-    session.messages.push(userMessage, assistantMessage);
     await store.appendMessages(session, [userMessage, assistantMessage]);
     return json(response, 200, { command: "usage", ...pagedSessionPayload(session) });
   }
@@ -2657,7 +2634,6 @@ async function appendCommandTranscript(session: Session, command: string, body: 
   const assistantMessage: Message = {
     id: randomUUID(), role: "assistant", content: body, createdAt: now, status: "complete", kind: "command",
   };
-  session.messages.push(userMessage, assistantMessage);
   await store.appendMessages(session, [userMessage, assistantMessage]);
 }
 

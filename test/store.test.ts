@@ -371,7 +371,6 @@ test("appends, updates, and inserts replay in order for a fresh process", async 
 
   const user = userMessage("user-1", "Hello");
   const assistant: import("../src/types.js").Message = { id: "assistant-1", role: "assistant", content: "", createdAt: new Date().toISOString(), status: "streaming" };
-  session.messages.push(user, assistant);
   await store.appendMessages(session, [user, assistant]);
 
   assistant.content = "Working on it";
@@ -382,12 +381,11 @@ test("appends, updates, and inserts replay in order for a fresh process", async 
   await store.saveMeta(session);
 
   const notification = { ...userMessage("notification-1", "<task-notification>done</task-notification>"), kind: "agent-notification" as const };
-  session.messages.splice(1, 0, notification); // insert before the assistant message
   await store.insertMessages(session, assistant.id, [notification]);
 
   const followUp = userMessage("user-2", "Thanks");
-  session.messages.push(followUp);
   await store.appendMessages(session, [followUp]);
+  assert.deepEqual(session.messages.map((message) => message.id), ["user-1", "notification-1", "assistant-1", "user-2"]);
 
   // A second store instance is a server restart: the log must replay exactly.
   const restarted = new SessionStore(directory);
@@ -428,7 +426,6 @@ test("collapses a log swollen by streaming checkpoints", async () => {
   const session = await store.create();
   const user = userMessage("user-1", "Stream something long");
   const assistant: import("../src/types.js").Message = { id: "assistant-1", role: "assistant", content: "", createdAt: new Date().toISOString(), status: "streaming" };
-  session.messages.push(user, assistant);
   await store.appendMessages(session, [user, assistant]);
 
   for (let index = 0; index < 600; index += 1) {
@@ -451,7 +448,6 @@ test("repairs a torn final log line so the next append survives", async () => {
   await store.initialize();
   const session = await store.create();
   const user = userMessage("user-1", "Survivor");
-  session.messages.push(user);
   await store.appendMessages(session, [user]);
 
   // A crash mid-append leaves a partial final line with no trailing newline.
@@ -465,7 +461,6 @@ test("repairs a torn final log line so the next append survives", async () => {
 
   // The follow-up message must not merge onto the torn bytes and vanish.
   const followUp = userMessage("user-2", "After the crash");
-  loaded!.messages.push(followUp);
   await restarted.appendMessages(loaded!, [followUp]);
 
   const reopened = new SessionStore(directory);
@@ -482,7 +477,6 @@ test("stores metadata and messages in separate files", async () => {
   await store.initialize();
   const session = await store.create();
   const user = userMessage("user-1", "Split storage");
-  session.messages.push(user);
   await store.appendMessages(session, [user]);
 
   const metadata = JSON.parse(await readFile(join(directory, `${session.id}.meta.json`), "utf8")) as Record<string, unknown>;

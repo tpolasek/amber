@@ -292,9 +292,10 @@ export class SessionStore {
     });
   }
 
-  /** Appends new messages that were pushed onto the end of `session.messages`. */
+  /** Appends new messages to the session and its log. */
   async appendMessages(session: Session, messages: Message[]): Promise<void> {
     if (messages.length === 0) return;
+    session.messages.push(...messages);
     await this.#appendOperations(
       session,
       messages.map((message) => ({ op: "add", message } as const)),
@@ -302,9 +303,11 @@ export class SessionStore {
     );
   }
 
-  /** Records messages inserted before an existing message (null appends). */
+  /** Inserts messages into the session and its log (null appends). */
   async insertMessages(session: Session, before: string | null, messages: Message[]): Promise<void> {
     if (messages.length === 0) return;
+    const index = before === null ? -1 : session.messages.findIndex((message) => message.id === before);
+    session.messages.splice(index < 0 ? session.messages.length : index, 0, ...messages);
     await this.#appendOperations(session, [{ op: "insert", before, messages }], 1);
   }
 
