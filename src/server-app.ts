@@ -58,10 +58,9 @@ import { generateSessionTitle, shouldAutoNameSession } from "./session-title.js"
 import { estimateHistoryTokens, formatCompactionBanner, generateCompactionSummary, shouldAutoCompact } from "./compaction.js";
 import { BASH_TOOL, BashExecutor, parseBashInput } from "./bash-tool.js";
 import { BackgroundTaskManager } from "./background-tasks.js";
-import {
-  type BackgroundAgentSource,
-} from "./task-tools.js";
+import type { BackgroundAgentSource } from "./task-tools.js";
 import { executeRegularTool, isRegularTool } from "./tool-execution.js";
+import { collectProviderRound } from "./provider-round.js";
 import {
   discoverNestedProjectRoots,
   discoverSkills,
@@ -139,7 +138,7 @@ import {
 } from "./chat-mode.js";
 import { btwSystemReminder, parseBtwInput } from "./btw.js";
 import type { LlmProvider, ThinkingLevel, ToolDefinition } from "./types.js";
-import type { Message, MessageImage, Session, SessionInvokedSkill, TokenUsage, ToolCall } from "./types.js";
+import type { Message, MessageImage, Session, SessionInvokedSkill, ToolCall } from "./types.js";
 import { MAX_MESSAGE_BODY_BYTES, parseMessageImages, providerImageLimitError } from "./message-images.js";
 import { parseThinkingLevel } from "./thinking-level.js";
 
@@ -1063,67 +1062,28 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       const history = session.agentType
         ? structureClaudeCodeUserMessages(baseHistory)
         : injectClaudeCodeUserContext(baseHistory);
-      const toolDrafts = new Map<number, { call: ToolCall; inputJson: string }>();
-      let usage: Partial<TokenUsage> = {};
       const tools = sessionTools(session, approvalCapable);
       // The goal these tools were advertised against; a live /goal may have
       // replaced or cleared it by the time a GoalComplete call executes.
       const goalSnapshot = session.goal;
-      for await (const event of activeProvider.stream(history, controller.signal, {
-        tools,
-        system: sessionSystemPrompt(session, currentDirectory, activeProvider.model),
-        ...(session.agentType ? { temperature: 1 } : {}),
-        ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
-      })) {
-        if (event.type === "delta") {
-          assistantMessage.content += event.text;
-          emit("delta", { text: event.text });
-          await checkpointSession();
-        } else if (event.type === "thinking_delta") {
-          assistantMessage.thinkingProvider = activeProvider.protocol;
-          assistantMessage.thinking = (assistantMessage.thinking ?? "") + event.thinking;
-          emit("thinking_delta", { thinking: event.thinking });
-          await checkpointSession();
-        } else if (event.type === "thinking_signature_delta") {
-          assistantMessage.thinkingProvider = activeProvider.protocol;
-          assistantMessage.thinkingSignature = (assistantMessage.thinkingSignature ?? "") + event.signature;
-          await checkpointSession();
-        } else if (event.type === "tool_use_start") {
-          const call: ToolCall = {
-            id: event.id,
-            name: event.name,
-            input: {},
-            status: "queued",
-            output: "",
-          };
-          toolDrafts.set(event.index, { call, inputJson: "" });
-          (assistantMessage.toolCalls ??= []).push(call);
-          emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
-        } else if (event.type === "tool_input_delta") {
-          const draft = toolDrafts.get(event.index);
-          if (draft) draft.inputJson += event.partialJson;
-        } else if (event.type === "usage") {
-          usage = { ...usage, ...event.usage };
-        } else if (event.type === "done" && event.stopReason !== undefined) {
-          stopReason = event.stopReason;
-        }
-      }
-
-      assistantMessage.status = "complete";
-      if (usage.input !== undefined && usage.output !== undefined) {
-        assistantMessage.usage = usage as TokenUsage;
-        session.contextTokens = usage.total ?? usage.input + usage.output;
-      }
-      for (const draft of toolDrafts.values()) {
-        try {
-          const parsed = JSON.parse(draft.inputJson || "{}") as unknown;
-          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Tool input must be an object");
-          draft.call.input = parsed as Record<string, unknown>;
-        } catch (error) {
-          draft.call.status = "error";
-          draft.call.output = `Invalid tool input: ${errorMessage(error)}`;
-        }
-      }
+      const round = await collectProviderRound({
+        provider: activeProvider,
+        history,
+        streamOptions: {
+          tools,
+          system: sessionSystemPrompt(session, currentDirectory, activeProvider.model),
+          ...(session.agentType ? { temperature: 1 } : {}),
+          ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+        },
+        signal: controller.signal,
+        session,
+        assistantMessage,
+        emit,
+        checkpoint: checkpointSession,
+        onStopReason: (reason) => { stopReason = reason; },
+      });
+      const toolDrafts = round.toolDrafts;
+      stopReason = round.stopReason;
       // A response that hit a token limit or content filter still completes
       // its stream normally; surface the truncation on the message itself.
       const cutOffReason = toolDrafts.size === 0 ? interruptionStopReason(stopReason) : undefined;

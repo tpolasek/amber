@@ -15,7 +15,8 @@ Run the full test suite before finishing any change.
 
 ## Layout
 
-- `src/server.ts` — HTTP server and the agent run loop (streaming, tool execution, queued input, compaction). Large; read targeted sections.
+- `src/server.ts` — CLI entry point; `src/server-app.ts` — HTTP routes and session orchestration. Read targeted sections.
+- `src/provider-round.ts`, `src/tool-execution.ts` — provider stream assembly and regular tool execution.
 - `src/provider.ts`, `src/openai-provider.ts`, `src/openai-chat-provider.ts` — the three wire protocols (Anthropic-style, OpenAI Responses, Chat Completions). All consume the same `ProviderMessage[]` built by `src/history.ts`.
 - `src/store.ts` — session persistence: append-only `<id>.log.jsonl` of message operations plus `<id>.meta.json`, with an in-memory cache and canonical-log rewrites.
 - `src/session-queue.ts`, `src/session-aborts.ts`, `src/compaction.ts`, `src/session-pagination.ts` — run lifecycle pieces.
