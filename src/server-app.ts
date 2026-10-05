@@ -59,15 +59,9 @@ import { estimateHistoryTokens, formatCompactionBanner, generateCompactionSummar
 import { BASH_TOOL, BashExecutor, parseBashInput } from "./bash-tool.js";
 import { BackgroundTaskManager } from "./background-tasks.js";
 import {
-  TASK_OUTPUT_TOOL,
-  TASK_STOP_TOOL,
-  executeTaskOutput,
-  executeTaskStop,
-  parseTaskOutputInput,
-  parseTaskStopInput,
   type BackgroundAgentSource,
 } from "./task-tools.js";
-import { executePlanningTaskTool, PLANNING_TASK_TOOLS } from "./planning-task-tools.js";
+import { executeRegularTool, isRegularTool } from "./tool-execution.js";
 import {
   discoverNestedProjectRoots,
   discoverSkills,
@@ -83,8 +77,6 @@ import {
   type SkillDiscoveryContext,
 } from "./skill-tool.js";
 import { clearReadCache, executeFileTool, FILE_TOOLS } from "./file-tools.js";
-import { executeGrep, GREP_TOOL, parseGrepInput } from "./grep-tool.js";
-import { executeGlob, GLOB_TOOL, parseGlobInput } from "./glob-tool.js";
 import {
   formatGoalReminder,
   GOAL_COMPLETE_TOOL,
@@ -1424,50 +1416,26 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
               resultText = call.output;
               if (error instanceof Error && error.name === "AbortError") abortAfterResult = error;
             }
-          } else if (call.name === TASK_OUTPUT_TOOL.name) {
-            const started = Date.now();
-            call.status = "running";
-            call.startedAt = new Date(started).toISOString();
-            emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
-            try {
-              const result = await executeTaskOutput(
-                backgroundTasks,
-                backgroundAgentTasks,
-                sessionId,
-                parseTaskOutputInput(call.input),
-                controller.signal,
-              );
-              call.status = "complete";
-              call.output = result.output;
-              resultText = result.resultText;
-              // A blocking wait that expired on a still-running task is waiting,
-              // not repetition; the loop tracker exempts such rounds.
-              if (result.retrievalStatus === "timeout") waitingToolCallIds.add(call.id);
-            } catch (error) {
-              call.status = "error";
-              call.output = errorMessage(error);
-              resultText = call.output;
-              if (error instanceof Error && error.name === "AbortError") abortAfterResult = error;
+          } else if (isRegularTool(call.name)) {
+            const result = await executeRegularTool(call, {
+              session,
+              sessionId,
+              signal: controller.signal,
+              allowedDirectories,
+              currentDirectory,
+              backgroundTasks,
+              backgroundAgentTasks,
+              onRunning: () => emit("tool_update", { messageId: assistantMessage.id, toolCall: call }),
+            });
+            resultText = result.resultText;
+            if (result.waiting) waitingToolCallIds.add(call.id);
+            abortAfterResult = result.abortAfterResult;
+            if (result.planningTasksUpdated) {
+              emit("planning_tasks_update", {
+                tasks: session.planningTasks ?? [],
+                archiveHighWaterMark: session.planningTaskArchiveHighWaterMark ?? 0,
+              });
             }
-            call.durationMs = Date.now() - started;
-            call.completedAt = new Date().toISOString();
-          } else if (call.name === TASK_STOP_TOOL.name) {
-            const started = Date.now();
-            call.status = "running";
-            call.startedAt = new Date(started).toISOString();
-            emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
-            try {
-              const result = executeTaskStop(backgroundTasks, sessionId, parseTaskStopInput(call.input));
-              call.status = "complete";
-              call.output = result.output;
-              resultText = result.resultText;
-            } catch (error) {
-              call.status = "error";
-              call.output = errorMessage(error);
-              resultText = call.output;
-            }
-            call.durationMs = Date.now() - started;
-            call.completedAt = new Date().toISOString();
           } else if (call.name === GOAL_COMPLETE_TOOL_NAME) {
             const started = Date.now();
             call.status = "running";
@@ -1499,29 +1467,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             }
             call.durationMs = Date.now() - started;
             call.completedAt = new Date().toISOString();
-          } else if (PLANNING_TASK_TOOLS.some((tool) => tool.name === call.name)) {
-            const started = Date.now();
-            call.status = "running";
-            call.startedAt = new Date(started).toISOString();
-            emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
-            try {
-              archiveCompletedPlanningTasks(session);
-              const result = executePlanningTaskTool(call.name, call.input, session);
-              archiveCompletedPlanningTasks(session);
-              call.status = "complete";
-              call.output = result.output;
-              resultText = result.resultText;
-            } catch (error) {
-              call.status = "error";
-              call.output = errorMessage(error);
-              resultText = call.output;
-            }
-            call.durationMs = Date.now() - started;
-            call.completedAt = new Date().toISOString();
-            emit("planning_tasks_update", {
-              tasks: session.planningTasks ?? [],
-              archiveHighWaterMark: session.planningTaskArchiveHighWaterMark ?? 0,
-            });
           } else if (FILE_TOOLS.some((tool) => tool.name === call.name)) {
             const started = Date.now();
             call.status = "running";
@@ -1562,52 +1507,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                 resultImages = [result.image];
               }
               await recordTouchedPath(session, result.filePath);
-            } catch (error) {
-              call.status = "error";
-              call.output = errorMessage(error);
-              resultText = call.output;
-            }
-            call.durationMs = Date.now() - started;
-            call.completedAt = new Date().toISOString();
-          } else if (call.name === GREP_TOOL.name) {
-            const started = Date.now();
-            call.status = "running";
-            call.startedAt = new Date(started).toISOString();
-            emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
-            try {
-              const result = await executeGrep(
-                parseGrepInput(call.input),
-                allowedDirectories,
-                currentDirectory,
-                controller.signal,
-              );
-              call.status = "complete";
-              call.output = result.output;
-              call.workingDirectory = result.workingDirectory;
-              resultText = result.resultText;
-            } catch (error) {
-              call.status = "error";
-              call.output = errorMessage(error);
-              resultText = call.output;
-            }
-            call.durationMs = Date.now() - started;
-            call.completedAt = new Date().toISOString();
-          } else if (call.name === GLOB_TOOL.name) {
-            const started = Date.now();
-            call.status = "running";
-            call.startedAt = new Date(started).toISOString();
-            emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
-            try {
-              const result = await executeGlob(
-                parseGlobInput(call.input),
-                allowedDirectories,
-                currentDirectory,
-                controller.signal,
-              );
-              call.status = "complete";
-              call.output = result.output;
-              call.workingDirectory = result.workingDirectory;
-              resultText = result.resultText;
             } catch (error) {
               call.status = "error";
               call.output = errorMessage(error);
@@ -2037,17 +1936,6 @@ function directoryAllowed(directory: string, roots: string[]): boolean {
     const child = relative(root, directory);
     return child === "" || (!child.startsWith("..") && !isAbsolute(child));
   });
-}
-
-function archiveCompletedPlanningTasks(session: Session): void {
-  const tasks = session.planningTasks ?? [];
-  if (tasks.length === 0 || tasks.some((task) => task.status !== "completed")) return;
-  const highestTaskId = tasks.reduce((highest, task) => Math.max(highest, Number(task.id) || 0), 0);
-  session.planningTaskArchiveHighWaterMark = Math.max(
-    session.planningTaskArchiveHighWaterMark ?? 0,
-    session.planningTaskHighWaterMark ?? 0,
-    highestTaskId,
-  );
 }
 
 function sessionContextTokens(session: Session): number {

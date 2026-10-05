@@ -1148,9 +1148,9 @@ async function runUnqueueScenario(mock, amber) {
     body: JSON.stringify({ content: "UNQUEUE SCENARIO run several commands" }),
   });
   const finished = readStream(streamResponse, (event, data) => events.push({ event, ...data }));
-  const bashesComplete = () => events.flatMap((event) => event.toolCall ? [event.toolCall] : [])
-    .filter((call) => call.name === "Bash" && call.status === "complete").length;
-  await waitFor(() => bashesComplete() >= 1, 30_000, "a completed bash call");
+  const bashesRunning = () => events.flatMap((event) => event.toolCall ? [event.toolCall] : [])
+    .filter((call) => call.name === "Bash" && call.status === "running").length;
+  await waitFor(() => bashesRunning() >= 2, 30_000, "the second bash call to start");
 
   const queued = await postJson(amberUrl(amber.port, `/api/sessions/${sessionId}/queued-message`), {
     content: "UNQUEUE ME PLEASE",
