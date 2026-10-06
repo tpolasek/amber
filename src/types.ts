@@ -192,6 +192,8 @@ export interface SessionSummary {
   updatedAt: string;
   messageCount: number;
   preview: string;
+  /** First matching excerpt when the session matched only in its contents. */
+  match?: string;
 }
 
 export interface AgentSessionSummary {

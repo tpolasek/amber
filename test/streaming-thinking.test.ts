@@ -93,6 +93,14 @@ test("layout growth and anchoring after a programmatic scroll do not unpin", () 
   assert.equal(pin.shouldFollowBottom(), false);
 });
 
+test("programmatic search navigation unpins bottom following", () => {
+  const pin = new BottomScrollPin();
+  pin.unpin();
+  assert.equal(pin.shouldFollowBottom(), false);
+  pin.update(100, 200, 500);
+  assert.equal(pin.shouldFollowBottom(), false);
+});
+
 test("reset explicitly restores sticky mode", () => {
   const pin = new BottomScrollPin();
   pin.update(100, 200, 500, true);

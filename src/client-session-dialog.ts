@@ -1,12 +1,19 @@
 import { api, notify, requiredWithin } from "./client-api.js";
-import { messageFrom, relativeTime } from "./client-formatters.js";
+import { filterSessionSummaries, messageFrom, relativeTime } from "./client-formatters.js";
 import { elements, state } from "./client-state.js";
 import type { Summary } from "./client-types.js";
+
+const CONTENT_SEARCH_DEBOUNCE_MS = 150;
 
 let summaries: Summary[] = [];
 let sessionDialogSelection = 0;
 let sessionDialogQuery = "";
 let sessionDialogReturnsToLanding = false;
+let contentMatches: Summary[] | null = null;
+let contentMatchesQuery = "";
+let contentSearchFailed = false;
+let contentSearchTimer: number | null = null;
+let contentSearchController: AbortController | null = null;
 
 // Loading sessions and returning to the landing view stay in client.ts; the
 // host handlers are registered there at startup.
@@ -22,14 +29,70 @@ export function setSessionDialogHost(dialogHost: SessionDialogHost): void {
 }
 
 export function handleSessionSearchInput(): void {
-  sessionDialogQuery = elements.sessionSearch.value;
+  setSessionDialogQuery(elements.sessionSearch.value);
+}
+
+function setSessionDialogQuery(value: string): void {
+  sessionDialogQuery = value;
+  elements.sessionSearch.value = value;
   sessionDialogSelection = 0;
+  scheduleContentSearch();
   renderSessionList();
+}
+
+function resetContentSearch(): void {
+  if (contentSearchTimer !== null) window.clearTimeout(contentSearchTimer);
+  contentSearchTimer = null;
+  contentSearchController?.abort();
+  contentSearchController = null;
+  contentMatches = null;
+  contentMatchesQuery = "";
+  contentSearchFailed = false;
+}
+
+function scheduleContentSearch(): void {
+  if (contentSearchTimer !== null) window.clearTimeout(contentSearchTimer);
+  contentSearchTimer = null;
+  contentSearchController?.abort();
+  contentSearchController = null;
+  const query = sessionDialogQuery.trim().toLocaleLowerCase();
+  contentSearchFailed = false;
+  if (!query || contentMatchesQuery === query) return;
+  contentSearchTimer = window.setTimeout(() => {
+    contentSearchTimer = null;
+    void searchSessionContents(query);
+  }, CONTENT_SEARCH_DEBOUNCE_MS);
+}
+
+async function searchSessionContents(query: string): Promise<void> {
+  const controller = new AbortController();
+  contentSearchController = controller;
+  try {
+    const response = await api<{ sessions: Summary[] }>(
+      `/api/sessions/search?q=${encodeURIComponent(query)}`,
+      { signal: controller.signal },
+    );
+    if (controller.signal.aborted || contentSearchController !== controller) return;
+    contentMatches = response.sessions;
+    contentMatchesQuery = query;
+    sessionDialogSelection = Math.min(sessionDialogSelection, Math.max(0, filteredSessionSummaries().length - 1));
+  } catch (error) {
+    if (controller.signal.aborted || contentSearchController !== controller) return;
+    contentSearchFailed = true;
+    notify(messageFrom(error));
+  } finally {
+    if (contentSearchController === controller) {
+      contentSearchController = null;
+      renderSessionList();
+    }
+  }
 }
 
 export async function loadSessionList(): Promise<void> {
   const response = await api<{ sessions: Summary[] }>("/api/sessions");
   summaries = response.sessions;
+  resetContentSearch();
+  scheduleContentSearch();
   sessionDialogSelection = Math.min(sessionDialogSelection, Math.max(0, filteredSessionSummaries().length - 1));
   renderSessionList();
 }
@@ -38,6 +101,7 @@ export function openSessionDialog(returnsToLanding = false): void {
   sessionDialogReturnsToLanding = returnsToLanding;
   sessionDialogQuery = "";
   elements.sessionSearch.value = "";
+  resetContentSearch();
   const currentIndex = filteredSessionSummaries().findIndex((summary) => summary.id === state.session?.id);
   sessionDialogSelection = currentIndex >= 0 ? currentIndex : 0;
   renderSessionList();
@@ -104,17 +168,11 @@ export function handleSessionDialogKeydown(event: KeyboardEvent): boolean {
     && /^[\p{L}\p{N}]$/u.test(event.key)) {
     event.preventDefault();
     elements.sessionSearch.focus();
-    elements.sessionSearch.value += event.key;
-    sessionDialogQuery = elements.sessionSearch.value;
-    sessionDialogSelection = 0;
-    renderSessionList();
+    setSessionDialogQuery(elements.sessionSearch.value + event.key);
   } else if (document.activeElement !== elements.sessionSearch && event.key === "Backspace" && sessionDialogQuery) {
     event.preventDefault();
     elements.sessionSearch.focus();
-    elements.sessionSearch.value = sessionDialogQuery.slice(0, -1);
-    sessionDialogQuery = elements.sessionSearch.value;
-    sessionDialogSelection = 0;
-    renderSessionList();
+    setSessionDialogQuery(sessionDialogQuery.slice(0, -1));
   }
   return true;
 }
@@ -125,7 +183,9 @@ export function renderSessionList(): void {
   if (filtered.length === 0) {
     const empty = document.createElement("div");
     empty.className = "session-archive-empty";
-    empty.textContent = sessionDialogQuery.trim() ? "No matching sessions" : "No archived sessions";
+    empty.textContent = !sessionDialogQuery.trim() ? "No archived sessions"
+      : contentSearchTimer !== null || contentSearchController !== null ? "Searching session contents…"
+      : contentSearchFailed ? "Session search failed" : "No matching sessions";
     elements.sessionList.append(empty);
     return;
   }
@@ -143,6 +203,12 @@ export function renderSessionList(): void {
     const meta = openButton.querySelectorAll(".session-item-meta span");
     if (meta[0]) meta[0].textContent = `${summary.messageCount} msg`;
     if (meta[1]) meta[1].textContent = relativeTime(summary.updatedAt);
+    if (summary.match) {
+      const match = document.createElement("span");
+      match.className = "session-item-match";
+      match.textContent = summary.match;
+      openButton.append(match);
+    }
     openButton.addEventListener("mouseenter", () => {
       if (sessionDialogSelection === index) return;
       sessionDialogSelection = index;
@@ -169,8 +235,9 @@ export function renderSessionList(): void {
 export function filteredSessionSummaries(): Summary[] {
   const query = sessionDialogQuery.trim().toLocaleLowerCase();
   if (!query) return summaries;
-  return summaries.filter((summary) => [summary.title, summary.id, summary.preview, String(summary.messageCount)]
-    .some((value) => value.toLocaleLowerCase().includes(query)));
+  // Keep metadata results visible while the content search is pending.
+  if (contentMatches && contentMatchesQuery === query) return contentMatches;
+  return filterSessionSummaries(summaries, query);
 }
 
 export async function deleteSession(summary: Summary): Promise<void> {

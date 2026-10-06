@@ -418,6 +418,11 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   if (method === "GET" && url.pathname === "/api/sessions") {
     return json(response, 200, { sessions: await store.list() });
   }
+  if (method === "GET" && url.pathname === "/api/sessions/search") {
+    const query = url.searchParams.get("q") ?? "";
+    if (query.length > 512) return json(response, 400, { error: "Search query is too long" });
+    return json(response, 200, { sessions: query.trim() ? await store.search(query) : await store.list() });
+  }
   if (method === "POST" && url.pathname === "/api/sessions") {
     const catalog = providerCatalog;
     if (!catalog) return configurationRequired(response);

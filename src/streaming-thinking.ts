@@ -75,6 +75,10 @@ export class BottomScrollPin {
     return this.followingBottom;
   }
 
+  unpin(): void {
+    this.followingBottom = false;
+  }
+
   scrollToBottom(element: { scrollTop: number; scrollHeight: number; clientHeight: number }): void {
     element.scrollTop = element.scrollHeight - element.clientHeight;
   }

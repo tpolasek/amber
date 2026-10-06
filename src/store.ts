@@ -1,5 +1,9 @@
+import { createReadStream } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { appendFile, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { createInterface } from "node:readline";
 import { randomInt, randomUUID } from "node:crypto";
 import type { AgentSessionSummary, Message, Session, SessionSummary } from "./types.js";
 import { BASIC_ENGLISH_2000 } from "./basic-english-2000.js";
@@ -22,6 +26,13 @@ const LOG_SUFFIX = ".log.jsonl";
 
 /** Sessions kept fully materialized in memory; the least recently used is evicted. */
 const CACHE_LIMIT_DEFAULT = 10;
+
+/** Logs scanned in parallel during a content search. */
+const SEARCH_CONCURRENCY = 4;
+const execFileAsync = promisify(execFile);
+/** Characters of context kept on each side of a content match. */
+const SEARCH_EXCERPT_RADIUS = 60;
+const SEARCH_EXCERPT_MAX = 200;
 
 type MessageLogOperation =
   | { op: "add"; message: Message }
@@ -331,14 +342,32 @@ export class SessionStore {
       .filter((metadata) => !metadata.session.parentSessionId)
       .sort((left, right) => right.session.updatedAt.localeCompare(left.session.updatedAt))
       .slice(0, limit)
-      .map((metadata) => ({
-        id: metadata.session.id,
-        title: metadata.session.title,
-        createdAt: metadata.session.createdAt,
-        updatedAt: metadata.session.updatedAt,
-        messageCount: metadata.messageCount,
-        preview: metadata.preview,
-      }));
+      .map((metadata) => this.#summaryOf(metadata));
+  }
+
+  /** Search all sessions, returning the newest matching results. */
+  async search(query: string, limit = 30): Promise<SessionSummary[]> {
+    const needle = query.trim().toLocaleLowerCase();
+    if (!needle) return this.list(limit);
+    const entries = (await this.#readMetadataEntries())
+      .filter((metadata) => !metadata.session.parentSessionId)
+      .sort((left, right) => right.session.updatedAt.localeCompare(left.session.updatedAt));
+    const candidates = await this.#searchCandidates(needle);
+    const hits: SessionSummary[] = [];
+    for (let start = 0; start < entries.length && hits.length < limit; start += limit) {
+      const batch = entries.slice(start, start + limit);
+      const results = await mapWithConcurrency(batch, SEARCH_CONCURRENCY, async (metadata): Promise<SessionSummary | null> => {
+        const summary = this.#summaryOf(metadata);
+        if (summaryMatchesQuery(summary, needle)) return summary;
+        const previewExcerpt = matchExcerpt(summary.preview, needle);
+        if (previewExcerpt !== null) return { ...summary, match: previewExcerpt };
+        if (candidates && !candidates.has(summary.id) && !this.#cache.has(summary.id)) return null;
+        const match = await this.#findContentMatch(summary.id, needle);
+        return match === null ? null : { ...summary, match };
+      });
+      hits.push(...results.filter((result): result is SessionSummary => result !== null));
+    }
+    return hits.slice(0, limit);
   }
 
   async listAgents(parentSessionId: string): Promise<AgentSessionSummary[]> {
@@ -489,6 +518,56 @@ export class SessionStore {
     return metadata.filter((entry): entry is SessionMetadata => entry !== null);
   }
 
+  #summaryOf(metadata: SessionMetadata): SessionSummary {
+    return {
+      id: metadata.session.id,
+      title: metadata.session.title,
+      createdAt: metadata.session.createdAt,
+      updatedAt: metadata.session.updatedAt,
+      messageCount: metadata.messageCount,
+      preview: metadata.preview,
+    };
+  }
+
+  async #searchCandidates(needle: string): Promise<Set<string> | null> {
+    try {
+      const encoded = JSON.stringify(needle).slice(1, -1);
+      const { stdout } = await execFileAsync("rg", [
+        "--no-config", "--files-with-matches", "--fixed-strings", "--ignore-case",
+        "--hidden", "--no-ignore", "--glob", `*${LOG_SUFFIX}`, "--", encoded, this.#directory,
+      ], { maxBuffer: 4 * 1024 * 1024 });
+      return new Set(stdout.trimEnd().split("\n").map((path) => basename(path, LOG_SUFFIX)));
+    } catch (error) {
+      if ((error as { code?: number }).code === 1) return new Set();
+      return null;
+    }
+  }
+
+  async #findContentMatch(id: string, needle: string): Promise<string | null> {
+    const cached = this.#cache.get(id);
+    if (cached) return firstMessageMatch(cached.messages, needle);
+    const stream = createReadStream(this.#logPath(id), { encoding: "utf8" });
+    const lines = createInterface({ input: stream, crlfDelay: Infinity });
+    const replayed = new Map<string, Message>();
+    try {
+      for await (const line of lines) {
+        if (!line) continue;
+        try {
+          applyOperation(replayed, JSON.parse(line) as MessageLogOperation);
+        } catch {
+          continue;
+        }
+      }
+      return firstMessageMatch(replayed.values(), needle);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    } finally {
+      lines.close();
+      stream.destroy();
+    }
+  }
+
   async #readLog(id: string): Promise<{ messages: Message[]; lines: number; torn: boolean }> {
     let contents: string;
     try {
@@ -560,6 +639,44 @@ export class SessionStore {
   }
 }
 
+/** Fields whose match is already visible in the list, so no excerpt is needed. */
+function summaryMatchesQuery(summary: SessionSummary, needle: string): boolean {
+  return [summary.title, summary.id, String(summary.messageCount)]
+    .some((value) => value.toLocaleLowerCase().includes(needle));
+}
+
+function firstMessageMatch(messages: Iterable<Message>, needle: string): string | null {
+  for (const message of messages) {
+    const match = matchExcerpt(message.content, needle);
+    if (match !== null) return match;
+  }
+  return null;
+}
+
+/** A one-paragraph window around the first case-insensitive occurrence. */
+function matchExcerpt(text: string, needle: string): string | null {
+  const index = text.toLocaleLowerCase().indexOf(needle);
+  if (index < 0) return null;
+  const start = Math.max(0, index - SEARCH_EXCERPT_RADIUS);
+  const end = Math.min(text.length, index + needle.length + SEARCH_EXCERPT_RADIUS);
+  const body = text.slice(start, end).replace(/\s+/g, " ").trim();
+  const clipped = body.length > SEARCH_EXCERPT_MAX ? `${body.slice(0, SEARCH_EXCERPT_MAX).trimEnd()}…` : body;
+  return `${start > 0 ? "…" : ""}${clipped}${end < text.length ? "…" : ""}`;
+}
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await run(items[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 /** The canonical log body: one add operation per message, newline-terminated. */
 function canonicalLines(messages: Message[]): string {
   return messages.length
@@ -567,7 +684,8 @@ function canonicalLines(messages: Message[]): string {
     : "";
 }
 
-function applyOperation(replayed: Map<string, Message>, operation: MessageLogOperation): void {  if (operation.op === "add" || operation.op === "update") {
+function applyOperation(replayed: Map<string, Message>, operation: MessageLogOperation): void {
+  if (operation.op === "add" || operation.op === "update") {
     replayed.set(operation.message.id, operation.message);
     return;
   }

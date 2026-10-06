@@ -471,6 +471,121 @@ test("repairs a torn final log line so the next append survives", async () => {
   );
 });
 
+test("searches session contents and returns the first matching excerpt", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-search-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const alpha = await store.create();
+  alpha.title = "Alpha";
+  await store.appendMessages(alpha, [userMessage("a1", "The quick brown fox jumps over the lazy dog")]);
+  const beta = await store.create();
+  beta.title = "Beta";
+  await store.appendMessages(beta, [userMessage("b1", "An unrelated note about cats")]);
+
+  const hits = await store.search("LAZY");
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0]?.id, alpha.id);
+  assert.equal(hits[0]?.match?.includes("lazy"), true);
+  assert.match(hits[0]?.match ?? "", /quick brown fox/);
+
+  assert.deepEqual(await store.search("zebra"), []);
+  // A title match needs no excerpt; the title is already visible.
+  beta.title = "Lazy afternoon";
+  await store.saveMeta(beta);
+  const metadataHits = await store.search("afternoon");
+  assert.equal(metadataHits.length, 1);
+  assert.equal(metadataHits[0]?.match, undefined);
+});
+
+test("content search scans assistant text, ignores agent sub-sessions, and honors the limit", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-search-scan-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const session = await store.create();
+  await store.appendMessages(session, [{
+    id: "assistant-1",
+    role: "assistant",
+    content: "Deploying the widget service now",
+    createdAt: new Date().toISOString(),
+    status: "complete",
+  }]);
+  const agent = await store.createAgentSession(session, "general-purpose", "Inspect widget logs");
+  agent.messages.push(userMessage("agent-1", "widget internals"));
+  await store.save(agent);
+
+  const hits = await store.search("widget");
+  assert.deepEqual(hits.map((hit) => hit.id), [session.id]);
+  assert.match(hits[0]?.match ?? "", /widget/);
+  assert.deepEqual(await store.search("widget", 0), []);
+  assert.equal((await store.search("widget", 1)).length, 1);
+
+  // An empty or whitespace query is the plain session list.
+  assert.deepEqual((await store.search("   ")).map((hit) => hit.id), (await store.list()).map((hit) => hit.id));
+});
+
+test("content search finds sessions outside the archive's recent list", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-search-older-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const old = await store.create();
+  await store.appendMessages(old, [userMessage("old", `${"x".repeat(130)} rare archive phrase`)]);
+  const oldMetaPath = join(directory, `${old.id}.meta.json`);
+  const oldMeta = JSON.parse(await readFile(oldMetaPath, "utf8")) as { updatedAt: string };
+  oldMeta.updatedAt = "2000-01-01T00:00:00.000Z";
+  await writeFile(oldMetaPath, JSON.stringify(oldMeta));
+  for (let index = 0; index < 30; index += 1) await store.create();
+  assert.equal((await store.list()).some((summary) => summary.id === old.id), false);
+  assert.equal((await store.search("rare archive phrase"))[0]?.id, old.id);
+  assert.equal((await store.search("RARE ARCHIVE PHRASE"))[0]?.id, old.id);
+});
+
+test("content search ignores replaced and cleared log text", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-search-updates-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const session = await store.create();
+  const message = userMessage("m1", "obsolete phrase");
+  await store.appendMessages(session, [message]);
+  message.content = "current phrase";
+  await store.updateMessage(session, message);
+
+  const reopened = new SessionStore(directory);
+  await reopened.initialize();
+  assert.deepEqual(await reopened.search("obsolete"), []);
+  assert.equal((await reopened.search("current"))[0]?.id, session.id);
+
+  await store.save({ ...session, messages: [] });
+  const cleared = new SessionStore(directory);
+  await cleared.initialize();
+  assert.deepEqual(await cleared.search("current"), []);
+});
+
+test("content search handles quoted and literal punctuation in uncached logs", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-search-quoted-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const session = await store.create();
+  await store.appendMessages(session, [userMessage("m1", `${"x".repeat(130)} "router [test]"`)]);
+  const reopened = new SessionStore(directory);
+  await reopened.initialize();
+  assert.equal((await reopened.search('"router [test]"'))[0]?.id, session.id);
+});
+
+test("content search excerpt is bounded and marks clipped context", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "amber-store-search-excerpt-"));
+  const store = new SessionStore(directory);
+  await store.initialize();
+  const session = await store.create();
+  await store.appendMessages(session, [userMessage("m1", `${"x".repeat(300)} needle ${"y".repeat(300)}`)]);
+
+  const [hit] = await store.search("needle");
+  assert.ok(hit?.match);
+  assert.ok(hit.match.includes("needle"));
+  assert.ok(hit.match.length <= 204, `excerpt too long: ${hit.match.length}`);
+  assert.match(hit.match, /^…/);
+  assert.match(hit.match, /…$/);
+});
+
 test("stores metadata and messages in separate files", async () => {
   const directory = await mkdtemp(join(tmpdir(), "amber-store-files-"));
   const store = new SessionStore(directory);

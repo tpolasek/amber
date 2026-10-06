@@ -16,6 +16,7 @@ export const BUILT_IN_COMMANDS: BuiltInCommand[] = [
   { name: "/goal", description: "Set a goal the model keeps working toward, or clear it", runsDuringResponse: true },
   { name: "/name", description: "Generate a session name, or pass a title", runsDuringResponse: false },
   { name: "/plugin", description: "Manage plugin marketplaces, and install, enable, update, or remove plugins", runsDuringResponse: false },
+  { name: "/search", description: "Find text in this session's conversation", runsDuringResponse: true },
   { name: "/tasks", description: "List and manage background shell tasks", runsDuringResponse: true },
 ];
 

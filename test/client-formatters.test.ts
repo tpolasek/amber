@@ -5,6 +5,7 @@ import {
   compactCommandSuggestions,
   compactHeaderPath,
   formatCompactionResultLabel,
+  filterSessionSummaries,
   formatDuration,
   formatTokenCountInThousands,
   GIT_COMMAND_SUGGESTIONS,
@@ -26,11 +27,12 @@ import { BUILT_IN_COMMANDS, builtInCommand } from "../src/built-in-commands.js";
 test("classifies built-in commands that can run during a response", () => {
   assert.deepEqual(
     BUILT_IN_COMMANDS.filter((command) => command.runsDuringResponse).map((command) => command.name),
-    ["/add-dir", "/btw", "/usage", "/goal", "/tasks"],
+    ["/add-dir", "/btw", "/usage", "/goal", "/search", "/tasks"],
   );
   assert.equal(builtInCommand(" /USAGE ")?.runsDuringResponse, true);
   assert.equal(builtInCommand("/BTW what happened")?.name, "/btw");
   assert.equal(builtInCommand("/GOAL clear")?.name, "/goal");
+  assert.equal(builtInCommand("/SEARCH router test")?.runsDuringResponse, true);
   assert.equal(builtInCommand("/goal make the tests pass")?.runsDuringResponse, true);
   assert.equal(builtInCommand("/compact")?.runsDuringResponse, false);
   assert.equal(builtInCommand("/compact off")?.runsDuringResponse, true);
@@ -63,6 +65,19 @@ test("formats client counts, durations, runtimes, and errors", () => {
   assert.equal(taskRuntime({ startedAt: "2026-01-01T00:00:00.000Z", durationMs: 500 }, 0), 500);
   assert.equal(messageFrom(new Error("Broken")), "Broken");
   assert.equal(messageFrom("Broken"), "Something went wrong");
+});
+
+test("filters the archive by session metadata as content results load", () => {
+  const summaries = [
+    { id: "alpha", title: "Release checklist", updatedAt: "2026-01-01T00:00:00.000Z", messageCount: 3, preview: "ship it" },
+    { id: "beta", title: "Notes", updatedAt: "2026-01-01T00:00:00.000Z", messageCount: 12, preview: "unrelated musings" },
+  ];
+  assert.deepEqual(filterSessionSummaries(summaries, "").map((s) => s.id), ["alpha", "beta"]);
+  assert.deepEqual(filterSessionSummaries(summaries, "release").map((s) => s.id), ["alpha"]);
+  assert.deepEqual(filterSessionSummaries(summaries, "MUSINGS").map((s) => s.id), ["beta"]);
+  assert.deepEqual(filterSessionSummaries(summaries, "beta").map((s) => s.id), ["beta"]);
+  assert.deepEqual(filterSessionSummaries(summaries, "12").map((s) => s.id), ["beta"]);
+  assert.deepEqual(filterSessionSummaries(summaries, "missing"), []);
 });
 
 test("labels the compaction result disclosure with its size", () => {

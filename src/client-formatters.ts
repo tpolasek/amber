@@ -1,3 +1,5 @@
+import type { Summary } from "./client-types.js";
+
 export function compactHeaderPath(path: string, homeDirectory: string): string {
   const displayed = path === homeDirectory
     ? "~"
@@ -55,6 +57,13 @@ export function relativeTime(value: string, now = Date.now()): string {
 
 export function messageFrom(error: unknown): string {
   return error instanceof Error ? error.message : "Something went wrong";
+}
+
+export function filterSessionSummaries(summaries: Summary[], query: string): Summary[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return summaries;
+  return summaries.filter((summary) => [summary.title, summary.id, summary.preview, String(summary.messageCount)]
+    .some((value) => value.toLocaleLowerCase().includes(needle)));
 }
 
 export interface PromptFileReference {

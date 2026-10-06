@@ -53,6 +53,7 @@ button { color: inherit; }
 .session-item-title { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--fg-item); font-size: 12px; }
 .session-item.active .session-item-title { color: var(--amber-hot); }
 .session-item-meta { display: flex; justify-content: space-between; margin-top: 4px; color: var(--fg-subtle); font-size: 11px; text-transform: uppercase; }
+.session-item-match { display: block; margin-top: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--fg-metadata); font-size: 11px; }
 .session-delete { width: 42px; height: 28px; margin-right: 8px; border: 1px solid var(--amber-dim); background: var(--amber-faint); color: var(--amber-hot); cursor: pointer; font-size: 12px; letter-spacing: .1em; opacity: 0; pointer-events: none; }
 .session-item:hover .session-delete, .session-delete:focus-visible { opacity: 1; pointer-events: auto; }
 .session-delete:hover { border-color: var(--amber); background: var(--accent-a18); }

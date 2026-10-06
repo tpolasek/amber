@@ -138,6 +138,7 @@ import {
   toolSubject,
 } from "./tool-display.js";
 import { ComposerScreensaver } from "./screensaver.js";
+import { findSessionText, type SessionTextMatch } from "./client-session-search.js";
 
 const commands = BUILT_IN_COMMANDS;
 const SESSION_ROUTE = /^\/s\/([a-z0-9.-]+)$/;
@@ -1421,6 +1422,55 @@ function messageElement(messageId: string): HTMLElement | null {
     .find((element) => element.dataset.messageId === messageId) ?? null;
 }
 
+async function searchSession(sessionId: string, query: string): Promise<void> {
+  while (state.session?.id === sessionId) {
+    const match = findSessionText(state.session.messages, query);
+    if (match) {
+      scrollToSessionMatch(match, query);
+      return;
+    }
+    if (!sessionWindow.hasMore) {
+      notify(`No matches for “${query}” in this session`);
+      return;
+    }
+    if (sessionWindow.loading) {
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+      continue;
+    }
+    const firstId = state.session.messages[0]?.id;
+    await loadEarlierSessionMessages();
+    if (state.session?.id === sessionId && state.session.messages[0]?.id === firstId) return;
+  }
+}
+
+function scrollToSessionMatch(match: SessionTextMatch, query: string): void {
+  const article = messageElement(match.messageId);
+  if (!article) return;
+  if (match.field === "thinking") {
+    const details = article.querySelector<HTMLDetailsElement>(".message-thinking");
+    if (details) details.open = true;
+  }
+  const container = article.querySelector<HTMLElement>(match.field === "thinking" ? ".thinking-content" : ".message-content") ?? article;
+  let target: Element | Range = container;
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const index = (node.textContent ?? "").toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
+    if (index < 0) continue;
+    const range = document.createRange();
+    range.setStart(node, index);
+    range.setEnd(node, index + query.length);
+    target = range;
+    break;
+  }
+  transcriptScrollPin.unpin();
+  if (match.field === "thinking") {
+    container.scrollTop += target.getBoundingClientRect().top - container.getBoundingClientRect().top - container.clientHeight / 3;
+  }
+  const scroller = elements.transcript;
+  scroller.scrollTop += target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - scroller.clientHeight / 3;
+}
+
 async function runCommand(command: string, clearComposer = true): Promise<void> {
   const session = state.session;
   const duringResponse = state.streaming;
@@ -1428,6 +1478,13 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
   if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/btw") {
     if (clearComposer) clearPrompt();
     openBtwDialog(command.slice(4).trim());
+    return;
+  }
+  if (command.split(/\s+/, 1)[0]?.toLowerCase() === "/search") {
+    const query = command.slice(7).trim();
+    if (!query) return notify("Usage: /search <text>");
+    if (clearComposer) clearPrompt();
+    await searchSession(session.id, query);
     return;
   }
   // /compact on|off only flips the auto-compaction flag; it runs through the
