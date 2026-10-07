@@ -262,594 +262,674 @@ export async function startAmberServer(): Promise<{ server: Server; port: number
 async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
-
-  if (method === "GET" && url.pathname === "/api/config") {
-    // The model picker awaits a refreshed catalog; other callers get the cached
-    // one immediately while discovery runs in the background.
-    if (url.searchParams.get("refresh") === "1") await refreshStaleModelCatalog();
-    else void refreshStaleModelCatalog();
-    return json(response, 200, await configPayload());
-  }
-  if (method === "GET" && url.pathname === "/api/settings") {
-    if (!authorizeLocalSettingsAccess(request, response)) return;
-    try {
-      const current = await loadSettingsSource();
-      let editableSettings: AmberSettings;
-      let documentError = configurationError;
-      try {
-        editableSettings = parseSettingsSource(current.source, current.path);
-      } catch (error) {
-        editableSettings = settings ?? parseSettingsSource(SETTINGS_TEMPLATE_SOURCE, current.path);
-        documentError ??= configurationErrorMessage(error);
-      }
-      return json(response, 200, {
-        settings: settingsForEditor(editableSettings),
-        path: current.path,
-        ...(documentError ? { error: documentError } : {}),
-      });
-    } catch (error) {
-      return json(response, 500, { error: errorMessage(error) });
-    }
-  }
-  if (method === "PUT" && url.pathname === "/api/settings") {
-    if (!authorizeSettingsMutation(request, response)) return;
-    const body = await readJson(request, 512_000);
-    if (!("settings" in body)) return json(response, 400, { error: "Settings document is required" });
-    let source: string;
-    let nextSettings: AmberSettings;
-    try {
-      ({ source, settings: nextSettings } = settingsSourceFromEditor(body.settings, settingsPath));
-    } catch (error) {
-      const problem = configurationErrorMessage(error);
-      logServerError(`amber: could not save settings: ${problem}`);
-      return json(response, 400, { error: problem });
-    }
-    try {
-      await saveSettingsSource(source);
-    } catch (error) {
-      logServerError(`amber: could not save settings: ${errorMessage(error)}`);
-      return json(response, 500, { error: `Could not save settings: ${errorMessage(error)}` });
-    }
-    try {
-      const nextCatalog = await loadProviderCatalog(nextSettings);
-      validateAgentModels(nextCatalog, nextSettings.agents);
-      activateConfiguration(nextSettings, nextCatalog);
-    } catch (error) {
-      deactivateConfiguration(nextSettings, error);
-    }
-    return json(response, 200, {
-      settings: settingsForEditor(nextSettings),
-      path: settingsPath,
-      ...(configurationError ? { error: configurationError } : {}),
-      config: await configPayload(),
-    });
-  }
-  if (method === "GET" && url.pathname === "/api/plugins") {
-    if (!authorizeLocalSettingsAccess(request, response)) return;
-    try {
-      return json(response, 200, await pluginSettingsPayload());
-    } catch (error) {
-      return json(response, 500, { error: errorMessage(error) });
-    }
-  }
-  if (method === "PUT" && url.pathname === "/api/plugins/enabled") {
-    if (!authorizeSettingsMutation(request, response)) return;
-    const body = await readJson(request);
-    if (typeof body.key !== "string" || !body.key.trim()) {
-      return json(response, 400, { error: "A plugin key is required" });
-    }
-    if (typeof body.enabled !== "boolean") {
-      return json(response, 400, { error: "Enabled must be true or false" });
-    }
-    const key = body.key.trim();
-    try {
-      const installed = userPluginStates(await loadInstalledPlugins());
-      if (!installed.some((plugin) => plugin.key === key)) {
-        return json(response, 404, { error: `Plugin '${key}' is not installed at user scope` });
-      }
-      // The toggle edits the [enabled_plugins] table in place rather than
-      // re-serialising settings.toml, so comments and key order survive.
-      const path = await writeEnabledPlugin({ key, enabled: body.enabled });
-      // Skills are rediscovered per message but settings are not reloaded, so
-      // the in-memory table moves with the file, as `/plugin enable` does.
-      if (settings) settings.enabled_plugins = { ...settings.enabled_plugins, [key]: body.enabled };
-      return json(response, 200, { ...await pluginSettingsPayload(), path });
-    } catch (error) {
-      logServerError(`amber: could not save plugin enable state: ${errorMessage(error)}`);
-      return json(response, 500, { error: errorMessage(error) });
-    }
-  }
-  if (method === "GET" && url.pathname === "/api/auth") {
-    return json(response, 200, {
-      providers: [{
-        id: "openai-codex",
-        name: "OpenAI Codex",
-        authName: "ChatGPT Plus/Pro",
-        configured: await openAICodexAuth.configured(),
-        providerConfigured: Object.values(settings?.providers ?? {}).some((candidate) => candidate.auth === "openai-codex"),
-      }],
-    });
-  }
-  if (method === "POST" && url.pathname === "/api/auth/openai-codex/login") {
-    if (!authorizeAuthMutation(request, response)) return;
-    const body = await readJson(request);
-    try {
-      if (body.method === "browser") return json(response, 201, await openAICodexAuth.beginBrowserLogin());
-      if (body.method === "device_code") return json(response, 201, await openAICodexAuth.beginDeviceLogin());
-      return json(response, 400, { error: "Login method must be browser or device_code" });
-    } catch (error) {
-      return json(response, 409, { error: errorMessage(error) });
-    }
-  }
-  const authLoginMatch = url.pathname.match(/^\/api\/auth\/openai-codex\/logins\/([a-z0-9-]+)$/);
-  if (method === "GET" && authLoginMatch?.[1]) {
-    try {
-      const status = openAICodexAuth.loginStatus(authLoginMatch[1]);
-      await activateCompletedLogin(authLoginMatch[1], status);
-      return json(response, 200, status);
-    } catch (error) {
-      return json(response, 404, { error: errorMessage(error) });
-    }
-  }
-  const authManualMatch = url.pathname.match(/^\/api\/auth\/openai-codex\/logins\/([a-z0-9-]+)\/manual$/);
-  if (method === "POST" && authManualMatch?.[1]) {
-    if (!authorizeAuthMutation(request, response)) return;
-    const body = await readJson(request);
-    if (typeof body.input !== "string" || !body.input.trim()) {
-      return json(response, 400, { error: "Authorization code or redirect URL is required" });
-    }
-    try {
-      await openAICodexAuth.completeBrowserLogin(authManualMatch[1], body.input);
-      const status = openAICodexAuth.loginStatus(authManualMatch[1]);
-      await activateCompletedLogin(authManualMatch[1], status);
-      return json(response, 200, status);
-    } catch (error) {
-      return json(response, 400, { error: errorMessage(error) });
-    }
-  }
-  if (method === "DELETE" && authLoginMatch?.[1]) {
-    if (!authorizeAuthMutation(request, response)) return;
-    openAICodexAuth.cancelLogin(authLoginMatch[1]);
-    return json(response, 200, { cancelled: true });
-  }
-  if (method === "DELETE" && url.pathname === "/api/auth/openai-codex") {
-    if (!authorizeAuthMutation(request, response)) return;
-    await openAICodexAuth.logout();
-    return json(response, 200, { configured: false });
-  }
-  if (method === "POST" && url.pathname === "/api/run") {
-    return runPrompt(request, response);
-  }
-  if (method === "GET" && url.pathname === "/api/sessions") {
-    return json(response, 200, { sessions: await store.list() });
-  }
-  if (method === "GET" && url.pathname === "/api/sessions/search") {
-    const query = url.searchParams.get("q") ?? "";
-    if (query.length > 512) return json(response, 400, { error: "Search query is too long" });
-    return json(response, 200, { sessions: query.trim() ? await store.search(query) : await store.list() });
-  }
-  if (method === "POST" && url.pathname === "/api/sessions") {
-    const catalog = providerCatalog;
-    if (!catalog) return configurationRequired(response);
-    const body = await readJson(request);
-    const rawName = body.name;
-    const name = typeof rawName === "string" ? rawName.replace(/\s+/g, " ").trim() : "";
-    if (rawName !== undefined && typeof rawName !== "string") {
-      return json(response, 400, { error: "Session name must be a string" });
-    }
-    if (name.length > 80) return json(response, 400, { error: "Session names must be 80 characters or fewer" });
-    const path = typeof body.path === "string" ? body.path.trim() : "";
-    if (!path) return json(response, 400, { error: "A working path is required" });
-    try {
-      const directory = await resolveAddedDirectory(path);
-      const session = await store.create();
-      session.model = catalog.defaultModel;
-      if (name) session.title = name;
-      if (directory !== workspaceRoot) session.directories = [directory];
-      session.cwd = directory;
-      session.addDirInitialized = true;
-      await store.saveMeta(session);
-      return json(response, 201, pagedSessionPayload(session));
-    } catch (error) {
-      return json(response, 400, { error: `Could not add directory: ${errorMessage(error)}` });
-    }
-  }
-  if (method === "GET" && url.pathname === "/api/directory-completions") {
-    const fragment = url.searchParams.get("path") ?? "";
-    if (fragment.includes("\0") || fragment.includes("\n") || fragment.length > 4_096) {
-      return json(response, 400, { error: "Invalid directory completion path" });
-    }
-    return json(response, 200, { directories: await completeDirectories(fragment, workspaceRoot) });
-  }
-
-  const sessionMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}$`));
-  if (method === "GET" && sessionMatch?.[1]) {
-    const session = activeSessions.session(sessionMatch[1]) ?? await store.get(sessionMatch[1]);
-    return session
-      ? json(response, 200, await sessionSnapshot(session))
-      : json(response, 404, { error: "Session not found" });
-  }
-
-  const sessionAgentsMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/agents$`));
-  if (method === "GET" && sessionAgentsMatch?.[1]) {
-    const session = activeSessions.session(sessionAgentsMatch[1]) ?? await store.get(sessionAgentsMatch[1]);
-    return session
-      ? json(response, 200, { agents: await store.listAgents(sessionAgentsMatch[1]) })
-      : json(response, 404, { error: "Session not found" });
-  }
-
-  const sessionModelMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/model$`));
-  if (method === "POST" && sessionModelMatch?.[1]) {
-    const catalog = providerCatalog;
-    if (!catalog) return configurationRequired(response);
-    if (activeSessions.has(sessionModelMatch[1])) {
-      return json(response, 409, { error: "Wait for the current response to finish" });
-    }
-    const session = await store.get(sessionModelMatch[1]);
-    if (!session) return json(response, 404, { error: "Session not found" });
-    if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
-    const body = await readJson(request);
-    const model = typeof body.model === "string" ? body.model.trim() : "";
-    if (!catalog.has(model)) return json(response, 400, { error: `Model '${model}' is not configured` });
-    // Compare against the effective model: a session.model left stale by a
-    // config change already runs on the default, so re-selecting it is no change.
-    const currentModel = session.model && catalog.has(session.model) ? session.model : catalog.defaultModel;
-    if (model !== currentModel) markCacheUsageReset(session);
-    session.model = model;
-    await store.saveMeta(session);
-    return json(response, 200, pagedSessionPayload(session));
-  }
-
-  const sessionThinkingLevelMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/thinking-level$`));
-  if (method === "POST" && sessionThinkingLevelMatch?.[1]) {
-    if (activeSessions.has(sessionThinkingLevelMatch[1])) {
-      return json(response, 409, { error: "Thinking level can only be changed when the session is ready for a new prompt" });
-    }
-    const session = await store.get(sessionThinkingLevelMatch[1]);
-    if (!session) return json(response, 404, { error: "Session not found" });
-    if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
-    try {
-      session.thinkingLevel = parseThinkingLevel((await readJson(request)).thinkingLevel);
-      await store.saveMeta(session);
-      return json(response, 200, pagedSessionPayload(session));
-    } catch (error) {
-      return json(response, 400, { error: errorMessage(error) });
-    }
-  }
-
-  const sessionEventsMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/events$`));
-  if (method === "GET" && sessionEventsMatch?.[1]) {
-    return observeSessionEvents(request, response, sessionEventsMatch[1]);
-  }
-  if (method === "DELETE" && sessionMatch?.[1]) {
-    // Finish abort cleanup before checking active state so deleting during an
-    // already-registered compaction does not require a second attempt.
-    const compaction = compactionRuns.get(sessionMatch[1]);
-    if (compaction) {
-      compaction.controller.abort();
-      await compaction.completion;
-    }
-    if (activeSessions.has(sessionMatch[1])) return json(response, 409, { error: "Wait for the current response to finish" });
-    await stopAutomaticSessionName(sessionMatch[1]);
-    const removed = await store.remove(sessionMatch[1]);
-    if (removed) backgroundTasks.stopSession(sessionMatch[1]);
-    return removed
-      ? json(response, 200, { deletedSessionId: sessionMatch[1] })
-      : json(response, 404, { error: "Session not found" });
-  }
-
-  const abortMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/abort$`));
-  if (method === "POST" && abortMatch?.[1]) {
-    const session = await store.get(abortMatch[1]);
-    if (!session) return json(response, 404, { error: "Session not found" });
-    // A manually aborted agent records "User manually stopped the agent" as its
-    // failure reason. Mark only sub-sessions with an active run: the run's own
-    // catch/finally consumes the mark, so it can neither leak to a later run
-    // nor be dropped by a racing second abort request.
-    if (session.parentSessionId && activeSessions.has(session.id)) manuallyAbortedSessions.add(session.id);
-    const { sessionIds, backgroundTaskIds } = await abortSessionOperations(
-      session.id,
-      activeSessions,
-      backgroundTasks,
-      () => store.family(session.id),
-      (sessionId) => compactionRuns.get(sessionId)?.controller.abort(),
-    );
-    return json(response, 200, {
-      aborted: sessionIds.length > 0 || backgroundTaskIds.length > 0,
-      sessionIds,
-      backgroundTaskIds,
-    });
-  }
-
-  const planModeToggleMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/plan-mode$`));
-  if (method === "POST" && planModeToggleMatch?.[1]) {
-    if (activeSessions.has(planModeToggleMatch[1])) {
-      return json(response, 409, { error: "Plan mode can only be changed when the session is ready for a new prompt" });
-    }
-    const session = await store.get(planModeToggleMatch[1]);
-    if (!session) return json(response, 404, { error: "Session not found" });
-    if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
-    try {
-      const { active } = parsePlanModeToggleInput(await readJson(request));
-      if (active) {
-        const filePath = session.planMode?.planFilePath ?? planFilePath(planDirectory, session.id);
-        await ensurePlanFile(filePath);
-        session.planMode = { active: true, planFilePath: filePath };
-        session.chatMode = false;
-      } else if (session.planMode) {
-        session.planMode.active = false;
-      }
-      await store.saveMeta(session);
-      return json(response, 200, pagedSessionPayload(session));
-    } catch (error) {
-      return json(response, 400, { error: errorMessage(error) });
-    }
-  }
-
-  const chatModeToggleMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/chat-mode$`));
-  if (method === "POST" && chatModeToggleMatch?.[1]) {
-    if (activeSessions.has(chatModeToggleMatch[1])) {
-      return json(response, 409, { error: "Chat mode can only be changed when the session is ready for a new prompt" });
-    }
-    const session = await store.get(chatModeToggleMatch[1]);
-    if (!session) return json(response, 404, { error: "Session not found" });
-    if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
-    try {
-      const { active } = parseChatModeToggleInput(await readJson(request));
-      if (active) {
-        session.chatMode = true;
-        if (session.planMode) session.planMode.active = false;
-      } else {
-        session.chatMode = false;
-      }
-      await store.saveMeta(session);
-      return json(response, 200, pagedSessionPayload(session));
-    } catch (error) {
-      return json(response, 400, { error: errorMessage(error) });
-    }
-  }
-
-  const btwMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/btw$`));
-  if (method === "POST" && btwMatch?.[1]) {
-    return streamBtwAnswer(request, response, btwMatch[1]);
-  }
-
-  const messageMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/messages$`));
-  if (method === "GET" && messageMatch?.[1]) {
-    const session = activeSessions.session(messageMatch[1]) ?? await store.get(messageMatch[1]);
-    if (!session) return json(response, 404, { error: "Session not found" });
-    const before = url.searchParams.get("before") ?? null;
-    if (before !== null && !MESSAGE_ID.test(before)) {
-      return json(response, 400, { error: "Invalid before message id" });
-    }
-    const page = pageSessionMessages(session.messages, before);
-    return json(response, 200, { messages: page.messages, hasMore: page.hasMore });
-  }
-  if (method === "POST" && messageMatch?.[1]) {
-    return streamMessage(request, response, messageMatch[1]);
-  }
-
-  const queuedMessageMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/queued-message$`));
-  if (method === "POST" && queuedMessageMatch?.[1]) {
-    const session = await store.get(queuedMessageMatch[1]);
-    if (!session) return json(response, 404, { error: "Session not found" });
-    if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
-    const body = await readJson(request, MAX_MESSAGE_BODY_BYTES);
-    const content = typeof body.content === "string" ? body.content.trim() : "";
-    const kind = body.kind === "command" ? "command" : body.kind === "message" ? "message" : undefined;
-    const parsedImages = parseMessageImages(body.images);
-    if ("error" in parsedImages) return json(response, 400, { error: parsedImages.error });
-    const images = parsedImages.images;
-    if ((!content && images.length === 0) || content.length > 32_000) {
-      return json(response, 400, { error: "Message must contain text or images; text is limited to 32,000 characters" });
-    }
-    if (!kind) return json(response, 400, { error: "Queued input kind must be message or command" });
-    if (kind === "command" && images.length > 0) {
-      return json(response, 400, { error: "Queued commands cannot include images" });
-    }
-    if (kind === "command" && !builtInCommand(content)) {
-      return json(response, 400, { error: "Queued command is not a built-in command" });
-    }
-    if (kind === "message") {
-      const limitError = sessionImageLimitError(session, {
-        id: randomUUID(), role: "user", content, createdAt: new Date().toISOString(), status: "complete",
-        ...(images.length ? { images } : {}),
-      });
-      if (limitError) return json(response, 400, { error: limitError });
-    }
-    if (!interruptibleSessions.has(queuedMessageMatch[1])) {
-      return json(response, 409, { error: "The session is not streaming" });
-    }
-    queuedSessionMessages.enqueueUser(queuedMessageMatch[1], { content, kind, ...(images.length ? { images } : {}) });
-    return json(response, 202, { queued: true });
-  }
-  if (method === "DELETE" && queuedMessageMatch?.[1]) {
-    const session = await store.get(queuedMessageMatch[1]);
-    if (!session) return json(response, 404, { error: "Session not found" });
-    if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
-    // False silently reports that the run already injected the input.
-    return json(response, 200, { removed: queuedSessionMessages.removeUser(queuedMessageMatch[1]) });
-  }
-
-  const commandMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/commands$`));
-  if (method === "POST" && commandMatch?.[1]) {
-    return executeCommand(request, response, commandMatch[1]);
-  }
-
-  const tasksMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/tasks$`));
-  if (method === "GET" && tasksMatch?.[1]) {
-    const session = await store.get(tasksMatch[1]);
-    return session
-      ? json(response, 200, { tasks: backgroundTasks.list(tasksMatch[1]) })
-      : json(response, 404, { error: "Session not found" });
-  }
-
-  const skillsMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/skills$`));
-  if (method === "GET" && skillsMatch?.[1]) {
-    const session = activeSessions.session(skillsMatch[1]) ?? await store.get(skillsMatch[1]);
-    if (!session) return json(response, 404, { error: "Session not found" });
-    const skills = invocableSkills(
-      await sessionSkills(session),
-      session.skillTouchedPaths ?? [],
-      sessionWorkingDirectory(session),
-    ).filter((skill) => skill.userInvocable);
-    return json(response, 200, {
-      skills: skills.map((skill) => ({ name: skill.name, description: skill.description })),
-    });
-  }
-
-  const gitMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/git$`));
-  if (method === "GET" && gitMatch?.[1]) {
-    const session = await store.get(gitMatch[1]);
-    if (!session) return json(response, 404, { error: "Session not found" });
-    const gitCommand = url.searchParams.get("command");
-    if (gitCommand !== "diff" && gitCommand !== "show" && gitCommand !== "status") {
-      return json(response, 400, { error: "git command must be diff, show, or status" });
-    }
-    const controller = new AbortController();
-    request.once("aborted", () => controller.abort());
-    try {
-      const result = await new BashExecutor().run(
-        { command: `git ${gitCommand}`, timeoutMs: 30_000 },
-        sessionDirectories(session),
-        controller.signal,
-        { onRunning: () => undefined, onOutput: () => undefined },
-      );
-      return json(response, 200, {
-        command: gitCommand,
-        output: result.output,
-        exitCode: result.exitCode,
-        status: result.status,
-      });
-    } catch (error) {
-      return json(response, 500, { error: errorMessage(error) });
-    }
-  }
-
-  const questionAnswerMatch = url.pathname.match(
-    new RegExp(`^/api/sessions/${SESSION_PATH_ID}/questions/([^/]+)/answers$`),
-  );
-  if (method === "POST" && questionAnswerMatch?.[1] && questionAnswerMatch[2]) {
-    const session = await store.get(questionAnswerMatch[1]);
-    if (!session) return json(response, 404, { error: "Session not found" });
-    const body = await readJson(request);
-    const toolUseId = decodeURIComponent(questionAnswerMatch[2]);
-    try {
-      if (body.cancelled === true) {
-        askUserQuestions.decline(questionAnswerMatch[1], toolUseId);
-        return json(response, 200, { cancelled: true });
-      }
-      const answers = askUserQuestions.answer(questionAnswerMatch[1], toolUseId, body.answers);
-      return json(response, 200, { answers });
-    } catch (error) {
-      return json(response, 400, { error: errorMessage(error) });
-    }
-  }
-
-  const planModeDecisionMatch = url.pathname.match(
-    new RegExp(`^/api/sessions/${SESSION_PATH_ID}/plan-mode/([^/]+)/decision$`),
-  );
-  if (method === "POST" && planModeDecisionMatch?.[1] && planModeDecisionMatch[2]) {
-    const session = await store.get(planModeDecisionMatch[1]);
-    if (!session) return json(response, 404, { error: "Session not found" });
-    if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
-    const body = await readJson(request);
-    const toolUseId = decodeURIComponent(planModeDecisionMatch[2]);
-    try {
-      const decision = parsePlanModeDecision(body);
-      if (decision.newSession) {
-        if (planModeApprovals.pendingKind(planModeDecisionMatch[1], toolUseId) !== "exit") {
-          throw new Error("Implementing in a new session requires a plan review request");
-        }
-        const implementationBanner: Message = {
-          id: randomUUID(),
-          role: "assistant",
-          content: `Plan from session: ${session.id}`,
-          createdAt: new Date().toISOString(),
-          status: "complete",
-          kind: "plan-banner",
-          sourceSessionId: session.id,
-        };
-        const implementation = await store.createPlanImplementation(session, implementationBanner);
-        const settled = planModeApprovals.decideParsed(planModeDecisionMatch[1], toolUseId, {
-          ...decision,
-          newSessionId: implementation.id,
-        });
-        return json(response, 200, { decision: settled });
-      }
-      return json(response, 200, { decision: planModeApprovals.decideParsed(planModeDecisionMatch[1], toolUseId, decision) });
-    } catch (error) {
-      return json(response, 400, { error: errorMessage(error) });
-    }
-  }
-
-  const taskStopMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/tasks/([a-z0-9]+)/stop$`));
-  if (method === "POST" && taskStopMatch?.[1] && taskStopMatch[2]) {
-    const session = await store.get(taskStopMatch[1]);
-    if (!session) return json(response, 404, { error: "Session not found" });
-    try {
-      return json(response, 200, { task: backgroundTasks.stop(taskStopMatch[1], taskStopMatch[2]) });
-    } catch (error) {
-      return json(response, 400, { error: errorMessage(error) });
-    }
-  }
-
-  const completionMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/directory-completions$`));
-  if (method === "GET" && completionMatch?.[1]) {
-    return listDirectoryCompletions(response, completionMatch[1], url);
-  }
-
-  if (method === "GET" && url.pathname === "/app.js") {
-    return serveFile(response, clientScript, "text/javascript; charset=utf-8", "no-cache");
-  }
-  if (method === "GET" && url.pathname === "/screensaver.js") {
-    return serveFile(response, screensaverScript, "text/javascript; charset=utf-8", "no-cache");
-  }
-  if (method === "GET" && url.pathname === "/client-formatters.js") {
-    return serveFile(response, clientFormattersScript, "text/javascript; charset=utf-8", "no-cache");
-  }
-  if (method === "GET" && url.pathname === "/built-in-commands.js") {
-    return serveFile(response, builtInCommandsScript, "text/javascript; charset=utf-8", "no-cache");
-  }
-  if (method === "GET" && url.pathname === "/streaming-thinking.js") {
-    return serveFile(response, streamingThinkingScript, "text/javascript; charset=utf-8", "no-cache");
-  }
-  if (method === "GET" && url.pathname === "/tool-display.js") {
-    return serveFile(response, toolDisplayScript, "text/javascript; charset=utf-8", "no-cache");
-  }
-  if (method === "GET" && url.pathname === "/thinking-level.js") {
-    return serveFile(response, thinkingLevelScript, "text/javascript; charset=utf-8", "no-cache");
-  }
-  if (method === "GET" && url.pathname === "/plan-handoff.js") {
-    return serveFile(response, planHandoffScript, "text/javascript; charset=utf-8", "no-cache");
-  }
-  if (method === "GET" && clientModulePattern.test(url.pathname)) {
-    return serveFile(response, join(sourceDirectory, url.pathname.slice(1)), "text/javascript; charset=utf-8", "no-cache");
-  }
-  if (method === "GET" && url.pathname === "/vendor/markdown-it.js") {
-    return serveFile(response, markdownScript, "text/javascript; charset=utf-8", "public, max-age=31536000, immutable");
-  }
-  if (method === "GET" && url.pathname === "/styles.css") {
-    return serveFile(response, join(publicDirectory, "styles.css"), "text/css; charset=utf-8", "no-cache");
-  }
-  if (method === "GET" && url.pathname === "/themes.css") {
-    return serveFile(response, join(publicDirectory, "themes.css"), "text/css; charset=utf-8", "no-cache");
-  }
-  if (method === "GET" && (url.pathname === "/" || /^\/s\/[a-z0-9.-]+$/.test(url.pathname))) {
-    return serveFile(
-      response,
-      join(publicDirectory, "index.html"),
-      "text/html; charset=utf-8",
-      "no-cache",
-      (html) => html.replace("__BUILD_VERSION__", () => buildVersion),
-    );
+  const handlers = [
+    handleConfigurationRoutes,
+    handleAuthRoutes,
+    handleSessionCollectionRoutes,
+    handleSessionItemRoutes,
+    handleSessionToolRoutes,
+    handleStaticRoutes,
+  ];
+  for (const handle of handlers) {
+    if (await handle(request, response, method, url)) return;
   }
   json(response, 404, { error: "Not found" });
 }
 
+async function handleConfigurationRoutes(request: IncomingMessage, response: ServerResponse, method: string, url: URL): Promise<boolean> {
+  if (method === "GET" && url.pathname === "/api/config") {
+  // The model picker awaits a refreshed catalog; other callers get the cached
+  // one immediately while discovery runs in the background.
+  if (url.searchParams.get("refresh") === "1") await refreshStaleModelCatalog();
+  else void refreshStaleModelCatalog();
+  json(response, 200, await configPayload());
+  return true;
+}
+if (method === "GET" && url.pathname === "/api/settings") {
+  if (!authorizeLocalSettingsAccess(request, response)) return true;
+  try {
+    const current = await loadSettingsSource();
+    let editableSettings: AmberSettings;
+    let documentError = configurationError;
+    try {
+      editableSettings = parseSettingsSource(current.source, current.path);
+    } catch (error) {
+      editableSettings = settings ?? parseSettingsSource(SETTINGS_TEMPLATE_SOURCE, current.path);
+      documentError ??= configurationErrorMessage(error);
+    }
+    json(response, 200, {
+      settings: settingsForEditor(editableSettings),
+      path: current.path,
+      ...(documentError ? { error: documentError } : {}),
+    });
+    return true;
+  } catch (error) {
+    json(response, 500, { error: errorMessage(error) });
+    return true;
+  }
+}
+if (method === "PUT" && url.pathname === "/api/settings") {
+  if (!authorizeSettingsMutation(request, response)) return true;
+  const body = await readJson(request, 512_000);
+  if (!("settings" in body)) { json(response, 400, { error: "Settings document is required" }); return true; }
+  let source: string;
+  let nextSettings: AmberSettings;
+  try {
+    ({ source, settings: nextSettings } = settingsSourceFromEditor(body.settings, settingsPath));
+  } catch (error) {
+    const problem = configurationErrorMessage(error);
+    logServerError(`amber: could not save settings: ${problem}`);
+    json(response, 400, { error: problem });
+    return true;
+  }
+  try {
+    await saveSettingsSource(source);
+  } catch (error) {
+    logServerError(`amber: could not save settings: ${errorMessage(error)}`);
+    json(response, 500, { error: `Could not save settings: ${errorMessage(error)}` });
+    return true;
+  }
+  try {
+    const nextCatalog = await loadProviderCatalog(nextSettings);
+    validateAgentModels(nextCatalog, nextSettings.agents);
+    activateConfiguration(nextSettings, nextCatalog);
+  } catch (error) {
+    deactivateConfiguration(nextSettings, error);
+  }
+  json(response, 200, {
+    settings: settingsForEditor(nextSettings),
+    path: settingsPath,
+    ...(configurationError ? { error: configurationError } : {}),
+    config: await configPayload(),
+  });
+  return true;
+}
+if (method === "GET" && url.pathname === "/api/plugins") {
+  if (!authorizeLocalSettingsAccess(request, response)) return true;
+  try {
+    json(response, 200, await pluginSettingsPayload());
+    return true;
+  } catch (error) {
+    json(response, 500, { error: errorMessage(error) });
+    return true;
+  }
+}
+if (method === "PUT" && url.pathname === "/api/plugins/enabled") {
+  if (!authorizeSettingsMutation(request, response)) return true;
+  const body = await readJson(request);
+  if (typeof body.key !== "string" || !body.key.trim()) {
+    json(response, 400, { error: "A plugin key is required" });
+    return true;
+  }
+  if (typeof body.enabled !== "boolean") {
+    json(response, 400, { error: "Enabled must be true or false" });
+    return true;
+  }
+  const key = body.key.trim();
+  try {
+    const installed = userPluginStates(await loadInstalledPlugins());
+    if (!installed.some((plugin) => plugin.key === key)) {
+      json(response, 404, { error: `Plugin '${key}' is not installed at user scope` });
+      return true;
+    }
+    // The toggle edits the [enabled_plugins] table in place rather than
+    // re-serialising settings.toml, so comments and key order survive.
+    const path = await writeEnabledPlugin({ key, enabled: body.enabled });
+    // Skills are rediscovered per message but settings are not reloaded, so
+    // the in-memory table moves with the file, as `/plugin enable` does.
+    if (settings) settings.enabled_plugins = { ...settings.enabled_plugins, [key]: body.enabled };
+    json(response, 200, { ...await pluginSettingsPayload(), path });
+    return true;
+  } catch (error) {
+    logServerError(`amber: could not save plugin enable state: ${errorMessage(error)}`);
+    json(response, 500, { error: errorMessage(error) });
+    return true;
+  }
+}
+  return false;
+}
+
+async function handleAuthRoutes(request: IncomingMessage, response: ServerResponse, method: string, url: URL): Promise<boolean> {
+  if (method === "GET" && url.pathname === "/api/auth") {
+  json(response, 200, {
+    providers: [{
+      id: "openai-codex",
+      name: "OpenAI Codex",
+      authName: "ChatGPT Plus/Pro",
+      configured: await openAICodexAuth.configured(),
+      providerConfigured: Object.values(settings?.providers ?? {}).some((candidate) => candidate.auth === "openai-codex"),
+    }],
+  });
+  return true;
+}
+if (method === "POST" && url.pathname === "/api/auth/openai-codex/login") {
+  if (!authorizeAuthMutation(request, response)) return true;
+  const body = await readJson(request);
+  try {
+    if (body.method === "browser") { json(response, 201, await openAICodexAuth.beginBrowserLogin()); return true; }
+    if (body.method === "device_code") { json(response, 201, await openAICodexAuth.beginDeviceLogin()); return true; }
+    json(response, 400, { error: "Login method must be browser or device_code" });
+    return true;
+  } catch (error) {
+    json(response, 409, { error: errorMessage(error) });
+    return true;
+  }
+}
+const authLoginMatch = url.pathname.match(/^\/api\/auth\/openai-codex\/logins\/([a-z0-9-]+)$/);
+if (method === "GET" && authLoginMatch?.[1]) {
+  try {
+    const status = openAICodexAuth.loginStatus(authLoginMatch[1]);
+    await activateCompletedLogin(authLoginMatch[1], status);
+    json(response, 200, status);
+    return true;
+  } catch (error) {
+    json(response, 404, { error: errorMessage(error) });
+    return true;
+  }
+}
+const authManualMatch = url.pathname.match(/^\/api\/auth\/openai-codex\/logins\/([a-z0-9-]+)\/manual$/);
+if (method === "POST" && authManualMatch?.[1]) {
+  if (!authorizeAuthMutation(request, response)) return true;
+  const body = await readJson(request);
+  if (typeof body.input !== "string" || !body.input.trim()) {
+    json(response, 400, { error: "Authorization code or redirect URL is required" });
+    return true;
+  }
+  try {
+    await openAICodexAuth.completeBrowserLogin(authManualMatch[1], body.input);
+    const status = openAICodexAuth.loginStatus(authManualMatch[1]);
+    await activateCompletedLogin(authManualMatch[1], status);
+    json(response, 200, status);
+    return true;
+  } catch (error) {
+    json(response, 400, { error: errorMessage(error) });
+    return true;
+  }
+}
+if (method === "DELETE" && authLoginMatch?.[1]) {
+  if (!authorizeAuthMutation(request, response)) return true;
+  openAICodexAuth.cancelLogin(authLoginMatch[1]);
+  json(response, 200, { cancelled: true });
+  return true;
+}
+if (method === "DELETE" && url.pathname === "/api/auth/openai-codex") {
+  if (!authorizeAuthMutation(request, response)) return true;
+  await openAICodexAuth.logout();
+  json(response, 200, { configured: false });
+  return true;
+}
+  return false;
+}
+
+async function handleSessionCollectionRoutes(request: IncomingMessage, response: ServerResponse, method: string, url: URL): Promise<boolean> {if (method === "POST" && url.pathname === "/api/run") {
+  runPrompt(request, response);
+  return true;
+}
+if (method === "GET" && url.pathname === "/api/sessions") {
+  json(response, 200, { sessions: await store.list() });
+  return true;
+}
+if (method === "GET" && url.pathname === "/api/sessions/search") {
+  const query = url.searchParams.get("q") ?? "";
+  if (query.length > 512) { json(response, 400, { error: "Search query is too long" }); return true; }
+  json(response, 200, { sessions: query.trim() ? await store.search(query) : await store.list() });
+  return true;
+}
+if (method === "POST" && url.pathname === "/api/sessions") {
+  const catalog = providerCatalog;
+  if (!catalog) { configurationRequired(response); return true; }
+  const body = await readJson(request);
+  const rawName = body.name;
+  const name = typeof rawName === "string" ? rawName.replace(/\s+/g, " ").trim() : "";
+  if (rawName !== undefined && typeof rawName !== "string") {
+    json(response, 400, { error: "Session name must be a string" });
+    return true;
+  }
+  if (name.length > 80) { json(response, 400, { error: "Session names must be 80 characters or fewer" }); return true; }
+  const path = typeof body.path === "string" ? body.path.trim() : "";
+  if (!path) { json(response, 400, { error: "A working path is required" }); return true; }
+  try {
+    const directory = await resolveAddedDirectory(path);
+    const session = await store.create();
+    session.model = catalog.defaultModel;
+    if (name) session.title = name;
+    if (directory !== workspaceRoot) session.directories = [directory];
+    session.cwd = directory;
+    session.addDirInitialized = true;
+    await store.saveMeta(session);
+    json(response, 201, pagedSessionPayload(session));
+    return true;
+  } catch (error) {
+    json(response, 400, { error: `Could not add directory: ${errorMessage(error)}` });
+    return true;
+  }
+}
+if (method === "GET" && url.pathname === "/api/directory-completions") {
+  const fragment = url.searchParams.get("path") ?? "";
+  if (fragment.includes("\0") || fragment.includes("\n") || fragment.length > 4_096) {
+    json(response, 400, { error: "Invalid directory completion path" });
+    return true;
+  }
+  json(response, 200, { directories: await completeDirectories(fragment, workspaceRoot) });
+  return true;
+}
+  return false;
+}
+
+async function handleSessionItemRoutes(request: IncomingMessage, response: ServerResponse, method: string, url: URL): Promise<boolean> {const sessionMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}$`));
+if (method === "GET" && sessionMatch?.[1]) {
+  const session = activeSessions.session(sessionMatch[1]) ?? await store.get(sessionMatch[1]);
+  session ? json(response, 200, await sessionSnapshot(session)) : json(response, 404, { error: "Session not found" });
+  return true;
+}
+
+const sessionAgentsMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/agents$`));
+if (method === "GET" && sessionAgentsMatch?.[1]) {
+  const session = activeSessions.session(sessionAgentsMatch[1]) ?? await store.get(sessionAgentsMatch[1]);
+  session ? json(response, 200, { agents: await store.listAgents(sessionAgentsMatch[1]) }) : json(response, 404, { error: "Session not found" });
+  return true;
+}
+
+const sessionModelMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/model$`));
+if (method === "POST" && sessionModelMatch?.[1]) {
+  const catalog = providerCatalog;
+  if (!catalog) { configurationRequired(response); return true; }
+  if (activeSessions.has(sessionModelMatch[1])) {
+    json(response, 409, { error: "Wait for the current response to finish" });
+    return true;
+  }
+  const session = await store.get(sessionModelMatch[1]);
+  if (!session) { json(response, 404, { error: "Session not found" }); return true; }
+  if (session.parentSessionId) { json(response, 403, { error: "Agent sub-sessions are read-only" }); return true; }
+  const body = await readJson(request);
+  const model = typeof body.model === "string" ? body.model.trim() : "";
+  if (!catalog.has(model)) { json(response, 400, { error: `Model '${model}' is not configured` }); return true; }
+  // Compare against the effective model: a session.model left stale by a
+  // config change already runs on the default, so re-selecting it is no change.
+  const currentModel = session.model && catalog.has(session.model) ? session.model : catalog.defaultModel;
+  if (model !== currentModel) markCacheUsageReset(session);
+  session.model = model;
+  await store.saveMeta(session);
+  json(response, 200, pagedSessionPayload(session));
+  return true;
+}
+
+const sessionThinkingLevelMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/thinking-level$`));
+if (method === "POST" && sessionThinkingLevelMatch?.[1]) {
+  if (activeSessions.has(sessionThinkingLevelMatch[1])) {
+    json(response, 409, { error: "Thinking level can only be changed when the session is ready for a new prompt" });
+    return true;
+  }
+  const session = await store.get(sessionThinkingLevelMatch[1]);
+  if (!session) { json(response, 404, { error: "Session not found" }); return true; }
+  if (session.parentSessionId) { json(response, 403, { error: "Agent sub-sessions are read-only" }); return true; }
+  try {
+    session.thinkingLevel = parseThinkingLevel((await readJson(request)).thinkingLevel);
+    await store.saveMeta(session);
+    json(response, 200, pagedSessionPayload(session));
+    return true;
+  } catch (error) {
+    json(response, 400, { error: errorMessage(error) });
+    return true;
+  }
+}
+
+const sessionEventsMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/events$`));
+if (method === "GET" && sessionEventsMatch?.[1]) {
+  observeSessionEvents(request, response, sessionEventsMatch[1]);
+  return true;
+}
+if (method === "DELETE" && sessionMatch?.[1]) {
+  // Finish abort cleanup before checking active state so deleting during an
+  // already-registered compaction does not require a second attempt.
+  const compaction = compactionRuns.get(sessionMatch[1]);
+  if (compaction) {
+    compaction.controller.abort();
+    await compaction.completion;
+  }
+  if (activeSessions.has(sessionMatch[1])) { json(response, 409, { error: "Wait for the current response to finish" }); return true; }
+  await stopAutomaticSessionName(sessionMatch[1]);
+  const removed = await store.remove(sessionMatch[1]);
+  if (removed) backgroundTasks.stopSession(sessionMatch[1]);
+  removed ? json(response, 200, { deletedSessionId: sessionMatch[1] }) : json(response, 404, { error: "Session not found" });
+  return true;
+}
+
+const abortMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/abort$`));
+if (method === "POST" && abortMatch?.[1]) {
+  const session = await store.get(abortMatch[1]);
+  if (!session) { json(response, 404, { error: "Session not found" }); return true; }
+  // A manually aborted agent records "User manually stopped the agent" as its
+  // failure reason. Mark only sub-sessions with an active run: the run's own
+  // catch/finally consumes the mark, so it can neither leak to a later run
+  // nor be dropped by a racing second abort request.
+  if (session.parentSessionId && activeSessions.has(session.id)) manuallyAbortedSessions.add(session.id);
+  const { sessionIds, backgroundTaskIds } = await abortSessionOperations(
+    session.id,
+    activeSessions,
+    backgroundTasks,
+    () => store.family(session.id),
+    (sessionId) => compactionRuns.get(sessionId)?.controller.abort(),
+  );
+  json(response, 200, {
+    aborted: sessionIds.length > 0 || backgroundTaskIds.length > 0,
+    sessionIds,
+    backgroundTaskIds,
+  });
+  return true;
+}
+
+const planModeToggleMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/plan-mode$`));
+if (method === "POST" && planModeToggleMatch?.[1]) {
+  if (activeSessions.has(planModeToggleMatch[1])) {
+    json(response, 409, { error: "Plan mode can only be changed when the session is ready for a new prompt" });
+    return true;
+  }
+  const session = await store.get(planModeToggleMatch[1]);
+  if (!session) { json(response, 404, { error: "Session not found" }); return true; }
+  if (session.parentSessionId) { json(response, 403, { error: "Agent sub-sessions are read-only" }); return true; }
+  try {
+    const { active } = parsePlanModeToggleInput(await readJson(request));
+    if (active) {
+      const filePath = session.planMode?.planFilePath ?? planFilePath(planDirectory, session.id);
+      await ensurePlanFile(filePath);
+      session.planMode = { active: true, planFilePath: filePath };
+      session.chatMode = false;
+    } else if (session.planMode) {
+      session.planMode.active = false;
+    }
+    await store.saveMeta(session);
+    json(response, 200, pagedSessionPayload(session));
+    return true;
+  } catch (error) {
+    json(response, 400, { error: errorMessage(error) });
+    return true;
+  }
+}
+
+const chatModeToggleMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/chat-mode$`));
+if (method === "POST" && chatModeToggleMatch?.[1]) {
+  if (activeSessions.has(chatModeToggleMatch[1])) {
+    json(response, 409, { error: "Chat mode can only be changed when the session is ready for a new prompt" });
+    return true;
+  }
+  const session = await store.get(chatModeToggleMatch[1]);
+  if (!session) { json(response, 404, { error: "Session not found" }); return true; }
+  if (session.parentSessionId) { json(response, 403, { error: "Agent sub-sessions are read-only" }); return true; }
+  try {
+    const { active } = parseChatModeToggleInput(await readJson(request));
+    if (active) {
+      session.chatMode = true;
+      if (session.planMode) session.planMode.active = false;
+    } else {
+      session.chatMode = false;
+    }
+    await store.saveMeta(session);
+    json(response, 200, pagedSessionPayload(session));
+    return true;
+  } catch (error) {
+    json(response, 400, { error: errorMessage(error) });
+    return true;
+  }
+}
+
+const btwMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/btw$`));
+if (method === "POST" && btwMatch?.[1]) {
+  streamBtwAnswer(request, response, btwMatch[1]);
+  return true;
+}
+
+const messageMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/messages$`));
+if (method === "GET" && messageMatch?.[1]) {
+  const session = activeSessions.session(messageMatch[1]) ?? await store.get(messageMatch[1]);
+  if (!session) { json(response, 404, { error: "Session not found" }); return true; }
+  const before = url.searchParams.get("before") ?? null;
+  if (before !== null && !MESSAGE_ID.test(before)) {
+    json(response, 400, { error: "Invalid before message id" });
+    return true;
+  }
+  const page = pageSessionMessages(session.messages, before);
+  json(response, 200, { messages: page.messages, hasMore: page.hasMore });
+  return true;
+}
+if (method === "POST" && messageMatch?.[1]) {
+  streamMessage(request, response, messageMatch[1]);
+  return true;
+}
+
+const queuedMessageMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/queued-message$`));
+if (method === "POST" && queuedMessageMatch?.[1]) {
+  const session = await store.get(queuedMessageMatch[1]);
+  if (!session) { json(response, 404, { error: "Session not found" }); return true; }
+  if (session.parentSessionId) { json(response, 403, { error: "Agent sub-sessions are read-only" }); return true; }
+  const body = await readJson(request, MAX_MESSAGE_BODY_BYTES);
+  const content = typeof body.content === "string" ? body.content.trim() : "";
+  const kind = body.kind === "command" ? "command" : body.kind === "message" ? "message" : undefined;
+  const parsedImages = parseMessageImages(body.images);
+  if ("error" in parsedImages) { json(response, 400, { error: parsedImages.error }); return true; }
+  const images = parsedImages.images;
+  if ((!content && images.length === 0) || content.length > 32_000) {
+    json(response, 400, { error: "Message must contain text or images; text is limited to 32,000 characters" });
+    return true;
+  }
+  if (!kind) { json(response, 400, { error: "Queued input kind must be message or command" }); return true; }
+  if (kind === "command" && images.length > 0) {
+    json(response, 400, { error: "Queued commands cannot include images" });
+    return true;
+  }
+  if (kind === "command" && !builtInCommand(content)) {
+    json(response, 400, { error: "Queued command is not a built-in command" });
+    return true;
+  }
+  if (kind === "message") {
+    const limitError = sessionImageLimitError(session, {
+      id: randomUUID(), role: "user", content, createdAt: new Date().toISOString(), status: "complete",
+      ...(images.length ? { images } : {}),
+    });
+    if (limitError) { json(response, 400, { error: limitError }); return true; }
+  }
+  if (!interruptibleSessions.has(queuedMessageMatch[1])) {
+    json(response, 409, { error: "The session is not streaming" });
+    return true;
+  }
+  queuedSessionMessages.enqueueUser(queuedMessageMatch[1], { content, kind, ...(images.length ? { images } : {}) });
+  json(response, 202, { queued: true });
+  return true;
+}
+if (method === "DELETE" && queuedMessageMatch?.[1]) {
+  const session = await store.get(queuedMessageMatch[1]);
+  if (!session) { json(response, 404, { error: "Session not found" }); return true; }
+  if (session.parentSessionId) { json(response, 403, { error: "Agent sub-sessions are read-only" }); return true; }
+  // False silently reports that the run already injected the input.
+  json(response, 200, { removed: queuedSessionMessages.removeUser(queuedMessageMatch[1]) });
+  return true;
+}
+
+const commandMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/commands$`));
+if (method === "POST" && commandMatch?.[1]) {
+  executeCommand(request, response, commandMatch[1]);
+  return true;
+}
+  return false;
+}
+
+async function handleSessionToolRoutes(request: IncomingMessage, response: ServerResponse, method: string, url: URL): Promise<boolean> {const tasksMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/tasks$`));
+if (method === "GET" && tasksMatch?.[1]) {
+  const session = await store.get(tasksMatch[1]);
+  session ? json(response, 200, { tasks: backgroundTasks.list(tasksMatch[1]) }) : json(response, 404, { error: "Session not found" });
+  return true;
+}
+
+const skillsMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/skills$`));
+if (method === "GET" && skillsMatch?.[1]) {
+  const session = activeSessions.session(skillsMatch[1]) ?? await store.get(skillsMatch[1]);
+  if (!session) { json(response, 404, { error: "Session not found" }); return true; }
+  const skills = invocableSkills(
+    await sessionSkills(session),
+    session.skillTouchedPaths ?? [],
+    sessionWorkingDirectory(session),
+  ).filter((skill) => skill.userInvocable);
+  json(response, 200, {
+    skills: skills.map((skill) => ({ name: skill.name, description: skill.description })),
+  });
+  return true;
+}
+
+const gitMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/git$`));
+if (method === "GET" && gitMatch?.[1]) {
+  const session = await store.get(gitMatch[1]);
+  if (!session) { json(response, 404, { error: "Session not found" }); return true; }
+  const gitCommand = url.searchParams.get("command");
+  if (gitCommand !== "diff" && gitCommand !== "show" && gitCommand !== "status") {
+    json(response, 400, { error: "git command must be diff, show, or status" });
+    return true;
+  }
+  const controller = new AbortController();
+  request.once("aborted", () => controller.abort());
+  try {
+    const result = await new BashExecutor().run(
+      { command: `git ${gitCommand}`, timeoutMs: 30_000 },
+      sessionDirectories(session),
+      controller.signal,
+      { onRunning: () => undefined, onOutput: () => undefined },
+    );
+    json(response, 200, {
+      command: gitCommand,
+      output: result.output,
+      exitCode: result.exitCode,
+      status: result.status,
+    });
+    return true;
+  } catch (error) {
+    json(response, 500, { error: errorMessage(error) });
+    return true;
+  }
+}
+
+const questionAnswerMatch = url.pathname.match(
+  new RegExp(`^/api/sessions/${SESSION_PATH_ID}/questions/([^/]+)/answers$`),
+);
+if (method === "POST" && questionAnswerMatch?.[1] && questionAnswerMatch[2]) {
+  const session = await store.get(questionAnswerMatch[1]);
+  if (!session) { json(response, 404, { error: "Session not found" }); return true; }
+  const body = await readJson(request);
+  const toolUseId = decodeURIComponent(questionAnswerMatch[2]);
+  try {
+    if (body.cancelled === true) {
+      askUserQuestions.decline(questionAnswerMatch[1], toolUseId);
+      json(response, 200, { cancelled: true });
+      return true;
+    }
+    const answers = askUserQuestions.answer(questionAnswerMatch[1], toolUseId, body.answers);
+    json(response, 200, { answers });
+    return true;
+  } catch (error) {
+    json(response, 400, { error: errorMessage(error) });
+    return true;
+  }
+}
+
+const planModeDecisionMatch = url.pathname.match(
+  new RegExp(`^/api/sessions/${SESSION_PATH_ID}/plan-mode/([^/]+)/decision$`),
+);
+if (method === "POST" && planModeDecisionMatch?.[1] && planModeDecisionMatch[2]) {
+  const session = await store.get(planModeDecisionMatch[1]);
+  if (!session) { json(response, 404, { error: "Session not found" }); return true; }
+  if (session.parentSessionId) { json(response, 403, { error: "Agent sub-sessions are read-only" }); return true; }
+  const body = await readJson(request);
+  const toolUseId = decodeURIComponent(planModeDecisionMatch[2]);
+  try {
+    const decision = parsePlanModeDecision(body);
+    if (decision.newSession) {
+      if (planModeApprovals.pendingKind(planModeDecisionMatch[1], toolUseId) !== "exit") {
+        throw new Error("Implementing in a new session requires a plan review request");
+      }
+      const implementationBanner: Message = {
+        id: randomUUID(),
+        role: "assistant",
+        content: `Plan from session: ${session.id}`,
+        createdAt: new Date().toISOString(),
+        status: "complete",
+        kind: "plan-banner",
+        sourceSessionId: session.id,
+      };
+      const implementation = await store.createPlanImplementation(session, implementationBanner);
+      const settled = planModeApprovals.decideParsed(planModeDecisionMatch[1], toolUseId, {
+        ...decision,
+        newSessionId: implementation.id,
+      });
+      json(response, 200, { decision: settled });
+      return true;
+    }
+    json(response, 200, { decision: planModeApprovals.decideParsed(planModeDecisionMatch[1], toolUseId, decision) });
+    return true;
+  } catch (error) {
+    json(response, 400, { error: errorMessage(error) });
+    return true;
+  }
+}
+
+const taskStopMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/tasks/([a-z0-9]+)/stop$`));
+if (method === "POST" && taskStopMatch?.[1] && taskStopMatch[2]) {
+  const session = await store.get(taskStopMatch[1]);
+  if (!session) { json(response, 404, { error: "Session not found" }); return true; }
+  try {
+    json(response, 200, { task: backgroundTasks.stop(taskStopMatch[1], taskStopMatch[2]) });
+    return true;
+  } catch (error) {
+    json(response, 400, { error: errorMessage(error) });
+    return true;
+  }
+}
+
+const completionMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/directory-completions$`));
+if (method === "GET" && completionMatch?.[1]) {
+  listDirectoryCompletions(response, completionMatch[1], url);
+  return true;
+}
+  return false;
+}
+
+async function handleStaticRoutes(request: IncomingMessage, response: ServerResponse, method: string, url: URL): Promise<boolean> {
+  if (method === "GET" && url.pathname === "/app.js") {  serveFile(response, clientScript, "text/javascript; charset=utf-8", "no-cache");  return true;
+}
+if (method === "GET" && url.pathname === "/screensaver.js") {  serveFile(response, screensaverScript, "text/javascript; charset=utf-8", "no-cache");  return true;
+}
+if (method === "GET" && url.pathname === "/client-formatters.js") {  serveFile(response, clientFormattersScript, "text/javascript; charset=utf-8", "no-cache");  return true;
+}
+if (method === "GET" && url.pathname === "/built-in-commands.js") {  serveFile(response, builtInCommandsScript, "text/javascript; charset=utf-8", "no-cache");  return true;
+}
+if (method === "GET" && url.pathname === "/streaming-thinking.js") {  serveFile(response, streamingThinkingScript, "text/javascript; charset=utf-8", "no-cache");  return true;
+}
+if (method === "GET" && url.pathname === "/tool-display.js") {  serveFile(response, toolDisplayScript, "text/javascript; charset=utf-8", "no-cache");  return true;
+}
+if (method === "GET" && url.pathname === "/thinking-level.js") {  serveFile(response, thinkingLevelScript, "text/javascript; charset=utf-8", "no-cache");  return true;
+}
+if (method === "GET" && url.pathname === "/plan-handoff.js") {  serveFile(response, planHandoffScript, "text/javascript; charset=utf-8", "no-cache");  return true;
+}
+if (method === "GET" && clientModulePattern.test(url.pathname)) {  serveFile(response, join(sourceDirectory, url.pathname.slice(1)), "text/javascript; charset=utf-8", "no-cache");  return true;
+}
+if (method === "GET" && url.pathname === "/vendor/markdown-it.js") {  serveFile(response, markdownScript, "text/javascript; charset=utf-8", "public, max-age=31536000, immutable");  return true;
+}
+if (method === "GET" && url.pathname === "/styles.css") {  serveFile(response, join(publicDirectory, "styles.css"), "text/css; charset=utf-8", "no-cache");  return true;
+}
+if (method === "GET" && url.pathname === "/themes.css") {  serveFile(response, join(publicDirectory, "themes.css"), "text/css; charset=utf-8", "no-cache");  return true;
+}
+if (method === "GET" && (url.pathname === "/" || /^\/s\/[a-z0-9.-]+$/.test(url.pathname))) {  serveFile(
+    response,
+    join(publicDirectory, "index.html"),
+    "text/html; charset=utf-8",
+    "no-cache",
+    (html) => html.replace("__BUILD_VERSION__", () => buildVersion),
+  );  return true;
+}
+  return false;
+}
+
+
 async function runPrompt(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const catalog = providerCatalog;
-  if (!catalog) return configurationRequired(response);
+  if (!catalog) { configurationRequired(response); return; }
   const body = await readJson(request);
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   if (!prompt || prompt.length > 32_000) {
@@ -909,8 +989,8 @@ async function streamBtwAnswer(request: IncomingMessage, response: ServerRespons
     return json(response, 400, { error: errorMessage(error) });
   }
   const session = activeSessions.session(sessionId) ?? await store.get(sessionId);
-  if (!session) return json(response, 404, { error: "Session not found" });
-  if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
+  if (!session) { json(response, 404, { error: "Session not found" }); return; }
+  if (session.parentSessionId) { json(response, 403, { error: "Agent sub-sessions are read-only" }); return; }
 
   response.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
@@ -948,9 +1028,9 @@ async function streamBtwAnswer(request: IncomingMessage, response: ServerRespons
 
 async function streamMessage(request: IncomingMessage, response: ServerResponse, sessionId: string): Promise<void> {
   if (!providerCatalog) return configurationRequired(response);
-  if (activeSessions.has(sessionId)) return json(response, 409, { error: "A response is already streaming" });
+  if (activeSessions.has(sessionId)) { json(response, 409, { error: "A response is already streaming" }); return; }
   const session = await store.get(sessionId);
-  if (!session) return json(response, 404, { error: "Session not found" });
+  if (!session) { json(response, 404, { error: "Session not found" }); return; }
   if (session.parentSessionId && request.headers["x-amber-agent-token"] !== agentRunToken) {
     return json(response, 403, { error: "Agent sub-sessions are read-only" });
   }
@@ -959,7 +1039,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   const body = await readJson(request, MAX_MESSAGE_BODY_BYTES);
   const content = typeof body.content === "string" ? body.content.trim() : "";
   const parsedImages = parseMessageImages(body.images);
-  if ("error" in parsedImages) return json(response, 400, { error: parsedImages.error });
+  if ("error" in parsedImages) { json(response, 400, { error: parsedImages.error }); return; }
   const images = parsedImages.images;
   if ((!content && images.length === 0) || content.length > 32_000) {
     return json(response, 400, { error: "Message must contain text or images; text is limited to 32,000 characters" });
@@ -990,7 +1070,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     ...(images.length ? { images } : {}),
   };
   const limitError = sessionImageLimitError(session, userMessage);
-  if (limitError) return json(response, 400, { error: limitError });
+  if (limitError) { json(response, 400, { error: limitError }); return; }
   automaticNameRuns.get(sessionId)?.sessions.add(session);
   const shouldAutoName = shouldAutoNameSession(session);
   let assistantMessage = createAssistantMessage(now);
@@ -2161,7 +2241,7 @@ async function runSessionPrompt(sessionId: string, prompt: string, signal: Abort
 
 async function listDirectoryCompletions(response: ServerResponse, sessionId: string, url: URL): Promise<void> {
   const session = await store.get(sessionId);
-  if (!session) return json(response, 404, { error: "Session not found" });
+  if (!session) { json(response, 404, { error: "Session not found" }); return; }
   const command = url.searchParams.get("command");
   if (command !== "cwd" && command !== "add-dir" && command !== "file") {
     return json(response, 400, { error: "Path completion requires command=cwd, command=add-dir, or command=file" });
@@ -2325,11 +2405,11 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     return json(response, 409, { error: "Wait for the current response to finish" });
   }
   const session = activeSessions.session(sessionId) ?? await store.get(sessionId);
-  if (!session) return json(response, 404, { error: "Session not found" });
-  if (session.parentSessionId) return json(response, 403, { error: "Agent sub-sessions are read-only" });
+  if (!session) { json(response, 404, { error: "Session not found" }); return; }
+  if (session.parentSessionId) { json(response, 403, { error: "Agent sub-sessions are read-only" }); return; }
 
   if (command === "/add-dir") {
-    if (!argument) return json(response, 400, { error: "Usage: /add-dir <directory>" });
+    if (!argument) { json(response, 400, { error: "Usage: /add-dir <directory>" }); return; }
     try {
       const directory = await resolveAddedDirectory(argument);
       const firstAddDir = session.addDirInitialized !== true && (session.directories?.length ?? 0) === 0;
@@ -2347,11 +2427,11 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
 
   if (command === "/cwd") {
     const currentDirectory = sessionWorkingDirectory(session);
-    if (!argument) return json(response, 200, { command: "cwd", directory: currentDirectory, ...pagedSessionPayload(session) });
+    if (!argument) { json(response, 200, { command: "cwd", directory: currentDirectory, ...pagedSessionPayload(session) }); return; }
     try {
       const expanded = argument === "~" ? homedir() : argument.startsWith("~/") ? join(homedir(), argument.slice(2)) : argument;
       const directory = await realpath(resolve(currentDirectory, expanded));
-      if (!(await stat(directory)).isDirectory()) return json(response, 400, { error: `Not a directory: ${directory}` });
+      if (!(await stat(directory)).isDirectory()) { json(response, 400, { error: `Not a directory: ${directory}` }); return; }
       if (!directoryAllowed(directory, sessionDirectoryRoots(session))) {
         return json(response, 400, { error: `Directory is not in the project or an /add-dir root: ${directory}` });
       }
@@ -2370,7 +2450,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
       await store.saveMeta(session);
       return json(response, 200, { command: "goal", ...pagedSessionPayload(session) });
     }
-    if (!argument) return json(response, 400, { error: "Usage: /goal <text> or /goal clear" });
+    if (!argument) { json(response, 400, { error: "Usage: /goal <text> or /goal clear" }); return; }
     if (argument.length > MAX_GOAL_LENGTH) {
       return json(response, 400, { error: `Goals are limited to ${MAX_GOAL_LENGTH.toLocaleString()} characters` });
     }
@@ -2391,7 +2471,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     await stopAutomaticSessionName(sessionId);
     if (argument) {
       const title = argument.replace(/\s+/g, " ").trim();
-      if (title.length > 80) return json(response, 400, { error: "Session names must be 80 characters or fewer" });
+      if (title.length > 80) { json(response, 400, { error: "Session names must be 80 characters or fewer" }); return; }
       return json(response, 200, { command: "name", ...pagedSessionPayload(await store.rename(session, title)) });
     }
 
@@ -2410,7 +2490,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
 
   if (command === "/plugin") {
     const parsed = parsePluginCommand(argument);
-    if (parsed.kind === "error") return json(response, 400, { error: parsed.message });
+    if (parsed.kind === "error") { json(response, 400, { error: parsed.message }); return; }
     let body: string;
     try {
       body = await runPluginCommand(parsed, session.cwd ?? workspaceRoot);
@@ -2431,7 +2511,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     return json(response, 200, { command: "compact", ...pagedSessionPayload(session) });
   }
 
-  if (argument) return json(response, 400, { error: `${command} does not accept arguments` });
+  if (argument) { json(response, 400, { error: `${command} does not accept arguments` }); return; }
 
   if (command === "/tasks" || command === "/bashes") {
     return json(response, 200, { command: "tasks", tasks: backgroundTasks.list(sessionId), ...pagedSessionPayload(session) });
@@ -2455,7 +2535,7 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
       const completed = await store.get(sessionId) ?? session;
       broadcastSessionEvent(sessionId, "done", pagedSessionPayload(completed));
     }
-    if (!result.compacted) return json(response, 502, { error: result.error });
+    if (!result.compacted) { json(response, 502, { error: result.error }); return; }
     return json(response, 200, { command: "compact", ...pagedSessionPayload(await store.get(sessionId) ?? session) });
   }
   if (command === "/fork") {
@@ -2874,7 +2954,7 @@ async function observeSessionEvents(
   sessionId: string,
 ): Promise<void> {
   const session = activeSessions.session(sessionId) ?? await store.get(sessionId);
-  if (!session) return json(response, 404, { error: "Session not found" });
+  if (!session) { json(response, 404, { error: "Session not found" }); return; }
 
   response.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
