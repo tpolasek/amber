@@ -23,15 +23,15 @@ const REGEX_SPLITALL_CRLF = /\r?\n/g;
 // - .foo
 const REGEX_TEST_INVALID_PATH = /^\.{0,2}\/|^\.{1,2}$/;
 
-const REGEX_TEST_TRAILING_SLASH = /\/$/;
-
 const SLASH = "/";
 
 const KEY_IGNORE = typeof Symbol !== "undefined" ? Symbol.for("node-ignore") : "node-ignore";
 
 const REGEX_REGEXP_RANGE = /([0-z])-([0-z])/g;
 
-const RETURN_FALSE = (): boolean => false;
+// Replacers receive the match, their capture groups, then offset and subject.
+// `never[]` accepts replacers written for any group count.
+type RegexReplacer = (this: string, substring: string, ...args: never[]) => string;
 
 // Sanitize the range of a regular expression. Invalid ranges (out of order)
 // are eliminated because they crash JavaScript regular expressions.
@@ -55,7 +55,7 @@ const cleanRangeBackSlash = (slashes: string): string => {
 };
 
 // `foo/` should not continue with the `..`
-const REPLACERS: Array<[RegExp, (this: string, substring: string, ...args: any[]) => string]> = [
+const REPLACERS: Array<[RegExp, RegexReplacer]> = [
   // Remove BOM
   [/^\uFEFF/, () => EMPTY],
 
@@ -130,7 +130,7 @@ const REPLACERS: Array<[RegExp, (this: string, substring: string, ...args: any[]
   // The range notation, e.g. [a-zA-Z]
   [
     /(\\)?\[([^\]/]*?)(\\*)($|\])/g,
-    (match: string, leadEscape: string, range: string, endEscape: string, close: string) =>
+    (_match: string, leadEscape: string, range: string, endEscape: string, close: string) =>
       leadEscape === ESCAPE
         ? `\\[${range}${cleanRangeBackSlash(endEscape)}${close}`
         : close === "]"
@@ -155,7 +155,7 @@ const REGEX_REPLACE_TRAILING_WILDCARD = /(^|\\\/)?\\\*$/;
 const MODE_IGNORE = "regex";
 const MODE_CHECK_IGNORE = "checkRegex";
 
-const TRAILING_WILD_CARD_REPLACERS: Record<string, (this: unknown, _: unknown, p1: string) => string> = {
+const TRAILING_WILD_CARD_REPLACERS: Record<typeof MODE_IGNORE | typeof MODE_CHECK_IGNORE, RegexReplacer> = {
   [MODE_IGNORE]: (_, p1: string) => {
     const prefix = p1 ? `${p1}[^/]+` : "[^/]*";
     return `${prefix}(?=$|\\/$)`;
@@ -168,7 +168,7 @@ const TRAILING_WILD_CARD_REPLACERS: Record<string, (this: unknown, _: unknown, p
 };
 
 const makeRegexPrefix = (pattern: string): string => REPLACERS.reduce(
-  (prev, [matcher, replacer]) => prev.replace(matcher, replacer.bind(pattern) as (substring: string, ...args: any[]) => string),
+  (prev, [matcher, replacer]) => prev.replace(matcher, replacer.bind(pattern) as (substring: string, ...args: string[]) => string),
   pattern,
 );
 
@@ -191,7 +191,7 @@ class IgnoreRule {
   private _regex: RegExp | undefined;
   private _checkRegex: RegExp | undefined;
 
-  constructor(pattern: string, mark: string, body: string, ignoreCase: boolean, negative: boolean, prefix: string) {
+  constructor(pattern: string, mark: string, ignoreCase: boolean, negative: boolean, prefix: string) {
     this.pattern = pattern;
     this.mark = mark;
     this.negative = negative;
@@ -211,10 +211,10 @@ class IgnoreRule {
     return this._checkRegex;
   }
 
-  private _make(mode: string): RegExp {
+  private _make(mode: typeof MODE_IGNORE | typeof MODE_CHECK_IGNORE): RegExp {
     const str = this.regexPrefix.replace(
       REGEX_REPLACE_TRAILING_WILDCARD,
-      TRAILING_WILD_CARD_REPLACERS[mode] as (substring: string, ...args: any[]) => string,
+      TRAILING_WILD_CARD_REPLACERS[mode] as (substring: string, ...args: string[]) => string,
     );
     return this.ignoreCase ? new RegExp(str, "i") : new RegExp(str);
   }
@@ -237,7 +237,7 @@ const createRule = ({ pattern }: { pattern: string }, ignoreCase: boolean): Igno
     // Put a backslash in front of the first hash for patterns beginning with a hash.
     .replace(REGEX_REPLACE_LEADING_EXCAPED_HASH, "#");
 
-  return new IgnoreRule(pattern, "", body, ignoreCase, negative, makeRegexPrefix(body));
+  return new IgnoreRule(pattern, "", ignoreCase, negative, makeRegexPrefix(body));
 };
 
 class RuleManager {
@@ -342,7 +342,6 @@ class Ignore {
   private readonly strictPathCheck: boolean;
   private readonly rules: RuleManager;
   private ignoreCache: Record<string, { ignored: boolean; unignored: boolean }>;
-  private testCache: Record<string, { ignored: boolean; unignored: boolean }>;
 
   constructor({ ignorecase = true, ignoreCase = ignorecase, allowRelativePaths = false }: {
     ignorecase?: boolean;
@@ -352,14 +351,12 @@ class Ignore {
     this.rules = new RuleManager(ignoreCase);
     this.strictPathCheck = !allowRelativePaths;
     this.ignoreCache = Object.create(null);
-    this.testCache = Object.create(null);
   }
 
   add(pattern: string | string[]): this {
     if (this.rules.add(pattern)) {
       // Some rules were added, so the behavior changed; re-initialize caches.
       this.ignoreCache = Object.create(null);
-      this.testCache = Object.create(null);
     }
     return this;
   }

@@ -62,7 +62,7 @@ test("enforces per-image, total, and count limits", () => {
   const oversized = "A".repeat(Math.ceil((MAX_IMAGE_BYTES + 1) / 3) * 4);
   assert.match(errorOf(parseMessageImages([{ mediaType: "image/png", data: oversized }])), /at most 7 MiB/);
 
-  const perImage = "A".repeat(6 * 1024 * 1024 * 4 / 3);
+  const perImage = "A".repeat(Math.ceil((MAX_TOTAL_IMAGE_BYTES + 1) / 3 / 3) * 4);
   const over = parseMessageImages([
     { mediaType: "image/png", data: perImage },
     { mediaType: "image/png", data: perImage },

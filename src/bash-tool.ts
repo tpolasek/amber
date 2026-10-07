@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
+import { abortError } from "./abort-error.js";
+import { ChildStopper } from "./child-process.js";
+import { isWithinAnyDirectory } from "./paths.js";
 import type { ToolDefinition, ToolStatus, ToolStatusDisplay } from "./types.js";
 
 export const DEFAULT_BASH_TIMEOUT_S = 120;
@@ -206,10 +209,10 @@ export class BashExecutor {
     hooks: BashHooks,
   ): Promise<BashResult> {
     const operation = this.#tail.then(async () => {
-      if (signal.aborted) throw abortError();
+      if (signal.aborted) throw abortError("Bash execution aborted");
       const workingDirectory = await resolveBashWorkingDirectory(input.workingDirectory, allowedDirectories);
       await hooks.onRunning(workingDirectory, { text: "RUNNING", appendElapsed: true });
-      if (signal.aborted) throw abortError();
+      if (signal.aborted) throw abortError("Bash execution aborted");
       return executeBash(input, workingDirectory, signal, hooks.onOutput);
     });
     this.#tail = operation.then(() => undefined, () => undefined);
@@ -258,12 +261,20 @@ export async function resolveBashWorkingDirectory(requested: string | undefined,
     ? (isAbsolute(requested) ? requested : resolve(defaultDirectory, requested))
     : defaultDirectory);
   const canonicalAllowedDirectories = await Promise.all(allowedDirectories.map((directory) => realpath(directory)));
-  const allowed = canonicalAllowedDirectories.some((directory) => {
-    const child = relative(directory, candidate);
-    return child === "" || (!child.startsWith("..") && !isAbsolute(child));
-  });
-  if (!allowed) throw new Error(`Working directory is outside the project and added directories: ${candidate}`);
+  if (!isWithinAnyDirectory(candidate, canonicalAllowedDirectories)) {
+    throw new Error(`Working directory is outside the project and added directories: ${candidate}`);
+  }
   return candidate;
+}
+
+/** Spawns the shared login shell both foreground Bash and background tasks run in. */
+export function spawnBashChild(command: string, workingDirectory: string) {
+  return spawn("/bin/bash", ["-lc", command], {
+    cwd: workingDirectory,
+    env: bashChildEnvironment(),
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: process.platform !== "win32",
+  });
 }
 
 function executeBash(
@@ -274,16 +285,10 @@ function executeBash(
 ): Promise<BashResult> {
   return new Promise((resolveResult, reject) => {
     const started = Date.now();
-    const child = spawn("/bin/bash", ["-lc", input.command], {
-      cwd: workingDirectory,
-      env: bashChildEnvironment(),
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: process.platform !== "win32",
-    });
+    const child = spawnBashChild(input.command, workingDirectory);
     const buffer = new BashOutputBuffer({ name: "bash" });
     let timedOut = false;
     let settled = false;
-    let forceKillTimer: NodeJS.Timeout | undefined;
 
     const append = (chunk: Buffer | string) => {
       const text = chunk.toString();
@@ -293,31 +298,23 @@ function executeBash(
 
     child.stdout.on("data", append);
     child.stderr.on("data", append);
-    const kill = (signalName: NodeJS.Signals) => {
+    const stopper = new ChildStopper((signalName) => {
       if (child.pid && process.platform !== "win32") {
         try { process.kill(-child.pid, signalName); } catch { /* process already exited */ }
       } else {
         child.kill(signalName);
       }
-    };
-    const stop = () => {
-      kill("SIGTERM");
-      forceKillTimer ??= setTimeout(() => kill("SIGKILL"), 1_000);
-    };
-    const abort = () => stop();
-    signal.addEventListener("abort", abort, { once: true });
-    if (signal.aborted) stop();
+    }, signal);
     const timer = setTimeout(() => {
       timedOut = true;
-      stop();
+      stopper.stop();
     }, input.timeoutMs);
 
     child.once("error", async (error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      signal.removeEventListener("abort", abort);
+      stopper.settle();
       await buffer.finalize();
       reject(error);
     });
@@ -325,10 +322,9 @@ function executeBash(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      signal.removeEventListener("abort", abort);
+      stopper.settle();
       await buffer.finalize();
-      if (signal.aborted) return reject(abortError());
+      if (signal.aborted) return reject(abortError("Bash execution aborted"));
       const durationMs = Date.now() - started;
       const status = timedOut ? "timed_out" : exitCode === 0 ? "complete" : "error";
       const combined = buffer.output.replace(/\n+$/, "");
@@ -368,10 +364,4 @@ function spillNotice(spillPath: string): string {
 /** Returns the spill path only when the spill actually succeeded (no write error). */
 function successfulSpillPath(buffer: BashOutputBuffer): string | undefined {
   return buffer.truncated && !buffer.hasSpillError ? buffer.spillPath : undefined;
-}
-
-function abortError(): Error {
-  const error = new Error("Bash execution aborted");
-  error.name = "AbortError";
-  return error;
 }

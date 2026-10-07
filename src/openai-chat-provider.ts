@@ -6,7 +6,7 @@ import type {
   TokenUsage,
   ToolDefinition,
 } from "./types.js";
-import { providerApiUrl } from "./provider-driver.js";
+import { extractApiError, providerApiUrl, systemText } from "./provider-driver.js";
 import { imageDataUrl } from "./message-images.js";
 import { readServerSentEvents } from "./sse.js";
 
@@ -197,12 +197,6 @@ function toolResultText(block: Extract<ProviderContentBlock, { type: "tool_resul
   return block.is_error ? `Error: ${content}` : content;
 }
 
-function systemText(system: string | ProviderSystemBlock[] | undefined): string {
-  if (typeof system === "string") return system;
-  if (system) return system.map((block) => block.text).join("\n\n");
-  return "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.";
-}
-
 function mapUsage(usage: ChatUsage): Partial<TokenUsage> {
   const cached = usage.prompt_tokens_details?.cached_tokens ?? usage.prompt_cache_hit_tokens;
   return {
@@ -211,13 +205,4 @@ function mapUsage(usage: ChatUsage): Partial<TokenUsage> {
     ...(usage.total_tokens !== undefined ? { total: usage.total_tokens } : {}),
     ...(cached !== undefined ? { cached } : {}),
   };
-}
-
-function extractApiError(body: string): string {
-  try {
-    const parsed = JSON.parse(body) as { error?: { message?: string } };
-    return parsed.error?.message ?? body.slice(0, 300);
-  } catch {
-    return body.slice(0, 300) || "Unknown error";
-  }
 }

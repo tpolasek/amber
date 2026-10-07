@@ -1,11 +1,14 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { browserUrl, openBrowser } from "./browser-launch.js";
 import { listenErrorMessage } from "./cli.js";
+import { throwIfAborted } from "./abort-error.js";
+import { readServerSentEvents } from "./sse.js";
+import { isWithinDirectory } from "./paths.js";
 import { builtInCommand } from "./built-in-commands.js";
 import {
   addMarketplace,
@@ -1047,7 +1050,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
           await store.insertMessages(session, assistantMessage.id, agentNotifications.notifications);
         }
       }
-      const skills = await sessionSkills(session);
       const activeProvider = turnModel ? activeProviderCatalog().provider(turnModel) : providerForSession(session);
       const thinkingLevel = turnEffort ?? session.thinkingLevel;
       const baseHistory = buildProviderHistory(session.messages, assistantMessage.id, session.compaction, session.invokedSkills);
@@ -1877,10 +1879,7 @@ function sessionWorkingDirectory(session: Session): string {
 }
 
 function directoryAllowed(directory: string, roots: string[]): boolean {
-  return roots.some((root) => {
-    const child = relative(root, directory);
-    return child === "" || (!child.startsWith("..") && !isAbsolute(child));
-  });
+  return roots.some((root) => isWithinDirectory(directory, root));
 }
 
 function sessionContextTokens(session: Session): number {
@@ -2143,37 +2142,16 @@ async function runSessionPrompt(sessionId: string, prompt: string, signal: Abort
     signal,
   });
   if (!response.ok) throw new Error(`Session failed (${response.status}): ${await response.text()}`);
-  if (!response.body) throw new Error("Session returned no stream");
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   let result: string | undefined;
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      const frames = buffer.split("\n\n");
-      buffer = frames.pop() ?? "";
-      for (const frame of frames) {
-        let event = "message";
-        let data = "";
-        for (const line of frame.split("\n")) {
-          if (line.startsWith("event:")) event = line.slice(6).trim();
-          else if (line.startsWith("data:")) data += line.slice(5).trim();
-        }
-        if (!data) continue;
-        const payload = JSON.parse(data) as { error?: string; message?: Message };
-        if (event === "done") result = payload.message?.content ?? "";
-        if (event === "error") {
-          const content = payload.message?.content?.trim() ?? "";
-          throw new Error(content.startsWith(RESPONSE_INTERRUPTED_TEXT) ? content : payload.error ?? "Session failed");
-        }
-      }
-      if (done) break;
+  for await (const { event, data } of readServerSentEvents(response)) {
+    if (!data) continue;
+    const payload = JSON.parse(data) as { error?: string; message?: Message };
+    if (event === "done") result = payload.message?.content ?? "";
+    if (event === "error") {
+      const content = payload.message?.content?.trim() ?? "";
+      throw new Error(content.startsWith(RESPONSE_INTERRUPTED_TEXT) ? content : payload.error ?? "Session failed");
     }
-  } finally {
-    reader.releaseLock();
   }
   if (result === undefined) throw new Error("Session ended without a final response");
   return result || "Session completed without a text response.";
@@ -3033,8 +3011,5 @@ function interruptionStopReason(stopReason: string | undefined): string | undefi
 }
 
 function throwIfSessionAborted(signal: AbortSignal): void {
-  if (!signal.aborted) return;
-  const error = new Error("Session aborted");
-  error.name = "AbortError";
-  throw error;
+  throwIfAborted(signal, "Session aborted");
 }

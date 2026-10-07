@@ -1,6 +1,7 @@
 import type { ToolDefinition } from "./types.js";
 import type { BackgroundTask, BackgroundTaskManager } from "./background-tasks.js";
 import { taskNotFoundError } from "./task-errors.js";
+import { abortError } from "./abort-error.js";
 
 const TASK_OUTPUT_WAIT_TIMES_S = [5, 30, 60, 120, 240, 290];
 
@@ -170,9 +171,7 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const abort = () => {
       clearTimeout(timer);
-      const error = new Error("TaskOutput aborted");
-      error.name = "AbortError";
-      reject(error);
+      reject(abortError("TaskOutput aborted"));
     };
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", abort);

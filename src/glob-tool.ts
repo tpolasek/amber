@@ -1,6 +1,6 @@
-import { realpath, stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { isAbsolute, relative, resolve } from "node:path";
+import { stat } from "node:fs/promises";
+import { relative } from "node:path";
+import { throwIfAborted } from "./abort-error.js";
 import {
   expandBracePattern,
   isPermissionOnlyRipgrepStderr,
@@ -8,6 +8,7 @@ import {
   runSearchProcess,
   VCS_DIRECTORIES_TO_EXCLUDE,
 } from "./grep-tool.js";
+import { resolveSearchPath, toRelativePath } from "./paths.js";
 import type { ToolDefinition } from "./types.js";
 
 const MAX_PATTERN_CHARACTERS = 10_000;
@@ -73,48 +74,15 @@ export function parseGlobInput(input: Record<string, unknown>): GlobInput {
   return { pattern, ...(path !== undefined ? { path } : {}) };
 }
 
-async function resolveSearchPath(
+async function resolveGlobSearchPath(
   requested: string | undefined,
   allowedDirectories: string[],
   currentDirectory: string,
 ): Promise<string> {
-  const expanded = requested === "~" || requested?.startsWith("~/")
-    ? joinHome(requested)
-    : requested;
-  const candidate = !expanded
-    ? currentDirectory
-    : isAbsolute(expanded) ? expanded : resolve(currentDirectory, expanded);
-  const canonical = await realpath(candidate).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") throw new Error(`Path does not exist: ${requested}`);
-    throw error;
-  });
-  const canonicalAllowed = await Promise.all(
-    allowedDirectories.map((directory) => realpath(directory).catch(() => directory)),
-  );
-  const allowed = canonicalAllowed.some((directory) => {
-    const child = relative(directory, canonical);
-    return child === "" || (!child.startsWith("..") && !isAbsolute(child));
-  });
-  if (!allowed) throw new Error(`Search path is outside the project and added directories: ${canonical}`);
+  const canonical = await resolveSearchPath(requested, allowedDirectories, currentDirectory);
   const info = await stat(canonical);
   if (!info.isDirectory()) throw new Error(`Glob path is not a directory: ${requested}`);
   return canonical;
-}
-
-function joinHome(requested: string): string {
-  return requested === "~" ? homedir() : resolve(homedir(), requested.slice(2));
-}
-
-function abortError(): Error {
-  const error = new Error("Glob execution aborted");
-  error.name = "AbortError";
-  return error;
-}
-
-function toRelativePath(filePath: string, currentDirectory: string): string {
-  const rel = relative(currentDirectory, filePath);
-  if (rel === "") return ".";
-  return rel && !isAbsolute(rel) && !rel.startsWith("..") ? rel : filePath;
 }
 
 export async function executeGlob(
@@ -124,10 +92,10 @@ export async function executeGlob(
   signal?: AbortSignal,
   backend?: GlobBackend,
 ): Promise<GlobResult> {
-  if (signal?.aborted) throw abortError();
+  throwIfAborted(signal, "Glob execution aborted");
   if (!currentDirectory) throw new Error("No current working directory is configured");
-  const searchPath = await resolveSearchPath(input.path, allowedDirectories, currentDirectory);
-  if (signal?.aborted) throw abortError();
+  const searchPath = await resolveGlobSearchPath(input.path, allowedDirectories, currentDirectory);
+  throwIfAborted(signal, "Glob execution aborted");
   const command: GlobBackend = backend ?? ((await isRipgrepAvailable()) ? "rg" : "grep");
   const args: string[] = [];
   if (command === "rg") {

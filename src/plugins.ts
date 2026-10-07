@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { isWithinDirectory } from "./paths.js";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
@@ -1084,13 +1085,8 @@ export async function enabledPluginBundles(options: PluginBundleOptions): Promis
 /** The project record wins over the user one when the session sits inside it. */
 function applicableRecord(records: InstalledPluginRecord[], cwd: string): InstalledPluginRecord | undefined {
   const project = records.find((record) =>
-    record.scope === "project" && record.projectRoot != null && isWithin(record.projectRoot, cwd));
+    record.scope === "project" && record.projectRoot != null && isWithinDirectory(cwd, record.projectRoot));
   return project ?? records.find((record) => record.scope === "user");
-}
-
-function isWithin(root: string, directory: string): boolean {
-  const relativePath = relative(root, directory);
-  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
 }
 
 const reportedMissingBundles = new Set<string>();

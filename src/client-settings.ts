@@ -7,8 +7,8 @@ import {
   cancelActiveAuthLogin,
   loadAuthProviders,
   logoutOpenAICodex,
-  refreshConfig,
   renderAuthProviders,
+  setAuthUiHooks,
   startAuthLogin,
   stopAuthPolling,
 } from "./client-auth.js";
@@ -17,7 +17,6 @@ import { messageFrom } from "./client-formatters.js";
 import {
   settingsCheckboxField,
   settingsEmptyState,
-  settingsField,
   settingsModelSelectionField,
   settingsNumberField,
   settingsReadOnlyField,
@@ -32,6 +31,7 @@ import { elements, state } from "./client-state.js";
 import type {
   AmberTheme,
   AvailableModel,
+  Config,
   EditableAgentSettings,
   EditableModelSettings,
   EditableProviderSettings,
@@ -44,9 +44,8 @@ import type {
 } from "./client-types.js";
 import type { ThinkingLevel } from "./thinking-level.js";
 
-// client-settings and client-auth import each other for the Codex login flow
-// that lives inside the settings dialog. The cycle only runs through event
-// handlers, never at module evaluation time.
+// The auth module owns the login flow; these hooks are how the settings dialog
+// reacts to auth changes without client-auth importing this module.
 export let settingsBusy = false;
 export let settingsDraft: EditableSettings | null = null;
 export let settingsPlugins: PluginSettings | null = null;
@@ -60,6 +59,16 @@ export function renderConfig(): void {
   renderSettingsBusyState();
   renderModelStatus();
   renderModes();
+}
+
+export async function refreshConfig(refreshModels = false): Promise<void> {
+  try {
+    state.config = await api<Config>(refreshModels ? "/api/config?refresh=1" : "/api/config");
+    document.documentElement.dataset.theme = state.config.theme;
+    renderConfig();
+  } catch {
+    // Keep the previous config; reopening the page refetches it.
+  }
 }
 
 export async function openSettingsDialog(): Promise<void> {
@@ -836,3 +845,23 @@ export function settingsBlockingMessage(): string {
     ? "Connect the default Codex provider to continue."
     : "Save a valid configuration to continue.";
 }
+
+setAuthUiHooks({
+  isSettingsBusy: () => settingsBusy,
+  saveAndLoginWithCodex,
+  async onLoginComplete() {
+    await refreshConfig();
+    if (state.config?.configured) {
+      showSettingsError();
+      elements.settingsStatus.textContent = "Connected · Amber loaded the available Codex models.";
+      renderSettingsForm();
+    }
+    renderSettingsBusyState();
+    notify("OpenAI Codex connected");
+  },
+  async onLoggedOut() {
+    await refreshConfig();
+    renderSettingsBusyState();
+  },
+  onAuthError: (message) => showSettingsError(message),
+});

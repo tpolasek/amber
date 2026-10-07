@@ -2,6 +2,7 @@ import { realpathSync } from "node:fs";
 import { readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isWithinDirectory } from "./paths.js";
 
 const MAX_DIRECTORY_COMPLETIONS = 40;
 
@@ -124,10 +125,7 @@ function completionParts(fragment: string, baseDirectory: string): {
 }
 
 function pathAllowed(candidate: string, roots: string[]): boolean {
-  return roots.some((root) => {
-    const child = relative(canonicalRoot(root), candidate);
-    return child === "" || (!child.startsWith("..") && !isAbsolute(child));
-  });
+  return roots.some((root) => isWithinDirectory(candidate, canonicalRoot(root)));
 }
 
 function canonicalRoot(directory: string): string {

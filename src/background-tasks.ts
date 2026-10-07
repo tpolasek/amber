@@ -1,7 +1,8 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { abortError } from "./abort-error.js";
 import type { BashInput } from "./bash-tool.js";
-import { BashOutputBuffer, bashChildEnvironment, resolveBashWorkingDirectory } from "./bash-tool.js";
+import { BashOutputBuffer, resolveBashWorkingDirectory, spawnBashChild } from "./bash-tool.js";
 import { taskNotFoundError } from "./task-errors.js";
 
 const TASK_ID_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -50,17 +51,12 @@ export class BackgroundTaskManager {
     allowedDirectories: string[],
     signal?: AbortSignal,
   ): Promise<BackgroundTask> {
-    if (signal?.aborted) throw abortError();
+    if (signal?.aborted) throw abortError("Background Bash aborted");
     const workingDirectory = await resolveBashWorkingDirectory(input.workingDirectory, allowedDirectories);
-    if (signal?.aborted) throw abortError();
+    if (signal?.aborted) throw abortError("Background Bash aborted");
     const id = generateTaskId();
     const startedAt = new Date();
-    const child = spawn("/bin/bash", ["-lc", input.command], {
-      cwd: workingDirectory,
-      env: bashChildEnvironment(),
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: process.platform !== "win32",
-    });
+    const child = spawnBashChild(input.command, workingDirectory);
     let resolveCompletion: () => void = () => undefined;
     const completion = new Promise<void>((resolve) => { resolveCompletion = resolve; });
     const combinedBuffer = new BashOutputBuffer({ name: "task" });
@@ -206,12 +202,6 @@ export class BackgroundTaskManager {
   }
 }
 
-function abortError(): Error {
-  const error = new Error("Background Bash aborted");
-  error.name = "AbortError";
-  return error;
-}
-
 function appendTaskOutput(current: string, chunk: string): string {
   if (current.length >= MAX_TASK_STREAM_CHARACTERS) return current;
   const available = MAX_TASK_STREAM_CHARACTERS - current.length;
@@ -270,9 +260,7 @@ function waitForCompletion(completion: Promise<void>, timeoutMs: number, signal?
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      const error = new Error("TaskOutput aborted");
-      error.name = "AbortError";
-      reject(error);
+      reject(abortError("TaskOutput aborted"));
     };
     const timer = setTimeout(() => finish(false), timeoutMs);
     signal?.addEventListener("abort", abort, { once: true });

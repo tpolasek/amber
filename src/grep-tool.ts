@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
-import { realpath, stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { stat } from "node:fs/promises";
+import { dirname, relative } from "node:path";
+import { abortError, throwIfAborted } from "./abort-error.js";
+import { ChildStopper } from "./child-process.js";
 import { bashChildEnvironment } from "./bash-tool.js";
+import { resolveSearchPath, toRelativePath } from "./paths.js";
 import type { ToolDefinition } from "./types.js";
 
 export const GREP_TIMEOUT_MS = 60_000;
@@ -304,35 +306,6 @@ export function buildGrepArgs(input: GrepInput, searchPathIsDirectory = true): s
   return args;
 }
 
-async function resolveSearchPath(
-  requested: string | undefined,
-  allowedDirectories: string[],
-  currentDirectory: string,
-): Promise<string> {
-  const expanded = requested === "~" || requested?.startsWith("~/")
-    ? joinHome(requested)
-    : requested;
-  const candidate = !expanded
-    ? currentDirectory
-    : isAbsolute(expanded) ? expanded : resolve(currentDirectory, expanded);
-  const canonical = await realpath(candidate).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") throw new Error(`Path does not exist: ${requested}`);
-    throw error;
-  });
-  const canonicalAllowed = await Promise.all(
-    allowedDirectories.map((directory) => realpath(directory).catch(() => directory)),
-  );
-  const allowed = canonicalAllowed.some((directory) => {
-    const child = relative(directory, canonical);
-    return child === "" || (!child.startsWith("..") && !isAbsolute(child));
-  });
-  if (!allowed) throw new Error(`Search path is outside the project and added directories: ${canonical}`);
-  return canonical;
-}
-
-function joinHome(requested: string): string {
-  return requested === "~" ? homedir() : resolve(homedir(), requested.slice(2));
-}
 
 export interface SearchProcessRun {
   exitCode: number | null;
@@ -383,28 +356,18 @@ export function runSearchProcess(
     let outputTooLarge = false;
     let timedOut = false;
     let settled = false;
-    let forceKillTimer: NodeJS.Timeout | undefined;
 
-    const kill = (signalName: NodeJS.Signals) => {
-      child.kill(signalName);
-    };
-    const stop = () => {
-      kill("SIGTERM");
-      forceKillTimer ??= setTimeout(() => kill("SIGKILL"), 1_000);
-    };
-    const abort = () => stop();
-    signal.addEventListener("abort", abort, { once: true });
-    if (signal.aborted) stop();
+    const stopper = new ChildStopper((signalName) => child.kill(signalName), signal);
     const timer = setTimeout(() => {
       timedOut = true;
-      stop();
+      stopper.stop();
     }, GREP_TIMEOUT_MS);
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdout += elide(chunk.toString());
       if (!outputTooLarge && stdout.length > MAX_GREP_OUTPUT_CHARACTERS) {
         outputTooLarge = true;
-        stop();
+        stopper.stop();
       }
     });
     child.stderr.on("data", (chunk: Buffer) => {
@@ -414,8 +377,7 @@ export function runSearchProcess(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      signal.removeEventListener("abort", abort);
+      stopper.settle();
       reject((error as NodeJS.ErrnoException).code === "ENOENT"
         ? new Error(`${command} was not found on PATH; install ripgrep (rg) or grep to use the Grep and Glob tools`)
         : error);
@@ -424,9 +386,8 @@ export function runSearchProcess(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      signal.removeEventListener("abort", abort);
-      if (signal.aborted) return reject(abortError());
+      stopper.settle();
+      if (signal.aborted) return reject(abortError("Grep execution aborted"));
       if (maxLineLength !== undefined && pendingLine.length > 0) {
         stdout += pendingLine.length > maxLineLength ? OMITTED_LONG_LINE : pendingLine;
         pendingLine = "";
@@ -442,15 +403,8 @@ export function runSearchProcess(
   });
 }
 
-function abortError(): Error {
-  const error = new Error("Grep execution aborted");
-  error.name = "AbortError";
-  return error;
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  if (!signal?.aborted) return;
-  throw abortError();
+function throwIfGrepAborted(signal?: AbortSignal): void {
+  throwIfAborted(signal, "Grep execution aborted");
 }
 
 // rg exits 2 when it cannot descend into a directory (common under shared temp
@@ -505,12 +459,6 @@ function formatLimitInfo(appliedLimit: number | undefined, offset: number): stri
   return parts.join(", ");
 }
 
-function toRelativePath(filePath: string, currentDirectory: string): string {
-  const rel = relative(currentDirectory, filePath);
-  if (rel === "") return ".";
-  return rel && !isAbsolute(rel) && !rel.startsWith("..") ? rel : filePath;
-}
-
 // rg prefixes directory-search output with the absolute search path ("/abs/path:12:line";
 // context lines use "-" instead of ":"). Single-file searches omit the path entirely.
 // Match the known search path exactly instead of scanning for separators, which breaks
@@ -533,10 +481,10 @@ export async function executeGrep(
   signal?: AbortSignal,
   backend?: GrepBackend,
 ): Promise<GrepResult> {
-  throwIfAborted(signal);
+  throwIfGrepAborted(signal);
   if (!currentDirectory) throw new Error("No current working directory is configured");
   const searchPath = await resolveSearchPath(input.path, allowedDirectories, currentDirectory);
-  throwIfAborted(signal);
+  throwIfGrepAborted(signal);
   const command: GrepBackend = backend ?? ((await isRipgrepAvailable()) ? "rg" : "grep");
   if (command === "grep") {
     if (input.multiline) throw new Error("multiline search requires ripgrep (rg), which was not found on PATH");

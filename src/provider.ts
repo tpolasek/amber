@@ -7,7 +7,7 @@ import type {
   ThinkingLevel,
   TokenUsage,
 } from "./types.js";
-import { providerApiUrl, type DiscoveredModel, type ProviderDriver } from "./provider-driver.js";
+import { extractApiError, providerApiUrl, providerConnectionOptions, uniqueModels, type DiscoveredModel, type ProviderDriver } from "./provider-driver.js";
 import { readServerSentEvents } from "./sse.js";
 
 export interface AnthropicProviderOptions {
@@ -163,12 +163,8 @@ export const anthropicDriver: ProviderDriver = {
   },
   createProvider(connection) {
     return new AnthropicProvider({
-      name: connection.name,
+      ...providerConnectionOptions(connection),
       authToken: connection.authKey,
-      baseUrl: connection.baseUrl,
-      model: connection.model,
-      thinkingLevel: connection.thinkingLevel,
-      ...(connection.maxOutputTokens !== undefined ? { maxOutputTokens: connection.maxOutputTokens } : {}),
     });
   },
 };
@@ -186,19 +182,6 @@ function mapUsage(usage: AnthropicUsage): Partial<TokenUsage> {
     ...(usage.output_tokens !== undefined ? { output: usage.output_tokens } : {}),
     ...(usage.cache_read_input_tokens !== undefined ? { cached: usage.cache_read_input_tokens } : {}),
   };
-}
-
-function extractApiError(body: string): string {
-  try {
-    const parsed = JSON.parse(body) as { error?: { message?: string } };
-    return parsed.error?.message ?? body.slice(0, 300);
-  } catch {
-    return body.slice(0, 300) || "Unknown error";
-  }
-}
-
-function uniqueModels(models: DiscoveredModel[]): DiscoveredModel[] {
-  return [...new Map(models.map((model) => [model.id, model])).values()];
 }
 
 function anthropicEffort(level: Exclude<ThinkingLevel, "none">): "low" | "medium" | "high" | "max" {

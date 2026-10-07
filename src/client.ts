@@ -28,8 +28,6 @@ import {
 } from "./client-session-window.js";
 import { elements, state } from "./client-state.js";
 import {
-  effectiveModelKey,
-  effectiveThinkingLevel,
   renderContextMeter,
   renderHeader,
   renderModelStatus,

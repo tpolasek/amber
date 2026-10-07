@@ -10,7 +10,7 @@ import type {
   TokenUsage,
   ToolDefinition,
 } from "./types.js";
-import { providerApiUrl, type DiscoveredModel, type ProviderDriver } from "./provider-driver.js";
+import { extractApiError, providerApiUrl, providerConnectionOptions, systemText, uniqueModels, type DiscoveredModel, type ProviderDriver } from "./provider-driver.js";
 import { streamChatCompletions } from "./openai-chat-provider.js";
 import { imageDataUrl } from "./message-images.js";
 import { readServerSentEvents } from "./sse.js";
@@ -233,16 +233,12 @@ export const openAIDriver: ProviderDriver = {
         typeof candidate.id === "string" && Boolean(candidate.id) && !candidate.id.includes("/")
       )
       .map((candidate) => ({ id: candidate.id, displayName: candidate.id }));
-    return [...new Map(models.map((model) => [model.id, model])).values()];
+    return uniqueModels(models);
   },
   createProvider(connection) {
     return new OpenAIProvider({
-      name: connection.name,
+      ...providerConnectionOptions(connection),
       apiKey: connection.authKey,
-      baseUrl: connection.baseUrl,
-      model: connection.model,
-      thinkingLevel: connection.thinkingLevel,
-      ...(connection.maxOutputTokens !== undefined ? { maxOutputTokens: connection.maxOutputTokens } : {}),
     });
   },
 };
@@ -431,12 +427,6 @@ function openAIEffort(level: Exclude<ThinkingLevel, "none">): "low" | "medium" |
   return level === "max" ? "xhigh" : level;
 }
 
-function systemText(system: string | ProviderSystemBlock[] | undefined): string {
-  if (typeof system === "string") return system;
-  if (system) return system.map((block) => block.text).join("\n\n");
-  return "You are an expert coding agent working through a web terminal. Be direct, precise, and use Markdown when it improves clarity.";
-}
-
 function serializeReasoningItem(item: OpenAIOutputItem): string {
   return `${REASONING_STATE_PREFIX}${JSON.stringify({
     type: "reasoning",
@@ -485,13 +475,4 @@ function mapUsage(usage: OpenAIUsage): Partial<TokenUsage> {
       ? { cached: usage.input_tokens_details.cached_tokens }
       : {}),
   };
-}
-
-function extractApiError(body: string): string {
-  try {
-    const parsed = JSON.parse(body) as { error?: { message?: string } };
-    return parsed.error?.message ?? body.slice(0, 300);
-  } catch {
-    return body.slice(0, 300) || "Unknown error";
-  }
 }

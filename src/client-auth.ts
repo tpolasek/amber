@@ -1,10 +1,27 @@
 import { api, authMutation, notify } from "./client-api.js";
 import { messageFrom } from "./client-formatters.js";
-import { renderConfig, renderSettingsBusyState, renderSettingsForm, saveAndLoginWithCodex, settingsBusy, showSettingsError } from "./client-settings.js";
-import { elements, state } from "./client-state.js";
-import type { ActiveAuthLogin, AuthLoginStart, AuthLoginStatus, AuthProviderStatus, Config } from "./client-types.js";
+import { elements } from "./client-state.js";
+import type { ActiveAuthLogin, AuthLoginStart, AuthLoginStatus, AuthProviderStatus } from "./client-types.js";
 
-// See the note in client-settings.js about the settings/auth import cycle.
+/**
+ * Settings-dialog hooks, registered by client-settings at startup. They keep
+ * this module free of settings imports: auth owns the login flow, the settings
+ * module owns how the dialog reacts to auth changes.
+ */
+export interface AuthUiHooks {
+  isSettingsBusy(): boolean;
+  saveAndLoginWithCodex(providerName: string, method: "browser" | "device_code"): Promise<void>;
+  onLoginComplete(): Promise<void>;
+  onLoggedOut(): Promise<void>;
+  onAuthError(message: string): void;
+}
+
+let authUi: AuthUiHooks | undefined;
+
+export function setAuthUiHooks(hooks: AuthUiHooks): void {
+  authUi = hooks;
+}
+
 export let authProviders: AuthProviderStatus[] = [];
 export let activeAuthLogin: ActiveAuthLogin | null = null;
 export let authBusy = false;
@@ -68,12 +85,12 @@ export function authProviderCard(provider: AuthProviderStatus, providerName: str
     } else {
       const browserLogin = authButton("BROWSER LOGIN", "", () => void (provider.providerConfigured
         ? startAuthLogin("browser")
-        : saveAndLoginWithCodex(providerName, "browser")));
+        : authUi?.saveAndLoginWithCodex(providerName, "browser")));
       const deviceLogin = authButton("DEVICE CODE", "secondary", () => void (provider.providerConfigured
         ? startAuthLogin("device_code")
-        : saveAndLoginWithCodex(providerName, "device_code")));
-      browserLogin.disabled = settingsBusy || authBusy;
-      deviceLogin.disabled = settingsBusy || authBusy;
+        : authUi?.saveAndLoginWithCodex(providerName, "device_code")));
+      browserLogin.disabled = authBusy || (authUi?.isSettingsBusy() ?? false);
+      deviceLogin.disabled = authBusy || (authUi?.isSettingsBusy() ?? false);
       actions.append(browserLogin, deviceLogin);
     }
     card.append(actions);
@@ -141,7 +158,7 @@ export function authButton(label: string, variant: string, action: () => void): 
   button.type = "button";
   button.className = `auth-button${variant ? ` ${variant}` : ""}`;
   button.textContent = label;
-  button.disabled = authBusy || settingsBusy;
+  button.disabled = authBusy || (authUi?.isSettingsBusy() ?? false);
   button.addEventListener("click", action);
   return button;
 }
@@ -241,24 +258,7 @@ export async function completeAuthLogin(): Promise<void> {
   activeAuthLogin = null;
   stopAuthPolling();
   await loadAuthProviders();
-  await refreshConfig();
-  if (state.config?.configured) {
-    showSettingsError();
-    elements.settingsStatus.textContent = "Connected · Amber loaded the available Codex models.";
-    renderSettingsForm();
-  }
-  renderSettingsBusyState();
-  notify("OpenAI Codex connected");
-}
-
-export async function refreshConfig(refreshModels = false): Promise<void> {
-  try {
-    state.config = await api<Config>(refreshModels ? "/api/config?refresh=1" : "/api/config");
-    document.documentElement.dataset.theme = state.config.theme;
-    renderConfig();
-  } catch {
-    // Keep the previous config; reopening the page refetches it.
-  }
+  await authUi?.onLoginComplete();
 }
 
 export async function cancelActiveAuthLogin(): Promise<boolean> {
@@ -287,13 +287,12 @@ export async function logoutOpenAICodex(showNotification = true): Promise<boolea
   try {
     await authMutation("/api/auth/openai-codex", { method: "DELETE" });
     await loadAuthProviders();
-    await refreshConfig();
-    renderSettingsBusyState();
+    await authUi?.onLoggedOut();
     if (showNotification) notify("OpenAI Codex disconnected");
     return true;
   } catch (error) {
     const message = messageFrom(error);
-    showSettingsError(message);
+    authUi?.onAuthError(message);
     notify(message);
     return false;
   } finally {

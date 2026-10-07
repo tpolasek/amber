@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { chmod, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { isWithinDirectory } from "./paths.js";
 import { createTwoFilesPatch, FILE_HEADERS_ONLY } from "diff";
+import { throwIfAborted } from "./abort-error.js";
 import { bashSpillDirectory } from "./bash-tool.js";
 import { MAX_IMAGE_BYTES, sniffImageMediaType } from "./message-images.js";
 import type { FileReadState, MessageImage, Session, ToolDefinition, ToolReadRange } from "./types.js";
@@ -114,7 +116,7 @@ export async function executeFileTool(
   signal?: AbortSignal,
   policy?: FileToolPolicy,
 ): Promise<FileToolResult> {
-  throwIfAborted(signal);
+  throwIfAborted(signal, "File operation aborted");
   if (!currentDirectory) throw new Error("No current working directory is configured");
   if (name === READ_TOOL.name) return readTextFile(input, allowedDirectories, currentDirectory, session, signal);
   if (name === WRITE_TOOL.name) {
@@ -176,9 +178,9 @@ async function readTextFile(
   assertSupportedTextPath(requestedPath, "read");
   if (isBlockedDevice(requestedPath)) throw new Error(`Cannot read '${requestedPath}': this device file would block or produce infinite output.`);
   const filePath = await resolveExistingPath(requestedPath, [...new Set([...allowedDirectories, ...STATIC_READ_DIRECTORIES])]);
-  throwIfAborted(signal);
+  throwIfAborted(signal, "File operation aborted");
   const metadata = await stat(filePath);
-  throwIfAborted(signal);
+  throwIfAborted(signal, "File operation aborted");
   if (!metadata.isFile()) throw new Error(`Read only supports files, not directories: ${filePath}`);
   const offset = integer(input.offset, "offset", 1, Number.MAX_SAFE_INTEGER, 1);
   const limit = integer(input.limit, "limit", 1, MAX_LINES_TO_READ, MAX_LINES_TO_READ);
@@ -186,7 +188,7 @@ async function readTextFile(
   let buffer: Buffer | undefined;
   if (!force && readRangeCovered(prior, offset, limit)) {
     buffer = await readFile(filePath, { signal });
-    throwIfAborted(signal);
+    throwIfAborted(signal, "File operation aborted");
     if (cachedContentMatches(prior, buffer, metadata.size)) {
       refreshCachedMetadata(session, filePath, prior!, metadata.mtimeMs, metadata.size);
       const endLine = Math.min(prior?.totalLines ?? offset + limit - 1, offset + limit - 1);
@@ -203,7 +205,7 @@ async function readTextFile(
     throw new Error(`File is too large to read (${metadata.size.toLocaleString()} bytes). Use offset and limit to read a specific portion.`);
   }
   buffer ??= await readFile(filePath, { signal });
-  throwIfAborted(signal);
+  throwIfAborted(signal, "File operation aborted");
   if (buffer.includes(0)) throw new Error("Read only supports text files in this version of AMBER");
   const content = buffer.toString("utf8").replaceAll("\r\n", "\n");
   const lines = splitLines(content);
@@ -260,7 +262,7 @@ async function readImageFile(
 ): Promise<FileToolResult> {
   if (isBlockedDevice(requestedPath)) throw new Error(`Cannot read '${requestedPath}': this device file would block or produce infinite output.`);
   const filePath = await resolveExistingPath(requestedPath, [...new Set([...allowedDirectories, ...STATIC_READ_DIRECTORIES])]);
-  throwIfAborted(signal);
+  throwIfAborted(signal, "File operation aborted");
   const metadata = await stat(filePath);
   if (!metadata.isFile()) throw new Error(`Read only supports files, not directories: ${filePath}`);
   const prior = session.fileReadState?.[filePath];
@@ -269,7 +271,7 @@ async function readImageFile(
     throw new Error(`Image is too large to read (${metadata.size.toLocaleString()} bytes; the limit is ${MAX_IMAGE_BYTES.toLocaleString()}).`);
   }
   const buffer = await readFile(filePath, { signal });
-  throwIfAborted(signal);
+  throwIfAborted(signal, "File operation aborted");
   if (!force && cachedContentMatches(priorImage, buffer, metadata.size)) {
     refreshCachedMetadata(session, filePath, priorImage!, metadata.mtimeMs, metadata.size);
     return cachedImageRead(filePath);
@@ -532,10 +534,7 @@ async function resolveWritePath(filePath: string, allowedDirectories: string[]):
 }
 
 function assertAllowed(filePath: string, allowedDirectories: string[]): void {
-  const allowed = allowedDirectories.some((directory) => {
-    const child = relative(canonicalRoot(directory), filePath);
-    return child === "" || (!child.startsWith("..") && !isAbsolute(child));
-  });
+  const allowed = allowedDirectories.some((directory) => isWithinDirectory(filePath, canonicalRoot(directory)));
   if (!allowed) throw new Error(`File is outside the project and added directories: ${filePath}`);
 }
 
@@ -604,13 +603,6 @@ async function atomicWrite(filePath: string, content: string): Promise<void> {
     await unlink(temporary).catch(() => undefined);
     throw error;
   }
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  if (!signal?.aborted) return;
-  const error = new Error("File operation aborted");
-  error.name = "AbortError";
-  throw error;
 }
 
 function unifiedDiff(filePath: string, before: string, after: string, created = false): string {

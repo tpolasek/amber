@@ -1,3 +1,5 @@
+import { readServerSentEvents } from "./sse.js";
+
 let authActionToken: () => string | undefined = () => undefined;
 
 /** Supplies the auth-action token (from the loaded config) for privileged mutations. */
@@ -35,24 +37,8 @@ export async function responseError(response: Response): Promise<string> {
 }
 
 export async function readEventStream(stream: ReadableStream<Uint8Array>, onEvent: (event: string, data: unknown) => void): Promise<void> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const frames = buffer.split("\n\n");
-    buffer = frames.pop() ?? "";
-    for (const frame of frames) {
-      let event = "message";
-      let data = "";
-      for (const line of frame.split("\n")) {
-        if (line.startsWith("event:")) event = line.slice(6).trim();
-        if (line.startsWith("data:")) data += line.slice(5).trim();
-      }
-      if (data) onEvent(event, JSON.parse(data));
-    }
+  for await (const { event, data } of readServerSentEvents(stream)) {
+    onEvent(event, JSON.parse(data));
   }
 }
 

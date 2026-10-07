@@ -3,9 +3,11 @@ export interface ServerSentEvent {
   data: string;
 }
 
-export async function* readServerSentEvents(response: Response): AsyncGenerator<ServerSentEvent> {
-  if (!response.body) throw new Error("The provider returned an empty response stream");
-  const reader = response.body.getReader();
+/** Parses a provider response or raw byte stream into server-sent events. */
+export async function* readServerSentEvents(stream: Response | ReadableStream<Uint8Array>): AsyncGenerator<ServerSentEvent> {
+  const body = stream instanceof Response ? stream.body : stream;
+  if (!body) throw new Error("The provider returned an empty response stream");
+  const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   try {

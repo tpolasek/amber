@@ -1,5 +1,5 @@
 import { api, notify } from "./client-api.js";
-import { refreshConfig } from "./client-auth.js";
+import { refreshConfig } from "./client-settings.js";
 import {
   effectiveModelKey,
   effectiveThinkingLevel,

@@ -1,6 +1,7 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { ProviderSystemBlock, ToolDefinition } from "./types.js";
+import { PendingToolRequests } from "./pending-tool-request.js";
 
 export const ENTER_PLAN_MODE_TOOL_NAME = "EnterPlanMode";
 export const EXIT_PLAN_MODE_TOOL_NAME = "ExitPlanMode";
@@ -188,21 +189,18 @@ export function planModeSystemBlock(planPath: string, childAgent = false): Provi
   };
 }
 
-interface PendingPlanModeRequest {
-  toolUseId: string;
-  kind: PlanModeRequestKind;
-  resolve: (decision: PlanModeDecision) => void;
-  reject: (error: Error) => void;
-  removeAbortListener: () => void;
-}
-
-export class PlanModeApprovalManager {
-  #pending = new Map<string, PendingPlanModeRequest>();
+export class PlanModeApprovalManager extends PendingToolRequests<PlanModeDecision, PlanModeRequestKind> {
+  constructor() {
+    super({
+      abort: "Plan mode request aborted",
+      alreadyPending: "This session already has a pending plan mode request",
+      gone: "Plan mode request is no longer pending",
+    });
+  }
 
   pending(sessionId: string): { toolUseId: string; kind: PlanModeRequestKind } | undefined {
-    const pending = this.#pending.get(sessionId);
-    if (!pending) return undefined;
-    return { toolUseId: pending.toolUseId, kind: pending.kind };
+    const pending = this.peek(sessionId);
+    return pending && { toolUseId: pending.toolUseId, kind: pending.payload };
   }
 
   waitForDecision(
@@ -211,19 +209,7 @@ export class PlanModeApprovalManager {
     kind: PlanModeRequestKind,
     signal: AbortSignal,
   ): Promise<PlanModeDecision> {
-    if (this.#pending.has(sessionId)) throw new Error("This session already has a pending plan mode request");
-    if (signal.aborted) return Promise.reject(abortError());
-    return new Promise((resolve, reject) => {
-      const onAbort = () => this.#settle(sessionId, toolUseId, undefined, abortError());
-      signal.addEventListener("abort", onAbort, { once: true });
-      this.#pending.set(sessionId, {
-        toolUseId,
-        kind,
-        resolve,
-        reject,
-        removeAbortListener: () => signal.removeEventListener("abort", onAbort),
-      });
-    });
+    return this.register(sessionId, toolUseId, kind, signal);
   }
 
   decide(sessionId: string, toolUseId: string, value: unknown): PlanModeDecision {
@@ -231,39 +217,13 @@ export class PlanModeApprovalManager {
   }
 
   decideParsed(sessionId: string, toolUseId: string, decision: PlanModeDecision): PlanModeDecision {
-    this.#get(sessionId, toolUseId);
-    this.#settle(sessionId, toolUseId, decision);
+    this.payloadOrThrow(sessionId, toolUseId);
+    this.settle(sessionId, toolUseId, decision);
     return decision;
   }
 
-  stopAll(): void {
-    for (const [sessionId, pending] of this.#pending) {
-      this.#settle(sessionId, pending.toolUseId, undefined, abortError());
-    }
-  }
-
   pendingKind(sessionId: string, toolUseId: string): PlanModeRequestKind {
-    return this.#get(sessionId, toolUseId).kind;
-  }
-
-  #get(sessionId: string, toolUseId: string): PendingPlanModeRequest {
-    const pending = this.#pending.get(sessionId);
-    if (!pending || pending.toolUseId !== toolUseId) throw new Error("Plan mode request is no longer pending");
-    return pending;
-  }
-
-  #settle(sessionId: string, toolUseId: string, decision?: PlanModeDecision, error?: Error): void {
-    const pending = this.#pending.get(sessionId);
-    if (!pending || pending.toolUseId !== toolUseId) return;
-    this.#pending.delete(sessionId);
-    pending.removeAbortListener();
-    if (error) pending.reject(error);
-    else pending.resolve(decision ?? { approved: false });
+    return this.payloadOrThrow(sessionId, toolUseId);
   }
 }
 
-function abortError(): Error {
-  const error = new Error("Plan mode request aborted");
-  error.name = "AbortError";
-  return error;
-}

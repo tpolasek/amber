@@ -1,4 +1,5 @@
 import type { ToolDefinition } from "./types.js";
+import { PendingToolRequests } from "./pending-tool-request.js";
 
 export const ASK_USER_QUESTION_TOOL_NAME = "AskUserQuestion";
 export const ASK_USER_QUESTION_TOOL_CHIP_WIDTH = 12;
@@ -185,21 +186,19 @@ function requiredString(value: unknown, field: string): string {
   return value.trim();
 }
 
-interface PendingQuestionRequest {
-  toolUseId: string;
-  questions: AskUserQuestion[];
-  resolve: (answers: AskUserQuestionAnswers) => void;
-  reject: (error: Error) => void;
-  removeAbortListener: () => void;
-}
-
-export class AskUserQuestionManager {
-  #pending = new Map<string, PendingQuestionRequest>();
+export class AskUserQuestionManager extends PendingToolRequests<AskUserQuestionAnswers, AskUserQuestion[]> {
+  constructor() {
+    super({
+      abort: "Question request aborted",
+      alreadyPending: "This session already has a pending question",
+      gone: "Question request is no longer pending",
+    });
+  }
 
   pending(sessionId: string): { toolUseId: string; questions: AskUserQuestion[] } | undefined {
-    const pending = this.#pending.get(sessionId);
+    const pending = this.peek(sessionId);
     if (!pending) return undefined;
-    return { toolUseId: pending.toolUseId, questions: structuredClone(pending.questions) };
+    return { toolUseId: pending.toolUseId, questions: structuredClone(pending.payload) };
   }
 
   waitForAnswers(
@@ -208,62 +207,19 @@ export class AskUserQuestionManager {
     questions: AskUserQuestion[],
     signal: AbortSignal,
   ): Promise<AskUserQuestionAnswers> {
-    if (this.#pending.has(sessionId)) throw new Error("This session already has a pending question");
-    if (signal.aborted) return Promise.reject(abortError());
-    return new Promise((resolve, reject) => {
-      const onAbort = () => this.#settle(sessionId, toolUseId, undefined, abortError());
-      signal.addEventListener("abort", onAbort, { once: true });
-      this.#pending.set(sessionId, {
-        toolUseId,
-        questions,
-        resolve,
-        reject,
-        removeAbortListener: () => signal.removeEventListener("abort", onAbort),
-      });
-    });
+    return this.register(sessionId, toolUseId, questions, signal);
   }
 
   answer(sessionId: string, toolUseId: string, value: unknown): AskUserQuestionAnswers {
-    const pending = this.#get(sessionId, toolUseId);
-    const answers = parseAskUserQuestionAnswers(value, pending.questions);
-    this.#settle(sessionId, toolUseId, answers);
+    const questions = this.payloadOrThrow(sessionId, toolUseId);
+    const answers = parseAskUserQuestionAnswers(value, questions);
+    this.settle(sessionId, toolUseId, answers);
     return answers;
   }
 
   decline(sessionId: string, toolUseId: string): void {
-    this.#get(sessionId, toolUseId);
-    this.#settle(sessionId, toolUseId, undefined, new Error("User declined to answer questions"));
-  }
-
-  stopAll(): void {
-    for (const [sessionId, pending] of this.#pending) {
-      this.#settle(sessionId, pending.toolUseId, undefined, abortError());
-    }
-  }
-
-  #get(sessionId: string, toolUseId: string): PendingQuestionRequest {
-    const pending = this.#pending.get(sessionId);
-    if (!pending || pending.toolUseId !== toolUseId) throw new Error("Question request is no longer pending");
-    return pending;
-  }
-
-  #settle(
-    sessionId: string,
-    toolUseId: string,
-    answers?: AskUserQuestionAnswers,
-    error?: Error,
-  ): void {
-    const pending = this.#pending.get(sessionId);
-    if (!pending || pending.toolUseId !== toolUseId) return;
-    this.#pending.delete(sessionId);
-    pending.removeAbortListener();
-    if (error) pending.reject(error);
-    else pending.resolve(answers ?? {});
+    this.payloadOrThrow(sessionId, toolUseId);
+    this.settle(sessionId, toolUseId, undefined, new Error("User declined to answer questions"));
   }
 }
 
-function abortError(): Error {
-  const error = new Error("Question request aborted");
-  error.name = "AbortError";
-  return error;
-}
