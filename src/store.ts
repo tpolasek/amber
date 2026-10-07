@@ -169,8 +169,8 @@ export class SessionStore {
     const forkPlanMode = session.planMode
       ? { active: session.planMode.active, planFilePath: this.#planPath(id) }
       : undefined;
-    if (forkPlanMode) {
-      const plan = await readFile(session.planMode!.planFilePath, "utf8").catch((error: NodeJS.ErrnoException) => {
+    if (session.planMode && forkPlanMode) {
+      const plan = await readFile(session.planMode.planFilePath, "utf8").catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return undefined;
         throw error;
       });
@@ -535,9 +535,11 @@ export class SessionStore {
       const { stdout } = await execFileAsync("rg", [
         "--no-config", "--files-with-matches", "--fixed-strings", "--ignore-case",
         "--hidden", "--no-ignore", "--glob", `*${LOG_SUFFIX}`, "--", encoded, this.#directory,
-      ], { maxBuffer: 4 * 1024 * 1024 });
+      ], { maxBuffer: 4 * 1_024 * 1_024 });
       return new Set(stdout.trimEnd().split("\n").map((path) => basename(path, LOG_SUFFIX)));
     } catch (error) {
+      // rg exits 1 when it finds no matches; that is a valid empty result,
+      // not a search failure. Anything else means search is unavailable.
       if ((error as { code?: number }).code === 1) return new Set();
       return null;
     }

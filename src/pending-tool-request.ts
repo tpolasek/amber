@@ -53,7 +53,7 @@ export class PendingToolRequests<T, P> {
     else pending.resolve(value as T);
   }
 
-  protected peek(sessionId: string): { toolUseId: string; payload: P } | undefined {
+  peek(sessionId: string): { toolUseId: string; payload: P } | undefined {
     const pending = this.#pending.get(sessionId);
     if (!pending) return undefined;
     return { toolUseId: pending.toolUseId, payload: pending.payload };

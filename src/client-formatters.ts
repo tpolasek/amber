@@ -21,9 +21,9 @@ export function formatTokenCountInThousands(tokens: number): string {
 }
 
 export function formatDuration(milliseconds: number): string {
-  return milliseconds < 1000
+  return milliseconds < 1_000
     ? `${milliseconds}ms`
-    : `${(milliseconds / 1000).toFixed(milliseconds < 10_000 ? 1 : 0)}s`;
+    : `${(milliseconds / 1_000).toFixed(milliseconds < 10_000 ? 1 : 0)}s`;
 }
 
 export function taskRuntime(task: { durationMs?: number; startedAt: string }, now = Date.now()): number {
@@ -43,15 +43,15 @@ export function formatCompactionResultLabel(summary: string): string {
 }
 
 export function relativeTime(value: string, now = Date.now()): string {
-  const seconds = Math.round((new Date(value).getTime() - now) / 1000);
+  const seconds = Math.round((new Date(value).getTime() - now) / 1_000);
   const unit: Intl.RelativeTimeFormatUnit = Math.abs(seconds) < 60
     ? "second"
-    : Math.abs(seconds) < 3600
+    : Math.abs(seconds) < 3_600
       ? "minute"
-      : Math.abs(seconds) < 86400
+      : Math.abs(seconds) < 86_400
         ? "hour"
         : "day";
-  const divisor = unit === "second" ? 1 : unit === "minute" ? 60 : unit === "hour" ? 3600 : 86400;
+  const divisor = unit === "second" ? 1 : unit === "minute" ? 60 : unit === "hour" ? 3_600 : 86_400;
   return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(Math.round(seconds / divisor), unit);
 }
 

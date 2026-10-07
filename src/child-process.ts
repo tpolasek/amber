@@ -17,8 +17,9 @@ export class ChildStopper {
   }
 
   stop(): void {
+    if (this.#forceKillTimer !== undefined) return;
     this.kill("SIGTERM");
-    this.#forceKillTimer ??= setTimeout(() => this.kill("SIGKILL"), 1_000);
+    this.#forceKillTimer = setTimeout(() => this.kill("SIGKILL"), 1_000);
   }
 
   settle(): void {

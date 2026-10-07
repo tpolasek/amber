@@ -24,7 +24,7 @@ export async function completeDirectories(
   return completions.map(({ value, absolutePath }) => ({ value, absolutePath }));
 }
 
-export async function completeFiles(
+export function completeFiles(
   fragment: string,
   baseDirectory: string,
   allowedRoots?: string[],

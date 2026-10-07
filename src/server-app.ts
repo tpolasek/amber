@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -8,6 +8,7 @@ import { browserUrl, openBrowser } from "./browser-launch.js";
 import { listenErrorMessage } from "./cli.js";
 import { throwIfAborted } from "./abort-error.js";
 import { readServerSentEvents } from "./sse.js";
+import { logServerError } from "./server-log.js";
 import { isWithinDirectory } from "./paths.js";
 import { builtInCommand } from "./built-in-commands.js";
 import {
@@ -209,7 +210,7 @@ const automaticNameRuns = new Map<string, AutomaticNameRun>();
 /** Instruction-file problems already printed, so each one is reported once per run. */
 const reportedUserInstructionProblems = new Set<string>();
 
-export async function startAmberServer(): Promise<void> {
+export async function startAmberServer(): Promise<{ server: Server; port: number }> {
   await reloadSettingsFromDisk();
   await store.initialize();
 
@@ -217,9 +218,8 @@ export async function startAmberServer(): Promise<void> {
     try {
       await route(request, response);
     } catch (error) {
-      console.error(error);
-      if (!response.headersSent) json(response, 500, { error: "Internal server error" });
-      else response.end();
+      logServerError("Request handler failed", error);
+      return response.headersSent ? response.end() : json(response, 500, { error: "Internal server error" });
     }
   });
 
@@ -255,6 +255,8 @@ export async function startAmberServer(): Promise<void> {
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
+
+  return { server, port };
 }
 
 async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -299,13 +301,13 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       ({ source, settings: nextSettings } = settingsSourceFromEditor(body.settings, settingsPath));
     } catch (error) {
       const problem = configurationErrorMessage(error);
-      console.error(`amber: could not save settings: ${problem}`);
+      logServerError(`amber: could not save settings: ${problem}`);
       return json(response, 400, { error: problem });
     }
     try {
       await saveSettingsSource(source);
     } catch (error) {
-      console.error(`amber: could not save settings: ${errorMessage(error)}`);
+      logServerError(`amber: could not save settings: ${errorMessage(error)}`);
       return json(response, 500, { error: `Could not save settings: ${errorMessage(error)}` });
     }
     try {
@@ -353,7 +355,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       if (settings) settings.enabled_plugins = { ...settings.enabled_plugins, [key]: body.enabled };
       return json(response, 200, { ...await pluginSettingsPayload(), path });
     } catch (error) {
-      console.error(`amber: could not save plugin enable state: ${errorMessage(error)}`);
+      logServerError(`amber: could not save plugin enable state: ${errorMessage(error)}`);
       return json(response, 500, { error: errorMessage(error) });
     }
   }
@@ -1350,7 +1352,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                     call.output += chunk;
                     emit("tool_output", { messageId: assistantMessage.id, toolUseId: call.id, chunk });
                     void checkpointSession().catch((error) => {
-                      console.error(`Could not checkpoint session ${sessionId}:`, error);
+                      logServerError(`Could not checkpoint session ${sessionId}`, error);
                     });
                   },
                 });
@@ -1733,7 +1735,7 @@ function startAutomaticSessionName(session: Session, listener: (title: string) =
       for (const notify of run.listeners) notify(title);
     } catch (error) {
       if (!(error instanceof Error && error.name === "AbortError")) {
-        console.error(`Could not automatically name session ${session.id}:`, error);
+        logServerError(`Could not automatically name session ${session.id}`, error);
       }
     } finally {
       if (automaticNameRuns.get(session.id) === run) automaticNameRuns.delete(session.id);
@@ -1830,7 +1832,7 @@ async function captureSessionInstructions(session: Session, currentDirectory: st
     for (const problem of [user.problem, project.problem]) {
       if (problem && !reportedUserInstructionProblems.has(problem)) {
         reportedUserInstructionProblems.add(problem);
-        console.error(`amber: ${problem}`);
+        logServerError(`amber: ${problem}`);
       }
     }
     session.instructions = {
@@ -1998,7 +2000,7 @@ async function executeAgentCall(
             });
           }
         } catch (persistError) {
-          console.error(`Could not persist background agent failure ${childId}:`, persistError);
+          logServerError(`Could not persist background agent failure ${childId}`, persistError);
         }
       }).finally(() => signal.removeEventListener("abort", abortBackground));
 
@@ -2650,7 +2652,7 @@ function json(response: ServerResponse, status: number, body: unknown): void {
 
 function exitWithMessage(message: string): never {
   const indented = message.split("\n").map((line) => `  ${line}`).join("\n");
-  console.error(`\n${indented}\n`);
+  logServerError(`\n${indented}\n`);
   process.exit(1);
 }
 
@@ -2671,7 +2673,7 @@ async function reloadSettingsFromDisk(): Promise<void> {
     agentDefinitions = [];
     claudeCodeTools = createClaudeCodeTools(agentDefinitions);
     configurationError = configurationErrorMessage(error);
-    console.error(`amber: ${configurationError}`);
+    logServerError(`amber: ${configurationError}`);
   }
 }
 
@@ -2692,10 +2694,10 @@ function deactivateConfiguration(nextSettings: AmberSettings, error: unknown): v
   agentDefinitions = nextSettings.agents;
   claudeCodeTools = createClaudeCodeTools(agentDefinitions);
   configurationError = configurationErrorMessage(error);
-  console.error(`amber: ${configurationError}`);
+  logServerError(`amber: ${configurationError}`);
 }
 
-async function loadProviderCatalog(candidate: AmberSettings): Promise<ProviderCatalog> {
+function loadProviderCatalog(candidate: AmberSettings): Promise<ProviderCatalog> {
   return ProviderCatalog.load(candidate, fetch, {
     openAICodexAuth: (signal) => openAICodexAuth.resolveAuth(signal),
   });
@@ -2717,7 +2719,7 @@ async function refreshStaleModelCatalog(): Promise<void> {
         // Settings may have been re-saved while discovery was in flight; do not revert them.
         if (settings === catalogSettings) activateConfiguration(catalogSettings, nextCatalog);
       } catch (error) {
-        console.error(`Model catalog refresh failed: ${errorMessage(error)}`);
+        logServerError(`Model catalog refresh failed: ${errorMessage(error)}`);
       } finally {
         modelCatalogRefresh = undefined;
       }
@@ -2747,7 +2749,7 @@ async function activateCompletedLogin(loginId: string, status: { status: string 
       } catch (error) {
         // The login itself succeeded; a failed model re-discovery must not
         // report it as failed. Keep the previous catalog and its fallback models.
-        console.error(`Model catalog refresh after login failed: ${errorMessage(error)}`);
+        logServerError(`Model catalog refresh after login failed: ${errorMessage(error)}`);
       }
     })();
     loginCatalogActivations.set(loginId, activation);

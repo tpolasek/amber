@@ -20,6 +20,7 @@ import {
 } from "./client-formatters.js";
 import { api, notify, readEventStream, requiredWithin, responseError } from "./client-api.js";
 import { markdown } from "./client-markdown.js";
+import { IMAGE_MEDIA_TYPES, MAX_IMAGES_PER_MESSAGE, MAX_IMAGE_BYTES, MAX_TOTAL_IMAGE_BYTES } from "./message-images.js";
 import {
   applySessionPage,
   isRenderedMessage,
@@ -183,10 +184,7 @@ let agentSessionsRequest = 0;
 let agentSessionsPollTimer: number | undefined;
 let queuedMessage: { sessionId: string; content: string; kind: "message" | "command"; queuedAt: number; images?: MessageImage[] } | null = null;
 
-const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
-const MAX_IMAGE_BYTES = 7 * 1024 * 1024;
-const MAX_TOTAL_IMAGE_BYTES = 16 * 1024 * 1024;
-const MAX_IMAGES_PER_MESSAGE = 100;
+const SUPPORTED_IMAGE_TYPES: ReadonlySet<string> = new Set(IMAGE_MEDIA_TYPES);
 interface PendingImage { mediaType: MessageImage["mediaType"]; data: string; name: string; bytes: number }
 let pendingImages: PendingImage[] = [];
 
@@ -766,18 +764,16 @@ function renderHistoryStatus(): void {
 
 function syncSessionRunUpdates(): void {
   const session = state.session;
-  const shouldObserve = Boolean(session) && state.controller === null && (session!.parentSessionId
-    ? session!.agentStatus === "running" || session!.messages.some((message) => message.status === "streaming")
-    : state.streaming);
-  if (!shouldObserve) {
-    stopSessionRunUpdates();
-    return;
-  }
-  if (sessionRunId === session!.id && sessionRunController) return;
+  if (!session || state.controller !== null) return stopSessionRunUpdates();
+  const agentStreaming = session.parentSessionId
+    ? session.agentStatus === "running" || session.messages.some((message) => message.status === "streaming")
+    : state.streaming;
+  if (!agentStreaming) return stopSessionRunUpdates();
+  if (sessionRunId === session.id && sessionRunController) return;
   stopSessionRunUpdates();
-  sessionRunId = session!.id;
+  sessionRunId = session.id;
   sessionRunController = new AbortController();
-  void observeSessionRun(session!.id, sessionRunController);
+  void observeSessionRun(session.id, sessionRunController);
 }
 
 function stopSessionRunUpdates(): void {
@@ -1370,8 +1366,9 @@ function handleEscapeAbort(): void {
 
 function isAgentSessionRunning(): boolean {
   const session = state.session;
-  return Boolean(session?.parentSessionId) && (session!.agentStatus === "running"
-    || session!.messages.some((message) => message.status === "streaming"));
+  if (!session?.parentSessionId) return false;
+  return session.agentStatus === "running"
+    || session.messages.some((message) => message.status === "streaming");
 }
 
 function abortCurrentSession(): void {

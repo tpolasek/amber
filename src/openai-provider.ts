@@ -303,7 +303,8 @@ function codexApiUrl(baseUrl: string, path: string): string {
 // release is resolved from GitHub so newly gated models appear without an
 // Amber change; this constant is only the fallback.
 const CODEX_CLIENT_VERSION = "0.156.1";
-const CODEX_VERSION_TTL_MS = 6 * 60 * 60 * 1000;
+const CODEX_RELEASES_URL = "https://api.github.com/repos/openai/codex/releases/latest";
+const CODEX_VERSION_TTL_MS = 6 * 60 * 60 * 1_000;
 let codexVersionCache: { version: string; resolvedAt: number } | undefined;
 
 async function codexClientVersion(fetcher: typeof fetch): Promise<string> {
@@ -319,7 +320,7 @@ async function codexClientVersion(fetcher: typeof fetch): Promise<string> {
 
 async function resolveLatestCodexVersion(fetcher: typeof fetch): Promise<string | undefined> {
   try {
-    const response = await fetcher("https://api.github.com/repos/openai/codex/releases/latest", {
+    const response = await fetcher(CODEX_RELEASES_URL, {
       headers: { accept: "application/vnd.github+json" },
       signal: AbortSignal.timeout(5_000),
     });

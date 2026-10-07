@@ -7,6 +7,10 @@ import type { AgentDefinition } from "./agent-tool.js";
 import type { ProviderProtocol, ThinkingLevel } from "./types.js";
 import { COMMIT_SKILL_TEMPLATE_SOURCE, SETTINGS_TEMPLATE_SOURCE } from "./settings-template.js";
 
+/** Default Codex OAuth base; suppressing it in TOML output keeps generated settings minimal. */
+const CODEX_AUTH_URL = "https://chatgpt.com/backend-api";
+const ANTHROPIC_AUTH_URL = "https://api.anthropic.com";
+
 export interface AmberSettings {
   theme?: AmberTheme;
   default_provider?: string;
@@ -93,7 +97,7 @@ export function parseSettingsSource(source: string, settingsPath = join(homedir(
   return parseSettings(parsed, settingsPath);
 }
 
-export async function saveSettingsSource(source: string, homeDirectory = homedir()): Promise<string> {
+export function saveSettingsSource(source: string, homeDirectory = homedir()): Promise<string> {
   return writeSettingsFile(join(homeDirectory, ".amber", "settings.toml"), source);
 }
 
@@ -113,7 +117,7 @@ export function settingsForEditor(settings: AmberSettings): EditableAmberSetting
         api: provider.api,
         ...(provider.auth ? { auth: provider.auth } : {}),
         ...(authKey ? { auth_key: authKey } : {}),
-        ...(authUrl && !(provider.auth === "openai-codex" && authUrl === "https://chatgpt.com/backend-api")
+        ...(authUrl && !(provider.auth === "openai-codex" && authUrl === CODEX_AUTH_URL)
           ? { auth_url: authUrl }
           : {}),
         ...(defaultModel ? { default_model: defaultModel } : {}),
@@ -167,7 +171,7 @@ function canonicalProviders(value: unknown): unknown {
     copySetting(provider, candidate, "auth");
     copySetting(provider, candidate, "auth_key");
     if (!(candidate.auth === "openai-codex"
-      && (candidate.auth_url === undefined || candidate.auth_url === "https://chatgpt.com/backend-api"))) {
+      && (candidate.auth_url === undefined || candidate.auth_url === CODEX_AUTH_URL))) {
       copySetting(provider, candidate, "auth_url");
     }
     copyOptionalString(provider, candidate, "default_model");
@@ -441,7 +445,7 @@ function parseProviders(value: unknown, settingsPath: string): Record<string, Pr
       ? undefined
       : requiredString(provider.auth_key, `${settingsPath}: providers.${name}.auth_key`);
     const authUrl = optionalString(provider.auth_url, `${settingsPath}: providers.${name}.auth_url`)
-      ?? (auth === "openai-codex" ? "https://chatgpt.com/backend-api" : undefined);
+      ?? (auth === "openai-codex" ? CODEX_AUTH_URL : undefined);
     if (!authUrl) throw new Error(`${settingsPath}: providers.${name}.auth_url must be a non-empty string`);
     const defaultModel = optionalString(provider.default_model, `${settingsPath}: providers.${name}.default_model`);
     const models = parseModels(provider.models, `${settingsPath}: providers.${name}.models`, api);
@@ -505,7 +509,7 @@ function parseLegacyProvider(settings: Record<string, unknown>, settingsPath: st
     }
   }
   const authKey = typeof settings.auth_key === "string" ? settings.auth_key : "";
-  const authUrl = typeof settings.auth_url === "string" ? settings.auth_url : "https://api.anthropic.com";
+  const authUrl = typeof settings.auth_url === "string" ? settings.auth_url : ANTHROPIC_AUTH_URL;
   const defaultModel = typeof settings.default_model === "string" ? settings.default_model : undefined;
   if (!authKey && !defaultModel) return {};
   return {

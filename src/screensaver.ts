@@ -57,7 +57,7 @@ export class ComposerScreensaver {
   ];
 
   private balls: ScreensaverBall[] = [];
-  private color = "#ffd266";
+  private ballColor = "#ffd266";
   private active = false;
   private frame = 0;
   private lastTick = 0;
@@ -115,7 +115,7 @@ export class ComposerScreensaver {
   }
 
   private start(): void {
-    this.color = getComputedStyle(this.prompt).color;
+    this.ballColor = getComputedStyle(this.prompt).color;
     this.resize();
     if (this.active) return;
     this.active = true;
@@ -297,7 +297,7 @@ export class ComposerScreensaver {
   private draw(): void {
     const context = this.context;
     context.clearRect(0, 0, this.width, this.height);
-    context.fillStyle = this.color;
+    context.fillStyle = this.ballColor;
     // Render balls as crisp integer-aligned pixel squares: no canvas path
     // anti-aliasing, so edges stay sharp instead of blurry. A 2-3px radius ball
     // reads as a ~4-6px felt pixel against the terminal surface.

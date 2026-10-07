@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { isWithinDirectory } from "./paths.js";
 import { promisify } from "node:util";
+import { logServerError } from "./server-log.js";
 
 const run = promisify(execFile);
 
@@ -404,7 +405,7 @@ export async function loadMarketplaceRegistry(homeDirectory = homedir()): Promis
   return { version: 1, marketplaces: parsed.marketplaces as Record<string, MarketplaceRecord> };
 }
 
-export async function saveMarketplaceRegistry(registry: MarketplaceRegistry, homeDirectory = homedir()): Promise<string> {
+export function saveMarketplaceRegistry(registry: MarketplaceRegistry, homeDirectory = homedir()): Promise<string> {
   return writeJsonFile(join(pluginsDirectory(homeDirectory), "marketplaces.json"), registry);
 }
 
@@ -414,7 +415,7 @@ export async function loadInstalledPlugins(homeDirectory = homedir()): Promise<I
   return { version: 1, plugins: parsed.plugins as Record<string, InstalledPluginRecord[]> };
 }
 
-export async function saveInstalledPlugins(
+export function saveInstalledPlugins(
   registry: InstalledPluginRegistry,
   homeDirectory = homedir(),
 ): Promise<string> {
@@ -603,7 +604,7 @@ export async function listMarketplacePlugins(options: ListMarketplacePluginsOpti
   if (options.marketplace && !registry.marketplaces[options.marketplace]) {
     throw new Error(`Marketplace '${options.marketplace}' is not added`);
   }
-  const names = (options.marketplace ? [options.marketplace] : Object.keys(registry.marketplaces)).sort();
+  const names = (options.marketplace ? [options.marketplace] : Object.keys(registry.marketplaces)).sort((a, b) => a.localeCompare(b));
   const installed = new Set(Object.keys((await loadInstalledPlugins(homeDirectory)).plugins));
 
   const entries: MarketplacePluginEntry[] = [];
@@ -891,7 +892,7 @@ export async function checkPluginUpdates(options: { homeDirectory?: string } = {
   const homeDirectory = options.homeDirectory ?? homedir();
   const registry = await loadInstalledPlugins(homeDirectory);
   const statuses: PluginUpdateStatus[] = [];
-  for (const key of Object.keys(registry.plugins).sort()) {
+  for (const key of Object.keys(registry.plugins).sort((a, b) => a.localeCompare(b))) {
     for (const record of registry.plugins[key] ?? []) {
       statuses.push(await pluginUpdateStatus(key, record, homeDirectory));
     }
@@ -1023,7 +1024,7 @@ export async function updateMarketplaces(name: string | undefined, homeDirectory
   if (name) return [await updateMarketplace(name, homeDirectory)];
   const registry = await loadMarketplaceRegistry(homeDirectory);
   const results: MarketplaceUpdateResult[] = [];
-  for (const marketplace of Object.keys(registry.marketplaces).sort()) {
+  for (const marketplace of Object.keys(registry.marketplaces).sort((a, b) => a.localeCompare(b))) {
     results.push(await updateMarketplace(marketplace, homeDirectory));
   }
   return results;
@@ -1068,7 +1069,7 @@ export async function enabledPluginBundles(options: PluginBundleOptions): Promis
   const registry = await loadInstalledPlugins(homeDirectory);
   const root = pluginsDirectory(homeDirectory);
   const bundles: PluginBundle[] = [];
-  for (const key of Object.keys(registry.plugins).sort()) {
+  for (const key of Object.keys(registry.plugins).sort((a, b) => a.localeCompare(b))) {
     if (!isPluginEnabled(key, options.enabledPlugins)) continue;
     const record = applicableRecord(registry.plugins[key] ?? [], options.cwd);
     if (!record) continue;
@@ -1094,7 +1095,7 @@ const reportedMissingBundles = new Set<string>();
 function warnMissingBundle(key: string, bundle: string): void {
   if (reportedMissingBundles.has(bundle)) return;
   reportedMissingBundles.add(bundle);
-  console.error(`amber: plugin ${key} is installed but its bundle is missing at ${bundle}`);
+  logServerError(`amber: plugin ${key} is installed but its bundle is missing at ${bundle}`);
 }
 
 /** One user-scope install as the settings modal shows it. */
@@ -1117,7 +1118,7 @@ export function userPluginStates(
   enabledPlugins?: Record<string, boolean>,
 ): UserPluginState[] {
   const plugins: UserPluginState[] = [];
-  for (const key of Object.keys(registry.plugins).sort()) {
+  for (const key of Object.keys(registry.plugins).sort((a, b) => a.localeCompare(b))) {
     const record = (registry.plugins[key] ?? []).find((candidate) => candidate.scope === "user");
     if (!record) continue;
     plugins.push({
@@ -1135,7 +1136,7 @@ export function userPluginStates(
 export function projectPluginKeys(registry: InstalledPluginRegistry): string[] {
   return Object.keys(registry.plugins)
     .filter((key) => (registry.plugins[key] ?? []).some((record) => record.scope === "project"))
-    .sort();
+    .sort((a, b) => a.localeCompare(b));
 }
 
 /* ------------------------------------------------------------------ */
@@ -1143,7 +1144,7 @@ export function projectPluginKeys(registry: InstalledPluginRegistry): string[] {
 /* ------------------------------------------------------------------ */
 
 export function renderMarketplaceList(registry: MarketplaceRegistry): string {
-  const names = Object.keys(registry.marketplaces).sort();
+  const names = Object.keys(registry.marketplaces).sort((a, b) => a.localeCompare(b));
   if (names.length === 0) {
     return [
       "**Plugin marketplaces**",
@@ -1224,7 +1225,7 @@ export function renderInstalledPlugins(
   registry: InstalledPluginRegistry,
   enabledPlugins?: Record<string, boolean>,
 ): string {
-  const keys = Object.keys(registry.plugins).sort();
+  const keys = Object.keys(registry.plugins).sort((a, b) => a.localeCompare(b));
   if (keys.length === 0) {
     return ["**Installed plugins**", "", "No plugins installed.", "", "Install one with `/plugin install <plugin>`."].join("\n");
   }

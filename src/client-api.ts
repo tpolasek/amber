@@ -16,7 +16,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 export async function authMutation<T = unknown>(path: string, init: RequestInit): Promise<T> {
   const token = authActionToken();
   if (!token) throw new Error("Authentication settings are not initialized");
-  return api<T>(path, {
+  return await api<T>(path, {
     ...init,
     headers: { ...init.headers, "x-amber-auth-action-token": token },
   });
@@ -25,7 +25,7 @@ export async function authMutation<T = unknown>(path: string, init: RequestInit)
 export async function settingsMutation<T = unknown>(path: string, init: RequestInit): Promise<T> {
   const token = authActionToken();
   if (!token) throw new Error("Settings are not initialized");
-  return api<T>(path, {
+  return await api<T>(path, {
     ...init,
     headers: { ...init.headers, "x-amber-auth-action-token": token },
   });

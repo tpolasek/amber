@@ -2,12 +2,12 @@ import type { ImageMediaType, MessageImage, ProviderImageBlock, ProviderMessage 
 
 export const IMAGE_MEDIA_TYPES: readonly ImageMediaType[] = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 /** Seven raw MiB stays below Anthropic's 10 MB base64-encoded image limit. */
-export const MAX_IMAGE_BYTES = 7 * 1024 * 1024;
+export const MAX_IMAGE_BYTES = 7 * 1_024 * 1_024;
 /** Leaves ample room beneath the 32 MB provider request cap after base64 expansion. */
-export const MAX_TOTAL_IMAGE_BYTES = 16 * 1024 * 1024;
+export const MAX_TOTAL_IMAGE_BYTES = 16 * 1_024 * 1_024;
 /** Conservative limit for models whose 200k context permits 100 images per request. */
 export const MAX_IMAGES_PER_MESSAGE = 100;
-export const MAX_MESSAGE_BODY_BYTES = 24 * 1024 * 1024;
+export const MAX_MESSAGE_BODY_BYTES = 24 * 1_024 * 1_024;
 /** Rough per-image character cost (≈1,600 tokens) used by the compaction estimate. */
 export const imageCharacterEstimate = 6_400;
 
@@ -138,7 +138,7 @@ export function stripProviderImages(history: ProviderMessage[]): ProviderMessage
 }
 
 function formatBytes(bytes: number): string {
-  return `${Math.round(bytes / (1024 * 1024))} MiB`;
+  return `${Math.round(bytes / (1_024 * 1_024))} MiB`;
 }
 
 function decodedBase64Bytes(data: string): number {

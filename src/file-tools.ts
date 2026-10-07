@@ -11,9 +11,9 @@ import { MAX_IMAGE_BYTES, sniffImageMediaType } from "./message-images.js";
 import type { FileReadState, MessageImage, Session, ToolDefinition, ToolReadRange } from "./types.js";
 
 const MAX_LINES_TO_READ = 2_000;
-const MAX_READ_BYTES = 256 * 1024;
+const MAX_READ_BYTES = 256 * 1_024;
 const MAX_READ_CHARACTERS = 100_000;
-const MAX_EDIT_BYTES = 1024 * 1024 * 1024;
+const MAX_EDIT_BYTES = 1_024 * 1_024 * 1_024;
 const BLOCKED_DEVICE_PATHS = new Set([
   "/dev/zero", "/dev/random", "/dev/urandom", "/dev/full", "/dev/stdin", "/dev/tty", "/dev/console",
   "/dev/stdout", "/dev/stderr", "/dev/fd/0", "/dev/fd/1", "/dev/fd/2",
@@ -292,9 +292,9 @@ function cachedImageRead(filePath: string): FileToolResult {
 }
 
 function formatKibibytes(bytes: number): string {
-  return bytes >= 1024 * 1024
-    ? `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
-    : `${Math.max(1, Math.round(bytes / 1024))} KiB`;
+  return bytes >= 1_024 * 1_024
+    ? `${(bytes / (1_024 * 1_024)).toFixed(1)} MiB`
+    : `${Math.max(1, Math.round(bytes / 1_024))} KiB`;
 }
 
 async function writeTextFile(

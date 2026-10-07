@@ -182,7 +182,7 @@ export class OpenAICodexAuth {
         method: "device_code",
         userCode,
         verificationUri: DEVICE_VERIFICATION_URI,
-        expiresInSeconds: DEVICE_TIMEOUT_MS / 1000,
+        expiresInSeconds: DEVICE_TIMEOUT_MS / 1_000,
       };
     } finally {
       this.#loginStarting = false;
@@ -316,7 +316,7 @@ export class OpenAICodexAuth {
     intervalSeconds: number,
   ): Promise<void> {
     const deadline = this.#now() + DEVICE_TIMEOUT_MS;
-    let intervalMs = Math.max(10, intervalSeconds * 1000);
+    let intervalMs = Math.max(10, intervalSeconds * 1_000);
     while (this.#now() < deadline) {
       record.controller.signal.throwIfAborted();
       const response = await this.fetchWithTimeout(DEVICE_TOKEN_URL, {
@@ -401,7 +401,7 @@ export class OpenAICodexAuth {
       type: "oauth",
       access: body.access_token,
       refresh: body.refresh_token,
-      expires: this.#now() + body.expires_in * 1000,
+      expires: this.#now() + body.expires_in * 1_000,
       accountId: accountIdFromToken(body.access_token),
     };
   }

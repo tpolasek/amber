@@ -354,7 +354,7 @@ function bashFinishedStatus(status: BashResult["status"], durationMs: number, ti
 }
 
 function formatBashDuration(milliseconds: number): string {
-  return milliseconds < 1000 ? `${milliseconds}ms` : `${(milliseconds / 1000).toFixed(milliseconds < 10_000 ? 1 : 0)}s`;
+  return milliseconds < 1_000 ? `${milliseconds}ms` : `${(milliseconds / 1_000).toFixed(milliseconds < 10_000 ? 1 : 0)}s`;
 }
 
 function spillNotice(spillPath: string): string {
