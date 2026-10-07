@@ -6,3 +6,4 @@ data/
 *.log
 .claude/settings.local.json
 .desloppify/
+query.json
