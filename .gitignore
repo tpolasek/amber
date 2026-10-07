@@ -5,3 +5,4 @@ data/
 .env
 *.log
 .claude/settings.local.json
+.desloppify/
