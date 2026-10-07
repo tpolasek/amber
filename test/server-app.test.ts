@@ -80,6 +80,37 @@ test("server-app serves API and static routes over HTTP", async (t) => {
     assert.ok(!source.trimStart().startsWith("<"), "client.js must not serve index.html");
   });
 
+  await t.test("every module the browser client imports is servable", async () => {
+    // A 404 anywhere in the client's ES module graph leaves the page blank.
+    // Crawl the compiled client sources' relative imports and fetch each one.
+    const clientModules = ["client.js"];
+    const seen = new Set<string>();
+    while (clientModules.length > 0) {
+      const moduleName = clientModules.pop()!;
+      if (seen.has(moduleName)) continue;
+      seen.add(moduleName);
+      const response = await fetch(`${base}/${moduleName}`);
+      assert.equal(response.status, 200, `${moduleName} must be served`);
+      const source = await response.text();
+      for (const match of source.matchAll(/from\s+"\.\/([a-z0-9-]+\.js)"/g)) {
+        clientModules.push(match[1]!);
+      }
+    }
+    assert.ok(seen.size > 5, "expected to crawl several client modules");
+  });
+
+  await t.test("index.html references resolvable assets", async () => {
+    const response = await fetch(`${base}/`);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    const assets = [...html.matchAll(/(?:src|href)="(\/[^"?]+)/g)].map((match) => match[1]!);
+    assert.ok(assets.length > 0, "index.html should reference styles and scripts");
+    for (const asset of assets) {
+      const assetResponse = await fetch(`${base}${asset}`);
+      assert.equal(assetResponse.status, 200, `${asset} must resolve`);
+    }
+  });
+
   await t.test("privileged endpoints reject requests without the action token", async () => {
     const response = await fetch(`${base}/api/auth/openai-codex/login`, {
       method: "POST",

@@ -163,8 +163,27 @@ const thinkingLevelScript = join(sourceDirectory, "thinking-level.js");
 const planHandoffScript = join(sourceDirectory, "plan-handoff.js");
 // Browser-loaded ES modules served straight from the compiled output. The
 // pattern only admits known module names, so it cannot traverse paths.
-const clientModulePattern = /^\/(client(?:-[a-z0-9-]+)?|built-in-commands|cache-usage|streaming-thinking|tool-display|thinking-level|plan-handoff)\.js$/;
+const clientModulePattern = /^\/(client(?:-[a-z0-9-]+)?|built-in-commands|cache-usage|message-images|sse|streaming-thinking|tool-display|thinking-level|plan-handoff)\.js$/;
 const markdownScript = join(projectRoot, "node_modules", "markdown-it", "dist", "browser", "markdown-it.umd.min.js");
+
+/** Browser scripts served verbatim from the compiled output. */
+const STATIC_SCRIPTS: Record<string, { path: string; cacheControl?: string }> = {
+  "/app.js": { path: clientScript },
+  "/screensaver.js": { path: screensaverScript },
+  "/client-formatters.js": { path: clientFormattersScript },
+  "/built-in-commands.js": { path: builtInCommandsScript },
+  "/streaming-thinking.js": { path: streamingThinkingScript },
+  "/tool-display.js": { path: toolDisplayScript },
+  "/thinking-level.js": { path: thinkingLevelScript },
+  "/plan-handoff.js": { path: planHandoffScript },
+  "/vendor/markdown-it.js": { path: markdownScript, cacheControl: "public, max-age=31536000, immutable" },
+};
+
+const STYLESHEETS: Record<string, string> = {
+  "/styles.css": join(publicDirectory, "styles.css"),
+  "/themes.css": join(publicDirectory, "themes.css"),
+};
+
 const amberDirectory = join(homedir(), ".amber");
 const defaultDataDirectory = join(amberDirectory, "data", "sessions");
 const dataDirectory = resolve(process.env.DATA_DIR ?? defaultDataDirectory);
@@ -461,7 +480,8 @@ if (method === "DELETE" && url.pathname === "/api/auth/openai-codex") {
   return false;
 }
 
-async function handleSessionCollectionRoutes(request: IncomingMessage, response: ServerResponse, method: string, url: URL): Promise<boolean> {if (method === "POST" && url.pathname === "/api/run") {
+async function handleSessionCollectionRoutes(request: IncomingMessage, response: ServerResponse, method: string, url: URL): Promise<boolean> {
+  if (method === "POST" && url.pathname === "/api/run") {
   runPrompt(request, response);
   return true;
 }
@@ -516,7 +536,8 @@ if (method === "GET" && url.pathname === "/api/directory-completions") {
   return false;
 }
 
-async function handleSessionItemRoutes(request: IncomingMessage, response: ServerResponse, method: string, url: URL): Promise<boolean> {const sessionMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}$`));
+async function handleSessionItemRoutes(request: IncomingMessage, response: ServerResponse, method: string, url: URL): Promise<boolean> {
+  const sessionMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}$`));
 if (method === "GET" && sessionMatch?.[1]) {
   const session = activeSessions.session(sessionMatch[1]) ?? await store.get(sessionMatch[1]);
   session ? json(response, 200, await sessionSnapshot(session)) : json(response, 404, { error: "Session not found" });
@@ -753,7 +774,8 @@ if (method === "POST" && commandMatch?.[1]) {
   return false;
 }
 
-async function handleSessionToolRoutes(request: IncomingMessage, response: ServerResponse, method: string, url: URL): Promise<boolean> {const tasksMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/tasks$`));
+async function handleSessionToolRoutes(request: IncomingMessage, response: ServerResponse, method: string, url: URL): Promise<boolean> {
+  const tasksMatch = url.pathname.match(new RegExp(`^/api/sessions/${SESSION_PATH_ID}/tasks$`));
 if (method === "GET" && tasksMatch?.[1]) {
   const session = await store.get(tasksMatch[1]);
   session ? json(response, 200, { tasks: backgroundTasks.list(tasksMatch[1]) }) : json(response, 404, { error: "Session not found" });
@@ -890,39 +912,36 @@ if (method === "GET" && completionMatch?.[1]) {
   return false;
 }
 
-async function handleStaticRoutes(request: IncomingMessage, response: ServerResponse, method: string, url: URL): Promise<boolean> {
-  if (method === "GET" && url.pathname === "/app.js") {  serveFile(response, clientScript, "text/javascript; charset=utf-8", "no-cache");  return true;
-}
-if (method === "GET" && url.pathname === "/screensaver.js") {  serveFile(response, screensaverScript, "text/javascript; charset=utf-8", "no-cache");  return true;
-}
-if (method === "GET" && url.pathname === "/client-formatters.js") {  serveFile(response, clientFormattersScript, "text/javascript; charset=utf-8", "no-cache");  return true;
-}
-if (method === "GET" && url.pathname === "/built-in-commands.js") {  serveFile(response, builtInCommandsScript, "text/javascript; charset=utf-8", "no-cache");  return true;
-}
-if (method === "GET" && url.pathname === "/streaming-thinking.js") {  serveFile(response, streamingThinkingScript, "text/javascript; charset=utf-8", "no-cache");  return true;
-}
-if (method === "GET" && url.pathname === "/tool-display.js") {  serveFile(response, toolDisplayScript, "text/javascript; charset=utf-8", "no-cache");  return true;
-}
-if (method === "GET" && url.pathname === "/thinking-level.js") {  serveFile(response, thinkingLevelScript, "text/javascript; charset=utf-8", "no-cache");  return true;
-}
-if (method === "GET" && url.pathname === "/plan-handoff.js") {  serveFile(response, planHandoffScript, "text/javascript; charset=utf-8", "no-cache");  return true;
-}
-if (method === "GET" && clientModulePattern.test(url.pathname)) {  serveFile(response, join(sourceDirectory, url.pathname.slice(1)), "text/javascript; charset=utf-8", "no-cache");  return true;
-}
-if (method === "GET" && url.pathname === "/vendor/markdown-it.js") {  serveFile(response, markdownScript, "text/javascript; charset=utf-8", "public, max-age=31536000, immutable");  return true;
-}
-if (method === "GET" && url.pathname === "/styles.css") {  serveFile(response, join(publicDirectory, "styles.css"), "text/css; charset=utf-8", "no-cache");  return true;
-}
-if (method === "GET" && url.pathname === "/themes.css") {  serveFile(response, join(publicDirectory, "themes.css"), "text/css; charset=utf-8", "no-cache");  return true;
-}
-if (method === "GET" && (url.pathname === "/" || /^\/s\/[a-z0-9.-]+$/.test(url.pathname))) {  serveFile(
-    response,
-    join(publicDirectory, "index.html"),
-    "text/html; charset=utf-8",
-    "no-cache",
-    (html) => html.replace("__BUILD_VERSION__", () => buildVersion),
-  );  return true;
-}
+function handleStaticRoutes(_request: IncomingMessage, response: ServerResponse, method: string, url: URL): boolean {
+  if (method !== "GET") return false;
+
+  // Browser-loaded ES modules served straight from the compiled output. The
+  // pattern only admits known module names, so it cannot traverse paths.
+  const namedScript = STATIC_SCRIPTS[url.pathname] ?? (clientModulePattern.test(url.pathname)
+    ? { path: join(sourceDirectory, url.pathname.slice(1)) }
+    : undefined);
+  if (namedScript) {
+    serveFile(response, namedScript.path, "text/javascript; charset=utf-8", namedScript.cacheControl ?? "no-cache");
+    return true;
+  }
+
+  const stylesheet = STYLESHEETS[url.pathname];
+  if (stylesheet) {
+    serveFile(response, stylesheet, "text/css; charset=utf-8", "no-cache");
+    return true;
+  }
+
+  if (url.pathname === "/" || /^\/s\/[a-z0-9.-]+$/.test(url.pathname)) {
+    serveFile(
+      response,
+      join(publicDirectory, "index.html"),
+      "text/html; charset=utf-8",
+      "no-cache",
+      (html) => html.replace("__BUILD_VERSION__", () => buildVersion),
+    );
+    return true;
+  }
+
   return false;
 }
 
