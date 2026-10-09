@@ -113,3 +113,10 @@ test("an explicit boundary resets cache usage when the model changes", () => {
   markCacheUsageReset(session);
   assert.equal(session.cacheUsageResetThroughMessageId, before.id);
 });
+
+test("a limit keeps only the most recent requests", () => {
+  const messages = Array.from({ length: 12 }, (_, index) => response(`request-${index}`, 100, index));
+  const recent = aggregateCacheUsage(messages, undefined, 9);
+  assert.deepEqual(recent, { input: 900, cached: 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11, requests: 9 });
+  assert.deepEqual(aggregateCacheUsage(messages), { input: 1_200, cached: 66, requests: 12 });
+});

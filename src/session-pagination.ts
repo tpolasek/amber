@@ -1,5 +1,5 @@
 import type { Message, Session } from "./types.js";
-import { aggregateCacheUsage } from "./cache-usage.js";
+import { aggregateCacheUsage, RECENT_CACHE_REQUESTS } from "./cache-usage.js";
 
 // Rendered messages per page.
 export const SESSION_PAGE_SIZE = 50;
@@ -47,7 +47,10 @@ export function paginateSession(session: Session, beforeId?: string | null): Ses
   const page = pageSessionMessages(session.messages, beforeId);
   const pagedSession = { ...session, messages: page.messages };
   delete pagedSession.cacheUsage;
+  delete pagedSession.recentCacheUsage;
   const cacheUsage = aggregateCacheUsage(session.messages, session.cacheUsageResetThroughMessageId);
   if (cacheUsage) pagedSession.cacheUsage = cacheUsage;
+  const recentCacheUsage = aggregateCacheUsage(session.messages, session.cacheUsageResetThroughMessageId, RECENT_CACHE_REQUESTS);
+  if (recentCacheUsage) pagedSession.recentCacheUsage = recentCacheUsage;
   return { session: pagedSession, hasMore: page.hasMore };
 }

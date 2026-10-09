@@ -1,7 +1,7 @@
 import { compactHeaderPath, formatTokenCountInThousands } from "./client-formatters.js";
 import { cacheHitRatio, formatCacheHitPercentage } from "./cache-usage.js";
 import { elements, state } from "./client-state.js";
-import type { Config, Session } from "./client-types.js";
+import type { CacheUsage, Config, Session } from "./client-types.js";
 import type { ThinkingLevel } from "./thinking-level.js";
 
 export function effectiveThinkingLevel(session: Session, config: Config): ThinkingLevel {
@@ -115,15 +115,19 @@ export function renderContextMeter(): void {
       ? " · auto-compaction off"
       : activeModel?.compactTokens ? ` · auto-compacts at ${activeModel.compactTokens.toLocaleString()}` : "");
 
-  const cacheUsage = session?.cacheUsage;
-  const cacheRatio = cacheUsage ? cacheHitRatio(cacheUsage) : 0;
-  const cacheLevel = cacheUsage === undefined ? "unknown" : cacheRatio >= .85 ? "green" : cacheRatio > .5 ? "yellow" : "red";
-  elements.cacheMeter.classList.remove("cache-unknown", "cache-green", "cache-yellow", "cache-red");
-  elements.cacheMeter.classList.add(`cache-${cacheLevel}`);
-  elements.cacheMeterBar.style.width = `${cacheRatio * 100}%`;
-  elements.cacheMeterValue.textContent = cacheUsage ? formatCacheHitPercentage(cacheRatio) : "--";
-  elements.cacheMeter.title = cacheUsage
-    ? `${cacheUsage.cached.toLocaleString()} of ${cacheUsage.input.toLocaleString()} input tokens served from cache across ${cacheUsage.requests.toLocaleString()} requests`
+  renderCacheMeter(elements.cacheMeter, elements.cacheMeterBar, elements.cacheMeterValue, session?.cacheUsage);
+  renderCacheMeter(elements.csh9Meter, elements.csh9MeterBar, elements.csh9MeterValue, session?.recentCacheUsage);
+}
+
+function renderCacheMeter(meter: HTMLElement, bar: HTMLElement, value: HTMLElement, usage: CacheUsage | undefined): void {
+  const ratio = usage ? cacheHitRatio(usage) : 0;
+  const level = usage === undefined ? "unknown" : ratio >= .85 ? "green" : ratio > .5 ? "yellow" : "red";
+  meter.classList.remove("cache-unknown", "cache-green", "cache-yellow", "cache-red");
+  meter.classList.add(`cache-${level}`);
+  bar.style.width = `${ratio * 100}%`;
+  value.textContent = usage ? formatCacheHitPercentage(ratio) : "--";
+  meter.title = usage
+    ? `${usage.cached.toLocaleString()} of ${usage.input.toLocaleString()} input tokens served from cache across ${usage.requests.toLocaleString()} requests`
     : "Cache usage unavailable since the last reset";
 }
 

@@ -117,6 +117,26 @@ test("paginateSession calculates cache usage from the full session instead of th
   const page = paginateSession(session);
 
   assert.deepEqual(page.session.cacheUsage, { input: 130, cached: 110, requests: 2 });
+  assert.deepEqual(page.session.recentCacheUsage, { input: 130, cached: 110, requests: 2 });
   assert.equal(page.session.messages.some((message) => message.id === "a0"), false);
   assert.equal(session.cacheUsage, undefined, "source session untouched");
+});
+
+test("paginateSession windows recent cache usage to the newest requests", () => {
+  const messages = sectionedMessages(12);
+  for (let index = 0; index < 12; index += 1) {
+    messages[index * 2]!.usage = { input: 100, output: 1, cached: index };
+  }
+  const session: Session = {
+    id: "session",
+    title: "session",
+    createdAt: now,
+    updatedAt: now,
+    messages,
+  };
+
+  const page = paginateSession(session);
+
+  assert.deepEqual(page.session.cacheUsage, { input: 1_200, cached: 66, requests: 12 });
+  assert.deepEqual(page.session.recentCacheUsage, { input: 900, cached: 63, requests: 9 });
 });

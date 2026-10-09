@@ -131,6 +131,7 @@ export interface Session {
   planningTaskArchiveHighWaterMark?: number;
   contextTokens?: number;
   cacheUsage?: CacheUsage;
+  recentCacheUsage?: CacheUsage;
   cacheUsageResetThroughMessageId?: string;
   planMode?: SessionPlanMode;
   /** Chat mode active: minimal system prompt and Bash as the only tool. */

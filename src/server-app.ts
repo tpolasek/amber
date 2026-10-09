@@ -100,7 +100,7 @@ import {
 import { ActiveSessionRuns, abortSessionOperations } from "./session-aborts.js";
 import { SessionInputPriorityQueue, type QueuedSessionInput } from "./session-queue.js";
 import { pageSessionMessages, paginateSession } from "./session-pagination.js";
-import { aggregateCacheUsage, aggregateSessionTokenUsage, markCacheUsageReset } from "./cache-usage.js";
+import { aggregateCacheUsage, aggregateSessionTokenUsage, markCacheUsageReset, RECENT_CACHE_REQUESTS } from "./cache-usage.js";
 import {
   ASK_USER_QUESTION_TOOL_NAME,
   AskUserQuestionManager,
@@ -1193,6 +1193,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       emit("assistant_complete", {
         message: assistantMessage,
         cacheUsage: aggregateCacheUsage(session.messages, session.cacheUsageResetThroughMessageId),
+        recentCacheUsage: aggregateCacheUsage(session.messages, session.cacheUsageResetThroughMessageId, RECENT_CACHE_REQUESTS),
       });
       throwIfSessionAborted(controller.signal);
 

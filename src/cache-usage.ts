@@ -17,7 +17,10 @@ export function aggregateSessionTokenUsage(messages: Message[]): SessionTokenUsa
   return { input, output, cacheRead, cacheMiss };
 }
 
-export function aggregateCacheUsage(messages: Message[], resetThroughMessageId?: string): CacheUsage | undefined {
+// Requests shown in the footer's short cache-hit-rate window.
+export const RECENT_CACHE_REQUESTS = 9;
+
+export function aggregateCacheUsage(messages: Message[], resetThroughMessageId?: string, limit?: number): CacheUsage | undefined {
   let boundary = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -32,9 +35,11 @@ export function aggregateCacheUsage(messages: Message[], resetThroughMessageId?:
   let input = 0;
   let cached = 0;
   let requests = 0;
-  for (let index = boundary + 1; index < messages.length; index += 1) {
+  // Walk back from the newest request so a limit selects the most recent ones.
+  for (let index = messages.length - 1; index > boundary; index -= 1) {
     const usage = messages[index]?.usage;
     if (usage?.cached === undefined) continue;
+    if (limit !== undefined && requests >= limit) break;
     input += usage.input;
     cached += usage.cached;
     requests += 1;
