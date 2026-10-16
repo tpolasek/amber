@@ -104,7 +104,9 @@ button { color: inherit; }
 .cache-meter.cache-unknown b { width: 0; box-shadow: none; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 8px var(--amber); animation: pulse 2.2s infinite; }
 
-.terminal { min-width: 0; min-height: 0; max-height: 100%; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; }
+/* Without the explicit track the implicit column sizes to the transcript's max-content
+   width, which pushes the topbar and composer past the viewport on narrow screens. */
+.terminal { min-width: 0; min-height: 0; max-height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; }
 .topbar { grid-row: 1; position: relative; z-index: 7; height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; border-bottom: 1px solid var(--amber-line); background: var(--surface); }
 .breadcrumb { min-width: 0; flex: 1; display: flex; align-items: center; gap: 24px; overflow: hidden; }
 .session-identity { min-width: 0; flex: 0 1 auto; display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
@@ -571,8 +573,9 @@ button { color: inherit; }
 @media (max-width: 760px) {
   :root { --content-gutter: 12px; }
   .app { grid-template-columns: 1fr; }
-  .sidebar { position: fixed; inset: 0 auto 0 0; width: min(300px, 86vw); transform: translateX(-102%); transition: transform .22s ease; box-shadow: 20px 0 60px var(--absolute-black); }
-  .sidebar-open .sidebar { transform: translateX(0); }
+  .sidebar { position: fixed; inset: 0 auto 0 0; width: min(300px, 86vw); transform: translateX(-102%); transition: transform .22s ease; }
+  /* Only the open drawer casts a shadow: closed, its blur bleeds in from the left edge. */
+  .sidebar-open .sidebar { transform: translateX(0); box-shadow: 20px 0 60px var(--absolute-black); }
   .sidebar-scrim { position: fixed; inset: 0; z-index: 10; background: var(--shadow-a60); }
   .sidebar-open .sidebar-scrim { display: block; }
   .close-sidebar, .menu-button { display: block; }
@@ -581,7 +584,9 @@ button { color: inherit; }
   .topbar { padding: 0 14px; }
   .breadcrumb { gap: 20px; }
   .session-identity strong { max-width: calc(150px + 5ch); }
-  .provider-status { display: none; }
+  .provider-status { max-width: 132px; }
+  .provider-status .status-dot { flex: none; }
+  #model-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .tasks-overlay { padding: 10px; }
   .tasks-dialog { max-height: calc(100vh - 20px); }
   .git-dialog-tall { height: calc(100vh - 20px); max-height: calc(100vh - 20px); }
@@ -606,13 +611,27 @@ button { color: inherit; }
   .plan-mode-dialog-footer button { flex: 1; }
   .empty-state { padding-top: 34px; }
   .boot-sequence { display: none; }
-  .message { width: calc(100% - 24px); padding-top: 10px; }
+  .message { grid-template-columns: minmax(0, 1fr); width: calc(100% - 24px); padding-top: 10px; }
+  /* The rail costs 68px the transcript needs more than the role glyph does. */
+  .message-rail { display: none; }
+  .message .message-main { grid-column: 1 / -1; }
   .composer-shell { padding: 7px 12px 9px; }
   .composer-meta span:nth-child(2) { display: none; }
   .send-button { min-width: 62px; }
   .goal-button { min-width: 74px; padding: 0 8px; }
   .queue-button { min-width: 116px; font-size: 10px; }
   .queue-button i { display: none; }
+}
+
+@media (max-width: 560px) {
+  .session-directories { display: none; }
+  .provider-status { max-width: 100px; }
+  /* Attach, queue, goal and send never fit beside the prompt here; a second row keeps
+     them on screen instead of pushing SEND past the viewport edge. */
+  .composer { grid-template-columns: 31px minmax(0, 1fr); grid-template-rows: auto auto; }
+  .prompt-mark, .composer textarea { grid-row: 1; }
+  .composer-actions { grid-column: 1 / -1; grid-row: 2; flex-wrap: wrap; justify-content: flex-end; gap: 6px; padding: 0 6px 6px; }
+  .composer-actions .attach-button, .composer-actions .send-button { margin: 0; }
 }
 
 @media (max-height: 670px) {
