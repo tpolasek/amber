@@ -1,0 +1,24 @@
+# Template: install_service.sh substitutes @PROJECT_DIR@/@NODE_BIN@/@PORT@/@PATH@
+# into ~/.config/systemd/user/amber.service (runs as your user, never root).
+# Logs: journalctl --user -t amber -f
+
+[Unit]
+Description=Amber coding agent server
+
+[Service]
+Type=simple
+WorkingDirectory=@PROJECT_DIR@
+ExecStart=@NODE_BIN@ dist/src/server.js
+Environment=HOME=%h
+Environment=HOST=0.0.0.0
+Environment=PORT=@PORT@
+Environment=PATH=@PATH@
+SyslogIdentifier=amber
+Restart=on-failure
+RestartSec=2
+# The store is append-only and recovers from kills; don't let a lingering
+# connection hold a restart hostage for the 90s default.
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target

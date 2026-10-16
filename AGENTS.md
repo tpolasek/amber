@@ -10,6 +10,7 @@ Amber is a minimal, Claude Code–compatible coding agent that runs as a web CLI
 - `npm run test:e2e` — interruption end-to-end test (spawns real servers)
 - `npm run test:e2e:plugins` - plugin end-to-end test on a clean profile (spawns a real server, clones from github.com)
 - `npm start` / `./run.sh` — start the server on port 3000
+- `./install_service.sh` — install amber as a systemd user service (`systemctl --user restart amber` to restart; logs in `journalctl --user -t amber`)
 
 Run the full test suite before finishing any change.
 
@@ -41,4 +42,4 @@ Sessions live in `~/.amber/data/sessions/`. The log is the source of truth for m
 
 ## Reloading during development
 
-Code changes require a server restart to take effect. Use the `/reload` skill (or `./run.sh` detached): it rebuilds, SIGINTs the old server, and starts a new one. The session you are running in dies mid-flight — that is expected; the session persists on disk and resumes after the reload.
+Code changes require a server restart to take effect. Prefer the systemd user service (`./install_service.sh` once): the `/reload` skill rebuilds, then runs `systemctl --user restart amber` — logs land in `journalctl --user -t amber`. If the service isn't installed, `/reload` falls back to detaching `./run.sh`. Either way the session you are running in dies mid-flight — that is expected; the session persists on disk and resumes after the reload.

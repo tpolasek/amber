@@ -1,19 +1,27 @@
 ---
 name: reload
-description: Rebuild the project and restart the Amber server, detaching the launcher so it survives the old server shutting down. Only run when the user explicitly requests it.
+description: Rebuild the project and restart the Amber systemd user service. Only run when the user explicitly requests it.
 allowed-tools: Bash
 ---
 
-Hot-reload the Amber server: rebuild, stop the previous run, and start a fresh server.
+Hot-reload the Amber server: rebuild, then restart the `amber` systemd user service.
 
 Only run this when the user explicitly requests it (/reload, or asks to restart/reload the server). Never invoke it proactively — a reload terminates the user's active session mid-run.
 
-1. Run exactly this from the repository root (nohup + disown detaches on macOS and Linux; setsid is Linux-only):
+1. Build first, so a failed build cannot take the running server down:
 
    ```
-   nohup ./run.sh >/tmp/amber-restart.log 2>&1 </dev/null & disown; echo "run.sh launched detached"
+   npm run build
    ```
 
-2. The command returns immediately; the detached script builds, SIGINTs the server on port 3000 (escalating to SIGTERM if needed), and starts the new one.
+   If the build fails, stop and report it; the running server is untouched.
 
-IMPORTANT: the server being stopped hosts this agent session, so this run is terminated mid-flight when the reload lands. That is expected — do not treat it as a failure. Tell the user the reload is underway and that they may need to reconnect or reload the page; the session persists server-side and resumes from disk. Do not attempt to verify the new server from this run.
+2. Restart the service detached (setsid keeps the restart alive when this session's server is torn down):
+
+   ```
+   setsid systemctl --user restart amber.service >/tmp/amber-restart.log 2>&1 </dev/null & disown; echo "restart issued"
+   ```
+
+   If the unit is not installed yet (`systemctl --user cat amber.service` fails), install it with `./install_service.sh` — or, if the user just wants the legacy flow, fall back to `nohup ./run.sh >/tmp/amber-restart.log 2>&1 </dev/null & disown`.
+
+IMPORTANT: the server being restarted hosts this agent session, so this run is terminated mid-flight when the restart lands. That is expected — do not treat it as a failure. Tell the user the reload is underway and that they may need to reconnect or reload the page; the session persists server-side and resumes from disk. Do not attempt to verify the new server from this run. After a restart, logs are in `journalctl --user -t amber`.
