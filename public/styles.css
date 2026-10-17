@@ -86,6 +86,59 @@ button { color: inherit; }
 :root[data-theme="greek"] .topbar .status-dot { background: #f4d79a; box-shadow: 0 0 8px #f4d79a; }
 :root[data-theme="greek"] .topbar .status-dot.demo { background: #dfe7d7; box-shadow: none; }
 
+/*
+ * The side panel wears the lighter sage, treated like the top panel: white
+ * type, white hairlines and white meter fills. The gold brand mark is the one
+ * warm accent left on it.
+ */
+:root[data-theme="greek"] .sidebar {
+  background: #979e88;
+  border-right-color: #7b826f;
+  box-shadow: inset -1px 0 0 rgb(255 255 255 / .18);
+  --accent-rgb: 75 85 69;
+  --ink: #4b5545;
+  --text: #fff;
+  --muted: #f3f6ef;
+  --amber: #f4f0e9;
+  --amber-hot: #fff;
+  --amber-dim: #eef3e9;
+  --amber-faint: rgb(75 85 69 / .24);
+  --amber-line: rgb(255 255 255 / .34);
+  --fg-item: #fff;
+  --fg-subtle: #f3f6ef;
+  --fg-metadata: #f7f9f4;
+  --fg-mode: #fff;
+  --fg-secondary-action: #fff;
+  --success: #fff;
+  --success-muted: #f3f6ef;
+  --success-rgb: 255 255 255;
+  --success-glow: rgb(255 255 255 / .5);
+  --danger: #6e2b1e;
+  --danger-rgb: 110 43 30;
+  --error-text: #5f2419;
+  --error-muted: #5f2419;
+  --provider-demo: #eef3e9;
+  --bg-meter: rgb(255 255 255 / .28);
+  --active-border: #fff;
+  --active-bg: #fff;
+  --active-ink: #4b5545;
+}
+:root[data-theme="greek"] .sidebar .brand { border-bottom-color: rgb(255 255 255 / .3); }
+:root[data-theme="greek"] .sidebar .brand-mark { background: linear-gradient(180deg, #f0d39a, #c8922e); color: #12323a; filter: drop-shadow(0 0 9px rgb(255 255 255 / .35)); }
+:root[data-theme="greek"] .sidebar .session-list { scrollbar-color: rgb(255 255 255 / .55) transparent; }
+:root[data-theme="greek"] .sidebar .mode-choice span { background: rgb(75 85 69 / .2); }
+:root[data-theme="greek"] .sidebar .mode-choice input:checked + span,
+:root[data-theme="greek"] .sidebar .mode-choice:has(input:disabled) input:checked + span,
+:root[data-theme="greek"] .sidebar .mode-choice:has(input:disabled):hover input:checked + span { background: #fff; border-color: #fff; color: #4b5545; }
+:root[data-theme="greek"] .sidebar-footer { background: transparent; border-top-color: rgb(255 255 255 / .3); }
+:root[data-theme="greek"] .sidebar .system-meter i { background: rgb(255 255 255 / .28); }
+:root[data-theme="greek"] .sidebar .context-meter.context-green b,
+:root[data-theme="greek"] .sidebar .cache-meter.cache-green b { background: #fff; box-shadow: 0 0 6px rgb(255 255 255 / .55); }
+:root[data-theme="greek"] .sidebar .context-meter.context-yellow b,
+:root[data-theme="greek"] .sidebar .cache-meter.cache-yellow b { background: #f4f0e9; box-shadow: 0 0 6px rgb(255 255 255 / .45); }
+:root[data-theme="greek"] .sidebar .context-meter.context-red b,
+:root[data-theme="greek"] .sidebar .cache-meter.cache-red b { background: #6e2b1e; box-shadow: 0 0 6px rgb(110 43 30 / .45); }
+
 .app { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; display: grid; grid-template-columns: clamp(236px, 16vw, 260px) minmax(0, 1fr); background: var(--surface); transition: opacity .2s; }
 .app.booting { opacity: 0; }
 
