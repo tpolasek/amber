@@ -188,6 +188,7 @@ const SKIN_ASSET_TYPES: Record<string, string> = {
   "architecture.webp": "image/webp",
   "athena.webp": "image/webp",
   "marble.webp": "image/webp",
+  "meander.png": "image/png",
   "bodoni-moda.woff2": "font/woff2",
   "dm-sans.woff2": "font/woff2",
   "dm-sans-italic.woff2": "font/woff2",

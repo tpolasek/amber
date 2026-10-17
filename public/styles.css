@@ -32,16 +32,15 @@ button { color: inherit; }
 .greek-scene .greek-temple { position: absolute; left: -14%; bottom: -4%; width: 108%; height: 48%; background: url("/greek/architecture.webp") bottom left / contain no-repeat; opacity: .6; mix-blend-mode: multiply; }
 .greek-scene .greek-statue { position: absolute; right: -5%; bottom: -7%; width: min(33vw, 430px); height: 90%; background: url("/greek/athena.webp") bottom right / contain no-repeat; opacity: .4; mix-blend-mode: multiply; }
 /* Flat wash so transcript ink stays legible over the stone. */
-.greek-scene::after { content: ""; position: absolute; inset: 0; background: rgb(250 247 241 / .42); }
+.greek-scene::after { content: ""; position: absolute; inset: 0; background: rgb(250 247 241 / .18); }
 
-:root[data-theme="greek"] .app { position: relative; z-index: 1; background: rgb(247 243 236 / .35); }
-:root[data-theme="greek"] .sidebar,
-:root[data-theme="greek"] .sidebar-footer { background: rgb(250 247 241 / .76); }
-:root[data-theme="greek"] .composer-shell { background: rgb(250 247 241 / .62); }
-:root[data-theme="greek"] .composer { background: rgb(253 251 246 / .82); }
+:root[data-theme="greek"] .app { position: relative; z-index: 1; background: rgb(247 243 236 / .12); }
+:root[data-theme="greek"] .composer-shell { background: rgb(250 247 241 / .34); }
+:root[data-theme="greek"] .composer { background: rgb(253 251 246 / .62); }
 /* Keep the marble readable behind modal scrims. */
 :root[data-theme="greek"] .tasks-overlay { background: rgb(120 98 56 / .34); }
-:root[data-theme="greek"] .brand strong { font-family: var(--greek-serif); font-size: 17px; font-weight: 600; letter-spacing: .26em; }
+:root[data-theme="greek"] .brand strong { font-family: var(--greek-serif); font-size: 17px; font-weight: 600; letter-spacing: .26em; line-height: 20px; }
+:root[data-theme="greek"] .brand small { line-height: 14px; }
 :root[data-theme="greek"] .landing-dialog h1 { font-family: var(--greek-serif); font-weight: 500; letter-spacing: .2em; }
 :root[data-theme="greek"] .landing-dialog .hero-copy { font-family: var(--greek-sans); font-size: 14px; letter-spacing: .02em; }
 /* Gold-leaf rules replace the flat hairline borders. */
@@ -142,6 +141,31 @@ button { color: inherit; }
 :root[data-theme="greek"] .sidebar .cache-meter.cache-yellow b { background: #e8c887; box-shadow: 0 0 6px rgb(232 200 135 / .45); }
 :root[data-theme="greek"] .sidebar .context-meter.context-red b,
 :root[data-theme="greek"] .sidebar .cache-meter.cache-red b { background: #6e2b1e; box-shadow: 0 0 6px rgb(110 43 30 / .45); }
+/* A Greek-key frieze replaces the flat hairlines in the side panel. The asset
+   is an alpha mask so the tile takes the panel's gold at each rule. */
+:root[data-theme="greek"] { --meander-mask: url("/greek/meander.png?v=4"); }
+:root[data-theme="greek"] .sidebar .brand,
+:root[data-theme="greek"] .sidebar-footer { position: relative; }
+:root[data-theme="greek"] .sidebar .brand { padding-bottom: 7px; border-bottom-color: transparent; }
+:root[data-theme="greek"] .sidebar .brand::after,
+:root[data-theme="greek"] .sidebar-footer::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 7px;
+  background: var(--amber);
+  pointer-events: none;
+  -webkit-mask-image: var(--meander-mask);
+  -webkit-mask-repeat: repeat-x;
+  -webkit-mask-size: 8px 7px;
+  mask-image: var(--meander-mask);
+  mask-repeat: repeat-x;
+  mask-size: 8px 7px;
+}
+:root[data-theme="greek"] .sidebar .brand::after { bottom: 0; }
+:root[data-theme="greek"] .sidebar-footer { padding-top: 7px; border-top-color: transparent; }
+:root[data-theme="greek"] .sidebar-footer::before { top: 0; }
 
 .app { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; display: grid; grid-template-columns: clamp(236px, 16vw, 260px) minmax(0, 1fr); background: var(--surface); transition: opacity .2s; }
 .app.booting { opacity: 0; }
@@ -160,7 +184,6 @@ button { color: inherit; }
 .new-session kbd { float: right; color: var(--muted); background: transparent; }
 .select-session { color: var(--fg-item); }
 .sidebar-label { display: flex; align-items: center; gap: 10px; margin: 4px 12px 7px; color: var(--muted); font-size: 12px; letter-spacing: .18em; }
-.sidebar-label .line { flex: 1; height: 1px; background: var(--amber-line); }
 .mode-selector { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin: 0 12px 14px; padding: 0; border: 0; }
 .mode-choice { min-width: 0; cursor: pointer; }
 .mode-choice:has(input:disabled) { cursor: default; }
