@@ -55,9 +55,13 @@ test("defaults multiSelect to false when omitted and rejects non-boolean values"
   );
 });
 
+test("accepts questions that do not end with a question mark", () => {
+  const parsed = parseAskUserQuestionInput({ questions: [{ ...questions[0], question: "Missing punctuation" }] });
+  assert.equal(parsed.questions[0]!.question, "Missing punctuation");
+});
+
 test("validates question counts, labels, headers, and uniqueness", () => {
   assert.throws(() => parseAskUserQuestionInput({ questions: [] }), /1-4 questions/);
-  assert.throws(() => parseAskUserQuestionInput({ questions: [{ ...questions[0], question: "Missing punctuation" }] }), /end with \?/);
   assert.throws(() => parseAskUserQuestionInput({ questions: [{ ...questions[0], header: "Thirteen chars!" }] }), /12 characters or fewer/);
   assert.throws(() => parseAskUserQuestionInput({
     questions: [{ ...questions[0], options: [questions[0]!.options[0], questions[0]!.options[0]] }],

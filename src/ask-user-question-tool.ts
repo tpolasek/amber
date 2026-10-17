@@ -29,7 +29,7 @@ export const ASK_USER_QUESTION_TOOL: ToolDefinition = {
           properties: {
             question: {
               type: "string",
-              description: 'The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: "Which library should we use for date formatting?" If multiSelect is true, phrase it accordingly, e.g. "Which features do you want to enable?"',
+              description: 'The complete question to ask the user. Should be clear and specific. Example: "Which library should we use for date formatting?" If multiSelect is true, phrase it accordingly, e.g. "Which features do you want to enable?"',
             },
             header: {
               type: "string",
@@ -142,7 +142,6 @@ function parseQuestion(value: unknown, questionIndex: number): AskUserQuestion {
   }
   const input = value as Record<string, unknown>;
   const question = requiredString(input.question, `Question ${questionIndex + 1} question`);
-  if (!question.endsWith("?")) throw new Error(`Question \"${question}\" must end with ?`);
   const header = requiredString(input.header, `Question ${questionIndex + 1} header`);
   if (header.length > ASK_USER_QUESTION_TOOL_CHIP_WIDTH) {
     throw new Error(`Question \"${question}\" header must be ${ASK_USER_QUESTION_TOOL_CHIP_WIDTH} characters or fewer`);
