@@ -44,6 +44,8 @@ export interface TaskRetrieval {
 
 export class BackgroundTaskManager {
   readonly #tasks = new Map<string, ManagedTask>();
+  /** Invoked once per finished task; used to notify the owning session. */
+  onFinished?: (task: BackgroundTask) => void;
 
   async start(
     sessionId: string,
@@ -199,6 +201,7 @@ export class BackgroundTaskManager {
     if (task.forceKillHandle) clearTimeout(task.forceKillHandle);
     await task.combinedBuffer.finalize();
     task.resolveCompletion();
+    this.onFinished?.(publicTask(task));
   }
 }
 

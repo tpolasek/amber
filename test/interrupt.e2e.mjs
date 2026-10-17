@@ -170,7 +170,12 @@ function planResponse(payload) {
     return { text: "continued after automatic compaction" };
   }
   if (JSON.stringify(messages).includes("<task-notification>")) {
-    return { text: "parent received background result" };
+    // The dual-wake scenario needs its first wake still streaming when the
+    // agent completes, so the deferred re-check is exercised.
+    return {
+      text: "parent received background result",
+      ...(firstText.includes("DUAL BACKGROUND WAKE") ? { delayMs: 3_000 } : {}),
+    };
   }
   const interrupted = messages.some((message) =>
     message.role === "user" && typeof message.content === "string" && message.content === INTERRUPT_TEXT);
@@ -227,6 +232,43 @@ function planResponse(payload) {
           }],
         }
       : { text: "parent continued without waiting" };
+  }
+  if (firstText.includes("DUAL BACKGROUND WAKE")) {
+    const agentUses = messages
+      .filter((message) => message.role === "assistant" && Array.isArray(message.content))
+      .flatMap((message) => message.content.filter((block) => block.type === "tool_use" && block.name === "Agent"));
+    const backgroundUses = bashUses.filter((block) => block.input?.run_in_background === true);
+    return agentUses.length === 0 || backgroundUses.length === 0
+      ? {
+          tools: [
+            {
+              id: "dual-background-agent",
+              name: "Agent",
+              input: {
+                description: "Delayed background child",
+                prompt: "BACKGROUND CHILD DELAY",
+                subagent_type: "general-purpose",
+                run_in_background: true,
+              },
+            },
+            {
+              id: "dual-background-bash",
+              input: { command: "sleep 1 && echo dual-bg-done", run_in_background: true, timeout: 60 },
+            },
+          ],
+        }
+      : { text: "parent continued without waiting" };
+  }
+  if (firstText.includes("BACKGROUND BASH SCENARIO")) {
+    const backgroundUses = bashUses.filter((block) => block.input?.run_in_background === true);
+    return backgroundUses.length === 0
+      ? {
+          tools: [{
+            id: "background-bash",
+            input: { command: "sleep 1 && echo bg-done", run_in_background: true, timeout: 60 },
+          }],
+        }
+      : { text: "parent continued without waiting for the background command" };
   }
   if (firstText.includes("BACKGROUND AGENT SCENARIO")) {
     const agentUses = messages
@@ -307,7 +349,8 @@ function planResponse(payload) {
   return { tools: [{ id: `bash-${bashUses.length + 1}`, command: "sleep 1" }] };
 }
 
-async function readStream(response, onEvent) {
+/** Reads an SSE stream, resolving at its end or once stopEvent is seen. */
+async function readStream(response, onEvent, stopEvent) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -325,6 +368,11 @@ async function readStream(response, onEvent) {
         else if (line.startsWith("data:")) data += line.slice(5).trim();
       }
       if (data) onEvent(event, JSON.parse(data));
+      // Event streams stay attached across runs; tests opt out explicitly.
+      if (stopEvent !== undefined && event === stopEvent) {
+        await reader.cancel().catch(() => undefined);
+        return;
+      }
     }
   }
 }
@@ -697,7 +745,7 @@ async function runFailedCompactionDetachedObserverScenario(mock, amber) {
   // on the message request's client-side finally block to resend input.
   const observerResponse = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/events`));
   if (!observerResponse.ok) throw new Error(`observer stream failed: ${await observerResponse.text()}`);
-  const observerFinished = readStream(observerResponse, (event, data) => observerEvents.push({ event, ...data }));
+  const observerFinished = readStream(observerResponse, (event, data) => observerEvents.push({ event, ...data }), "done");
   await waitFor(
     () => observerEvents.some((event) => event.toolCall?.name === "Bash" && event.toolCall.status === "running"),
     30_000,
@@ -812,7 +860,7 @@ async function runDisconnectedClientScenario(mock, amber) {
   const observerEvents = [];
   const observerResponse = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/events`));
   if (!observerResponse.ok) throw new Error(`observer stream failed: ${await observerResponse.text()}`);
-  const observerRead = readStream(observerResponse, (event, data) => observerEvents.push({ event, ...data }));
+  const observerRead = readStream(observerResponse, (event, data) => observerEvents.push({ event, ...data }), "done");
   await waitFor(
     () => observerEvents.some((event) => event.event === "done"),
     60_000,
@@ -856,7 +904,7 @@ async function runDisconnectedClientScenario(mock, amber) {
   abortController.abort();
   await abortRead.catch(() => undefined);
   const abortObserver = await fetch(amberUrl(amber.port, `/api/sessions/${abortSessionId}/events`));
-  const abortObserverRead = readStream(abortObserver, (event, data) => abortEvents.push({ event, ...data }));
+  const abortObserverRead = readStream(abortObserver, (event, data) => abortEvents.push({ event, ...data }), "error");
   const aborted = await postJson(amberUrl(amber.port, `/api/sessions/${abortSessionId}/abort`), {});
   check("explicit abort stops the detached run",
     aborted.body.aborted === true && aborted.body.sessionIds.includes(abortSessionId), JSON.stringify(aborted));
@@ -926,21 +974,26 @@ async function runBackgroundAgentScenario(mock, amber) {
       efforts: mock.requests().filter((request) => request.temperature === 1).map((request) => request.output_config?.effort),
     }));
 
-  const notificationResponse = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ content: "Use any completed background results." }),
-  });
-  await readStream(notificationResponse, () => undefined);
+  // The finished child wakes the idle parent by itself: no user message is sent.
+  await waitFor(async () => {
+    const parent = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+    return parent.session.messages.some((message) => message.kind === "agent-notification")
+      && parent.session.messages.filter((message) => message.role === "assistant").at(-1)?.content
+        === "parent received background result";
+  }, 10_000, "the idle parent to be woken by the background result");
   const notifiedParent = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
   const notification = notifiedParent.session.messages.find((message) => message.kind === "agent-notification");
-  check("the next parent turn receives the background result notification",
+  check("the idle parent receives the background result notification without a user message",
     notification?.content.includes(`<task-id>${childId}</task-id>`)
       && notification.content.includes("<status>complete</status>")
       && notification.content.includes("background child complete"), notification?.content);
-  check("the parent LLM responds with the delivered background context",
+  check("the woken parent responds with the delivered background context",
     notifiedParent.session.messages.filter((message) => message.role === "assistant").at(-1)?.content
       === "parent received background result");
+  check("the wake run added no user model message",
+    notifiedParent.session.messages
+      .filter((message) => message.role === "user" && (message.kind === undefined || message.kind === "chat"))
+      .every((message) => message.content === "BACKGROUND AGENT SCENARIO"));
 }
 
 async function runStoppedBackgroundAgentScenario(mock, amber) {
@@ -983,18 +1036,107 @@ async function runStoppedBackgroundAgentScenario(mock, amber) {
       === "Response interrupted: User manually stopped the agent.",
     JSON.stringify(stoppedChild.session.messages?.at(-1)?.content));
 
-  const notificationResponse = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ content: "Use any completed background results." }),
-  });
-  await readStream(notificationResponse, () => undefined);
+  // Stopping the child also wakes the idle parent with a stopped notification.
+  await waitFor(async () => {
+    const parent = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+    return parent.session.messages.some((message) => message.kind === "agent-notification")
+      && parent.session.messages.filter((message) => message.role === "assistant").at(-1)?.content
+        === "parent received background result";
+  }, 10_000, "the idle parent to be woken by the stopped agent");
   const notifiedParent = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
   const notification = notifiedParent.session.messages.find((message) => message.kind === "agent-notification");
   check("a stopped agent notifies with a distinct stopped status",
     notification?.content.includes(`<task-id>${childId}</task-id>`)
       && notification.content.includes("<status>stopped</status>")
       && notification.content.includes("User manually stopped the agent"), notification?.content);
+}
+
+async function runBackgroundBashWakeScenario(mock, amber) {
+  console.log("\n== background bash wake");
+  mock.reset();
+  const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
+    name: "background bash wake",
+    path: tmpdir(),
+  });
+  const sessionId = body.session.id;
+  const response = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content: "BACKGROUND BASH SCENARIO" }),
+  });
+  await readStream(response, () => undefined);
+  const snapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+  const bashCall = snapshot.session.messages
+    .flatMap((message) => message.toolCalls ?? [])
+    .find((call) => call.name === "Bash");
+  check("background Bash launch is persisted as non-blocking",
+    bashCall?.status === "complete"
+      && bashCall.statusDisplay?.text === "BACKGROUND"
+      && Boolean(bashCall.backgroundTaskId), JSON.stringify(bashCall));
+  check("parent model continues without waiting for the background command",
+    snapshot.session.messages.filter((message) => message.role === "assistant").at(-1)?.content
+      === "parent continued without waiting for the background command");
+
+  // The finished command wakes the idle parent with its notification.
+  const taskId = bashCall?.backgroundTaskId;
+  await waitFor(async () => {
+    const parent = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+    return parent.session.messages.some((message) =>
+      message.kind === "agent-notification" && message.content.includes(`<task-id>${taskId}</task-id>`))
+      && parent.session.messages.filter((message) => message.role === "assistant").at(-1)?.content
+        === "parent received background result";
+  }, 15_000, "the idle parent to be woken by the background bash result");
+  const notifiedParent = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+  const notification = notifiedParent.session.messages.find((message) =>
+    message.kind === "agent-notification" && message.content.includes("<task-type>background-bash</task-type>"));
+  check("the background bash notification reports completion and output",
+    notification?.content.includes(`<task-id>${taskId}</task-id>`)
+      && notification.content.includes("<status>completed</status>")
+      && notification.content.includes("exit code: 0")
+      && notification.content.includes("bg-done"), notification?.content);
+  check("the wake run added no user model message",
+    notifiedParent.session.messages
+      .filter((message) => message.role === "user" && (message.kind === undefined || message.kind === "chat"))
+      .every((message) => message.content === "BACKGROUND BASH SCENARIO"));
+}
+
+/**
+ * A background bash finishing first starts a wake run; the agent completing
+ * while that wake is still streaming must defer, not drop, its own wake.
+ */
+async function runDualBackgroundWakeScenario(mock, amber) {
+  console.log("\n== dual background wake");
+  mock.reset();
+  const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
+    name: "dual background wake",
+    path: tmpdir(),
+  });
+  const sessionId = body.session.id;
+  const response = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content: "DUAL BACKGROUND WAKE" }),
+  });
+  await readStream(response, () => undefined);
+
+  await waitFor(async () => {
+    const parent = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+    const notifications = parent.session.messages.filter((message) => message.kind === "agent-notification");
+    return notifications.length >= 2
+      && parent.session.messages.filter((message) => message.role === "assistant").at(-1)?.content
+        === "parent received background result";
+  }, 20_000, "both background results to wake the idle parent");
+  const notifiedParent = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+  const notifications = notifiedParent.session.messages.filter((message) => message.kind === "agent-notification");
+  check("the bash result and the deferred agent result both arrived",
+    notifications.some((message) => message.content.includes("background-bash") && message.content.includes("dual-bg-done"))
+      && notifications.some((message) => message.content.includes("<status>complete</status>")
+        && message.content.includes("background child complete")),
+    JSON.stringify(notifications.map((message) => message.content.slice(0, 60))));
+  check("the dual wake runs added no user model message",
+    notifiedParent.session.messages
+      .filter((message) => message.role === "user" && (message.kind === undefined || message.kind === "chat"))
+      .every((message) => message.content === "DUAL BACKGROUND WAKE"));
 }
 
 async function runTruncatedResponseScenario(mock, amber) {
@@ -1344,7 +1486,7 @@ async function runManualCompactionObserverScenario(mock, amber) {
   const events = [];
   const observer = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/events`));
   if (!observer.ok) throw new Error(`observer stream failed: ${await observer.text()}`);
-  const observerRead = readStream(observer, (event, data) => events.push({ event, ...data }));
+  const observerRead = readStream(observer, (event, data) => events.push({ event, ...data }), "done");
 
   const result = await compactRequest;
   check("the manual compaction command succeeds", result.status === 200, JSON.stringify(result));
@@ -1671,6 +1813,8 @@ try {
   await runQueuedCommandScenario(mock, amber);
   await runBackgroundAgentScenario(mock, amber);
   await runStoppedBackgroundAgentScenario(mock, amber);
+  await runBackgroundBashWakeScenario(mock, amber);
+  await runDualBackgroundWakeScenario(mock, amber);
   await runTruncatedResponseScenario(mock, amber);
   await runPaginationScenario(mock, runDirectory, basePort);
   await runUnqueueScenario(mock, amber);

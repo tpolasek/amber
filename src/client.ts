@@ -764,11 +764,10 @@ function renderHistoryStatus(): void {
 
 function syncSessionRunUpdates(): void {
   const session = state.session;
+  // Stay subscribed whenever a session is open: besides re-attaching to runs,
+  // the server can start a wake run (background result notification) while
+  // this client is idle.
   if (!session || state.controller !== null) return stopSessionRunUpdates();
-  const agentStreaming = session.parentSessionId
-    ? session.agentStatus === "running" || session.messages.some((message) => message.status === "streaming")
-    : state.streaming;
-  if (!agentStreaming) return stopSessionRunUpdates();
   if (sessionRunId === session.id && sessionRunController) return;
   stopSessionRunUpdates();
   sessionRunId = session.id;
@@ -991,7 +990,7 @@ function applySessionEvent(context: SessionStreamContext, event: string, data: u
     setStreamAssistant(context, createSessionStreamContext(merged.session).assistantMessage);
     if (!snapshot.session.parentSessionId && wasStreaming && !snapshot.active) sendQueuedMessage(snapshot.session.id);
   } else if (event === "start") {
-    const payload = data as { session?: Session; hasMore?: boolean; userMessage: Message; assistantMessage: Message };
+    const payload = data as { session?: Session; hasMore?: boolean; userMessage?: Message; assistantMessage: Message };
     if (payload.session) {
       const merged = applySessionPage(context.session, payload.session, payload.hasMore ?? false);
       context.session = merged.session;
@@ -999,15 +998,19 @@ function applySessionEvent(context: SessionStreamContext, event: string, data: u
       const streamedAssistant = merged.session.messages.find((message) => message.id === payload.assistantMessage.id)
         ?? payload.assistantMessage;
       setStreamAssistant(context, streamedAssistant);
+      // A server-initiated wake run arrives outside our own send flow.
+      if (!payload.session.parentSessionId && state.controller === null) setStreaming(true);
       elements.emptyState.hidden = true;
       renderHeader();
       scrollTranscriptToBottom();
       return;
     }
-    if (!context.session.messages.some((message) => message.id === payload.userMessage.id)) {
-      context.session.messages.push(payload.userMessage, payload.assistantMessage);
+    const startUserMessage = payload.userMessage;
+    if (startUserMessage
+      && !context.session.messages.some((message) => message.id === startUserMessage.id)) {
+      context.session.messages.push(startUserMessage, payload.assistantMessage);
       context.assistantElement = appendMessage(payload.assistantMessage);
-      appendMessage(payload.userMessage, context.assistantElement);
+      appendMessage(startUserMessage, context.assistantElement);
     }
     context.assistantMessage = payload.assistantMessage;
     context.assistantElement ??= elements.transcript.querySelector<HTMLElement>(
@@ -1084,7 +1087,9 @@ function applySessionEvent(context: SessionStreamContext, event: string, data: u
     const message = (data as { message: Message }).message;
     if (!context.session.messages.some((candidate) => candidate.id === message.id)) {
       context.session.messages.push(message);
-      appendMessage(message);
+      // Attaching kinds (tool results, notifications) never render standalone;
+      // the next full session merge places them on their preceding message.
+      if (isRenderedMessage(message)) appendMessage(message);
     }
     consumeQueuedMessage(message);
   } else if (event === "session_named") {

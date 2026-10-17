@@ -61,7 +61,7 @@ import { buildProviderHistory, isModelMessage, isProviderMessage } from "./histo
 import { generateSessionTitle, shouldAutoNameSession } from "./session-title.js";
 import { estimateHistoryTokens, formatCompactionBanner, generateCompactionSummary, shouldAutoCompact } from "./compaction.js";
 import { BASH_TOOL, BashExecutor, parseBashInput } from "./bash-tool.js";
-import { BackgroundTaskManager } from "./background-tasks.js";
+import { BackgroundTaskManager, type BackgroundTask } from "./background-tasks.js";
 import type { BackgroundAgentSource } from "./task-tools.js";
 import { executeRegularTool, isRegularTool } from "./tool-execution.js";
 import { collectProviderRound } from "./provider-round.js";
@@ -220,6 +220,9 @@ const queuedSessionMessages = new SessionInputPriorityQueue();
 const interruptibleSessions = new Set<string>();
 const manuallyAbortedSessions = new Set<string>();
 const backgroundTasks = new BackgroundTaskManager();
+backgroundTasks.onFinished = (task) => scheduleSessionWake(task.sessionId);
+/** Set once shutdown begins; no further wake runs may start. */
+let wakeDisabled = false;
 const askUserQuestions = new AskUserQuestionManager();
 const planModeApprovals = new PlanModeApprovalManager();
 const agentRunToken = randomUUID();
@@ -266,10 +269,9 @@ export async function startAmberServer(): Promise<{ server: Server; port: number
     openBrowser(url);
   });
 
-  let shuttingDown = false;
   const shutdown = () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
+    if (wakeDisabled) return;
+    wakeDisabled = true;
     activeSessions.abortAll();
     for (const run of compactionRuns.values()) run.controller.abort();
     backgroundTasks.stopAll();
@@ -1078,26 +1080,48 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   if (session.parentSessionId && request.headers["x-amber-agent-token"] !== agentRunToken) {
     return json(response, 403, { error: "Agent sub-sessions are read-only" });
   }
-  const approvalCapable = request.headers["x-amber-agent-token"] !== agentRunToken;
+  // Top-level sessions are always approval-capable, including server-initiated
+  // wake runs; agent sub-sessions never are.
+  const approvalCapable = !session.parentSessionId;
 
   const body = await readJson(request, MAX_MESSAGE_BODY_BYTES);
-  const content = typeof body.content === "string" ? body.content.trim() : "";
-  const parsedImages = parseMessageImages(body.images);
-  if ("error" in parsedImages) { json(response, 400, { error: parsedImages.error }); return; }
-  const images = parsedImages.images;
-  if ((!content && images.length === 0) || content.length > 32_000) {
-    return json(response, 400, { error: "Message must contain text or images; text is limited to 32,000 characters" });
+  // A wake run is server-initiated: it delivers finished background results
+  // and continues the model turn without a user message.
+  const isWakeRun = body.wake === true;
+  if (isWakeRun && request.headers["x-amber-agent-token"] !== agentRunToken) {
+    return json(response, 400, { error: "Wake runs are server-initiated" });
   }
-  // A leading slash-word that is neither a built-in command nor a skill would
-  // otherwise travel to the model as an ordinary prompt; refuse it instead.
-  // Images keep a slash prompt on the model path, matching the client's rule.
-  const slashToken = content.split(/\s+/)[0]?.toLowerCase() ?? "";
-  if (images.length === 0 && /^\/[a-z][a-z0-9:-]*$/.test(slashToken) && !builtInCommand(slashToken)) {
-    const skills = await sessionSkills(session);
-    if (!skills.some((skill) => skill.name === slashToken.slice(1))) {
-      return json(response, 400, {
-        error: `The ${slashToken} command doesn't exist. Type / to see the commands and skills available.`,
-      });
+  let content = "";
+  let images: MessageImage[] = [];
+  if (!isWakeRun) {
+    content = typeof body.content === "string" ? body.content.trim() : "";
+    const parsedImages = parseMessageImages(body.images);
+    if ("error" in parsedImages) { json(response, 400, { error: parsedImages.error }); return; }
+    images = parsedImages.images;
+    if ((!content && images.length === 0) || content.length > 32_000) {
+      return json(response, 400, { error: "Message must contain text or images; text is limited to 32,000 characters" });
+    }
+    // A leading slash-word that is neither a built-in command nor a skill would
+    // otherwise travel to the model as an ordinary prompt; refuse it instead.
+    // Images keep a slash prompt on the model path, matching the client's rule.
+    const slashToken = content.split(/\s+/)[0]?.toLowerCase() ?? "";
+    if (images.length === 0 && /^\/[a-z][a-z0-9:-]*$/.test(slashToken) && !builtInCommand(slashToken)) {
+      const skills = await sessionSkills(session);
+      if (!skills.some((skill) => skill.name === slashToken.slice(1))) {
+        return json(response, 400, {
+          error: `The ${slashToken} command doesn't exist. Type / to see the commands and skills available.`,
+        });
+      }
+    }
+  } else {
+    if (!(await hasPendingBackgroundNotifications(session))) { json(response, 200, { woke: false }); return; }
+    // A user-initiated run can slip in while the pending check awaited.
+    if (activeSessions.has(sessionId)) { json(response, 409, { error: "A response is already streaming" }); return; }
+    if (session.parentSessionId) {
+      // The parent's drain treats a finished child as notifyable; mark the
+      // woken sub-session live again before anything can observe it.
+      session.agentStatus = "running";
+      await store.saveMeta(session);
     }
   }
   // The run is decoupled from this connection: a refresh or closed window
@@ -1105,7 +1129,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   // /api/sessions/:id/events. Only an explicit abort (or shutdown) stops it.
   const controller = new AbortController();
   const now = new Date().toISOString();
-  const userMessage: Message = {
+  const userMessage: Message | undefined = isWakeRun ? undefined : {
     id: randomUUID(),
     role: "user",
     content,
@@ -1113,12 +1137,14 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     status: "complete",
     ...(images.length ? { images } : {}),
   };
-  const limitError = sessionImageLimitError(session, userMessage);
-  if (limitError) { json(response, 400, { error: limitError }); return; }
+  if (userMessage) {
+    const limitError = sessionImageLimitError(session, userMessage);
+    if (limitError) { json(response, 400, { error: limitError }); return; }
+  }
   automaticNameRuns.get(sessionId)?.sessions.add(session);
-  const shouldAutoName = shouldAutoNameSession(session);
+  const shouldAutoName = !isWakeRun && shouldAutoNameSession(session);
   let assistantMessage = createAssistantMessage(now);
-  await store.appendMessages(session, [userMessage, assistantMessage]);
+  await store.appendMessages(session, userMessage ? [userMessage, assistantMessage] : [assistantMessage]);
 
   response.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
@@ -1132,7 +1158,12 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   const emit = (event: string, data: unknown) => emitSessionEvent(sessionId, response, event, data);
   {
     const page = paginateSession(session);
-    emit("start", { session: page.session, hasMore: page.hasMore, userMessage, assistantMessage });
+    emit("start", {
+      session: page.session,
+      hasMore: page.hasMore,
+      ...(userMessage ? { userMessage } : {}),
+      assistantMessage,
+    });
   }
   const onAutomaticName = (title: string) => {
     if (!response.destroyed && !response.writableEnded) emit("session_named", { title });
@@ -1165,17 +1196,28 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     // Skill model/effort overrides apply only to the model calls of this user turn.
     let turnModel: string | undefined;
     let turnEffort: ThinkingLevel | undefined;
+    let firstRound = true;
     for (;;) {
       stopReason = "";
-      const agentNotifications = await completedBackgroundAgentNotifications(session);
-      if (agentNotifications.notifications.length > 0 || agentNotifications.updatedMessages.length > 0) {
-        if (agentNotifications.updatedMessages.length > 0) {
-          await store.updateMessages(session, agentNotifications.updatedMessages);
+      const pendingNotifications = await completedBackgroundNotifications(session);
+      if (pendingNotifications.notifications.length > 0 || pendingNotifications.updatedMessages.length > 0) {
+        if (pendingNotifications.updatedMessages.length > 0) {
+          await store.updateMessages(session, pendingNotifications.updatedMessages);
         }
-        if (agentNotifications.notifications.length > 0) {
-          await store.insertMessages(session, assistantMessage.id, agentNotifications.notifications);
+        if (pendingNotifications.notifications.length > 0) {
+          await store.insertMessages(session, assistantMessage.id, pendingNotifications.notifications);
+          for (const notification of pendingNotifications.notifications) {
+            emit("user_message", { message: notification });
+          }
         }
       }
+      if (isWakeRun && firstRound && pendingNotifications.notifications.length === 0) {
+        // The notification the wake was scheduled for was consumed elsewhere;
+        // end without spending a provider call on an empty turn.
+        emit("done", { message: assistantMessage, ...pagedSessionPayload(session) });
+        return;
+      }
+      firstRound = false;
       const activeProvider = turnModel ? activeProviderCatalog().provider(turnModel) : providerForSession(session);
       const thinkingLevel = turnEffort ?? session.thinkingLevel;
       const baseHistory = buildProviderHistory(session.messages, assistantMessage.id, session.compaction, session.invokedSkills);
@@ -1453,12 +1495,13 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
                 emit("tool_update", { messageId: assistantMessage.id, toolCall: call });
                 await store.updateMessage(session, assistantMessage);
                 const task = await backgroundTasks.start(sessionId, input, allowedDirectories, controller.signal);
-                const message = `Command running in background with ID: ${task.id}. Use TaskOutput to read its output and status.`;
+                const message = `Command running in background with ID: ${task.id}. Use TaskOutput to read its output and status; a task notification with the result is delivered when it completes.`;
                 call.status = "complete";
                 call.output = message;
                 call.exitCode = 0;
                 call.durationMs = Date.now() - started;
                 call.workingDirectory = task.workingDirectory;
+                call.backgroundTaskId = task.id;
                 call.statusDisplay = { text: "BACKGROUND" };
                 call.completedAt = new Date().toISOString();
                 resultText = message;
@@ -1734,6 +1777,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
         if (interruption.content.trim().toLowerCase() === "/compact") {
           await startSessionCompaction(session, emit, false).completion;
         }
+        scheduleSessionWake(sessionId);
         emit("done", { message: assistantMessage, ...pagedSessionPayload(session) });
         return;
       }
@@ -1763,6 +1807,7 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
             session.agentStatus = "complete";
             await store.saveMeta(session);
           }
+          scheduleSessionWake(sessionId);
           emit("done", { message: assistantMessage, ...pagedSessionPayload(session) });
           return;
         }
@@ -2127,7 +2172,13 @@ async function executeAgentCall(
         } catch (persistError) {
           logServerError(`Could not persist background agent failure ${childId}`, persistError);
         }
-      }).finally(() => signal.removeEventListener("abort", abortBackground));
+      }).finally(() => {
+        signal.removeEventListener("abort", abortBackground);
+        // Runs after the failure-persist catch settles, so the child's status
+        // is durable before the wake looks for finished background work. An
+        // aborted parent run must not wake itself to report its own kill.
+        if (!signal.aborted) scheduleSessionWake(parent.id);
+      });
 
       resultText = `Agent running in background with ID: ${child.id}. Use TaskOutput with this ID to check its status or wait for its result; its result is also delivered as a task notification once it finishes.`;
       resultBlocks = [
@@ -2195,7 +2246,7 @@ async function agentUsage(sessionId: string): Promise<{ totalTokens: number; too
   };
 }
 
-async function completedBackgroundAgentNotifications(session: Session): Promise<{
+async function completedBackgroundNotifications(session: Session): Promise<{
   notifications: Message[];
   updatedMessages: Message[];
 }> {
@@ -2204,37 +2255,90 @@ async function completedBackgroundAgentNotifications(session: Session): Promise<
   for (const message of session.messages) {
     let messageUpdated = false;
     for (const call of message.toolCalls ?? []) {
-      if (call.name !== AGENT_TOOL_NAME
-        || !call.agentSessionId
-        || call.agentNotificationDeliveredAt) continue;
-      const child = await store.get(call.agentSessionId);
-      if (!child || (child.agentStatus !== "complete" && child.agentStatus !== "error" && child.agentStatus !== "stopped")) continue;
-      const result = agentFinalMessage(child);
-      const fallback = child.agentStatus === "stopped"
-        ? "Agent stopped by the user."
-        : child.agentStatus === "error" ? "Agent failed without a final response." : "Agent completed without a text response.";
-      const deliveredAt = new Date().toISOString();
-      call.agentNotificationDeliveredAt = deliveredAt;
-      messageUpdated = true;
-      notifications.push({
-        id: randomUUID(),
-        role: "user",
-        content: [
+      if (call.name === AGENT_TOOL_NAME
+        && call.agentSessionId
+        && !call.agentNotificationDeliveredAt) {
+        const child = await store.get(call.agentSessionId);
+        if (!child || (child.agentStatus !== "complete" && child.agentStatus !== "error" && child.agentStatus !== "stopped")) continue;
+        const result = agentFinalMessage(child);
+        const fallback = child.agentStatus === "stopped"
+          ? "Agent stopped by the user."
+          : child.agentStatus === "error" ? "Agent failed without a final response." : "Agent completed without a text response.";
+        const deliveredAt = new Date().toISOString();
+        call.agentNotificationDeliveredAt = deliveredAt;
+        messageUpdated = true;
+        notifications.push(notificationMessage(deliveredAt, [
           "<task-notification>",
           `<task-id>${child.id}</task-id>`,
           `<status>${child.agentStatus}</status>`,
           `<summary>${child.agentDescription ?? child.title}</summary>`,
           `<result>${result || fallback}</result>`,
           "</task-notification>",
-        ].join("\n"),
-        createdAt: deliveredAt,
-        status: "complete",
-        kind: "agent-notification",
-      });
+        ].join("\n")));
+      }
+      if (call.name === BASH_TOOL.name
+        && call.backgroundTaskId
+        && !call.taskNotificationDeliveredAt) {
+        const task = backgroundTasks.get(session.id, call.backgroundTaskId);
+        if (!task || task.status === "running") continue;
+        const deliveredAt = new Date().toISOString();
+        call.taskNotificationDeliveredAt = deliveredAt;
+        messageUpdated = true;
+        notifications.push(notificationMessage(deliveredAt, [
+          "<task-notification>",
+          `<task-id>${task.id}</task-id>`,
+          "<task-type>background-bash</task-type>",
+          `<status>${task.status}</status>`,
+          `<summary>${task.description}</summary>`,
+          `<result>${backgroundTaskResult(task)}</result>`,
+          "</task-notification>",
+        ].join("\n")));
+      }
     }
     if (messageUpdated) updatedMessages.push(message);
   }
   return { notifications, updatedMessages };
+}
+
+function notificationMessage(createdAt: string, content: string): Message {
+  return {
+    id: randomUUID(),
+    role: "user",
+    content,
+    createdAt,
+    status: "complete",
+    kind: "agent-notification",
+  };
+}
+
+const BACKGROUND_NOTIFICATION_OUTPUT_CHARACTERS = 4_000;
+
+function backgroundTaskResult(task: BackgroundTask): string {
+  const output = task.combinedOutput.trim();
+  const tail = output.length > BACKGROUND_NOTIFICATION_OUTPUT_CHARACTERS
+    ? `[older output truncated]\n${output.slice(-BACKGROUND_NOTIFICATION_OUTPUT_CHARACTERS)}`
+    : output;
+  return [
+    `exit code: ${task.exitCode ?? "unknown"}`,
+    ...(tail ? [`output:\n${tail}`] : []),
+    ...(task.spillPath ? [`full output spilled to: ${task.spillPath}`] : []),
+  ].join("\n");
+}
+
+async function hasPendingBackgroundNotifications(session: Session): Promise<boolean> {
+  for (const message of session.messages) {
+    for (const call of message.toolCalls ?? []) {
+      if (call.name === AGENT_TOOL_NAME && call.agentSessionId && !call.agentNotificationDeliveredAt) {
+        const child = await store.get(call.agentSessionId);
+        if (child && child.agentStatus !== "running") return true;
+      }
+      if (call.name === BASH_TOOL.name && call.backgroundTaskId && !call.taskNotificationDeliveredAt) {
+        const task = backgroundTasks.get(session.id, call.backgroundTaskId);
+        if (task && task.status !== "running") return true;
+      }
+    }
+  }
+  return false;
 }
 
 /** Resolves background agent sub-sessions launched directly by a session. */
@@ -2261,8 +2365,7 @@ function agentFinalMessage(session: Session): string {
 }
 
 async function runSessionPrompt(sessionId: string, prompt: string, signal: AbortSignal): Promise<string> {
-  const loopbackHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host.includes(":") ? `[${host}]` : host;
-  const response = await fetch(`http://${loopbackHost}:${port}/api/sessions/${sessionId}/messages`, {
+  const response = await fetch(loopbackSessionMessagesUrl(sessionId), {
     method: "POST",
     headers: { "content-type": "application/json", "x-amber-agent-token": agentRunToken },
     body: JSON.stringify({ content: prompt }),
@@ -2282,6 +2385,56 @@ async function runSessionPrompt(sessionId: string, prompt: string, signal: Abort
   }
   if (result === undefined) throw new Error("Session ended without a final response");
   return result || "Session completed without a text response.";
+}
+
+function loopbackSessionMessagesUrl(sessionId: string): string {
+  const loopbackHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host.includes(":") ? `[${host}]` : host;
+  return `http://${loopbackHost}:${port}/api/sessions/${sessionId}/messages`;
+}
+
+const wakingSessions = new Set<string>();
+const wakeRecheckSessions = new Set<string>();
+
+/**
+ * Starts a run on an idle session so finished background agent or Bash results
+ * are delivered as notifications. No-op when a run is already active or nothing
+ * is pending; completions arriving during a run are picked up by the run-end
+ * re-check or the owning run's next round.
+ */
+function scheduleSessionWake(sessionId: string): void {
+  if (wakeDisabled || !providerCatalog) return;
+  if (wakingSessions.has(sessionId)) {
+    // A completion while a wake is still finishing must not be dropped: the
+    // in-flight wake's POST stream only ends after its run does, and the
+    // run-end re-check also lands inside that window. Defer one re-check.
+    wakeRecheckSessions.add(sessionId);
+    return;
+  }
+  wakingSessions.add(sessionId);
+  void (async () => {
+    try {
+      const session = await store.get(sessionId);
+      if (!session || activeSessions.has(sessionId)) return;
+      if (!(await hasPendingBackgroundNotifications(session))) return;
+      const response = await fetch(loopbackSessionMessagesUrl(sessionId), {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-amber-agent-token": agentRunToken },
+        body: JSON.stringify({ wake: true }),
+      });
+      // 409/404 and the no-op JSON reply are both benign; otherwise drain the
+      // run to completion so the connection is released.
+      if (response.ok && response.body) {
+        for await (const _event of readServerSentEvents(response)) { /* drained */ }
+      } else {
+        await response.arrayBuffer().catch(() => undefined);
+      }
+    } catch (error) {
+      logServerError(`Could not wake session ${sessionId}`, error);
+    } finally {
+      wakingSessions.delete(sessionId);
+      if (wakeRecheckSessions.delete(sessionId)) scheduleSessionWake(sessionId);
+    }
+  })();
 }
 
 async function listDirectoryCompletions(response: ServerResponse, sessionId: string, url: URL): Promise<void> {
@@ -2988,9 +3141,8 @@ function broadcastSessionEvent(sessionId: string, event: string, data: unknown):
   const subscribers = sessionEventSubscribers.get(sessionId);
   if (!subscribers) return;
   for (const subscriber of subscribers) sendEvent(subscriber, event, data);
-  if (event !== "done" && event !== "error") return;
-  for (const subscriber of subscribers) subscriber.end();
-  sessionEventSubscribers.delete(sessionId);
+  // Subscribers stay attached across runs: a server-initiated wake run can
+  // start at any time, and idle clients keep watching for it.
 }
 
 async function observeSessionEvents(
@@ -3008,12 +3160,6 @@ async function observeSessionEvents(
     "x-accel-buffering": "no",
   });
   sendEvent(response, "snapshot", await sessionSnapshot(session));
-  const waitingForAgentStart = session.agentStatus === "running";
-  if (!activeSessions.has(sessionId) && !waitingForAgentStart) {
-    response.end();
-    return;
-  }
-
   const subscribers = sessionEventSubscribers.get(sessionId) ?? new Set<ServerResponse>();
   subscribers.add(response);
   sessionEventSubscribers.set(sessionId, subscribers);
@@ -3029,13 +3175,6 @@ async function observeSessionEvents(
   };
   request.once("aborted", cleanup);
   response.once("close", cleanup);
-
-  // The run can finish between the initial snapshot and subscription setup.
-  if (!activeSessions.has(sessionId) && !waitingForAgentStart) {
-    const completed = await store.get(sessionId);
-    if (completed) sendEvent(response, "snapshot", await sessionSnapshot(completed));
-    response.end();
-  }
 }
 
 function pagedSessionPayload(session: Session): { session: Session; hasMore: boolean } {

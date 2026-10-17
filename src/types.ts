@@ -72,6 +72,8 @@ export interface ToolCall {
   agentModel?: string;
   agentThinkingLevel?: ThinkingLevel;
   agentNotificationDeliveredAt?: string;
+  backgroundTaskId?: string;
+  taskNotificationDeliveredAt?: string;
   skillModel?: string;
   skillEffort?: string;
 }
