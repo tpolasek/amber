@@ -39,7 +39,7 @@ test("the greek theme ships its backdrop and display faces", async () => {
   const html = await readFile(join(repositoryRoot, "public", "index.html"), "utf8");
 
   assert.match(html, /class="greek-scene"/);
-  for (const asset of ["architecture.webp", "athena.webp", "bodoni-moda.woff2", "dm-sans.woff2", "dm-sans-italic.woff2"]) {
+  for (const asset of ["architecture.webp", "athena.webp", "marble.webp", "bodoni-moda.woff2", "dm-sans.woff2", "dm-sans-italic.woff2"]) {
     assert.ok(styles.includes(`/greek/${asset}`), `styles.css must reference /greek/${asset}`);
   }
   assert.match(styles, /:root\[data-theme="greek"\] \.greek-scene \{ display: block/);
