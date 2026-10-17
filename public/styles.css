@@ -36,8 +36,7 @@ button { color: inherit; }
 
 :root[data-theme="greek"] .app { position: relative; z-index: 1; background: rgb(247 243 236 / .35); }
 :root[data-theme="greek"] .sidebar,
-:root[data-theme="greek"] .sidebar-footer,
-:root[data-theme="greek"] .topbar { background: rgb(250 247 241 / .76); }
+:root[data-theme="greek"] .sidebar-footer { background: rgb(250 247 241 / .76); }
 :root[data-theme="greek"] .composer-shell { background: rgb(250 247 241 / .62); }
 :root[data-theme="greek"] .composer { background: rgb(253 251 246 / .82); }
 /* Keep the marble readable behind modal scrims. */
@@ -47,13 +46,45 @@ button { color: inherit; }
 :root[data-theme="greek"] .landing-dialog .hero-copy { font-family: var(--greek-sans); font-size: 14px; letter-spacing: .02em; }
 /* Gold-leaf rules replace the flat hairline borders. */
 :root[data-theme="greek"] .sidebar,
-:root[data-theme="greek"] .topbar,
 :root[data-theme="greek"] .sidebar-footer { border-color: var(--amber-line); }
 :root[data-theme="greek"] .brand-mark { background: linear-gradient(180deg, #e7c27a, #c8922e); color: #1c1408; }
 /* The statue needs a gutter to live in; narrow viewports put text there. */
 @media (max-width: 1000px) {
   :root[data-theme="greek"] .greek-statue { display: none; }
 }
+
+/*
+ * The top panel is the reference's sage green, hosting the session identity,
+ * model and controls. Inks are reset inside it: cream/white type on sage,
+ * since the marble palette's dark teal would disappear against it.
+ */
+:root[data-theme="greek"] .topbar {
+  background: #687965;
+  border-bottom-color: #54634f;
+  --accent-rgb: 255 255 255;
+  --amber: #f4f0e9;
+  --amber-hot: #fff;
+  --amber-dim: #dfe7d7;
+  --amber-faint: rgb(255 255 255 / .1);
+  --amber-line: rgb(255 255 255 / .24);
+  --muted: #eef3e9;
+  --fg-status: #eef3e9;
+  --fg-tool-header: #fff;
+  --success: #fff;
+  --divider-directory: rgb(255 255 255 / .34);
+}
+:root[data-theme="greek"] .topbar .thinking-level-button { border-color: rgb(255 255 255 / .34); background: rgb(255 255 255 / .12); color: #fff; }
+:root[data-theme="greek"] .topbar .thinking-level-button:hover:not(:disabled),
+:root[data-theme="greek"] .topbar .thinking-level-button:focus-visible { border-color: #fff; background: rgb(255 255 255 / .2); }
+:root[data-theme="greek"] .topbar .provider-status { color: #eef3e9; }
+:root[data-theme="greek"] .topbar .provider-status:hover:not(:disabled),
+:root[data-theme="greek"] .topbar .provider-status:focus-visible { background: rgb(255 255 255 / .12); color: #fff; }
+:root[data-theme="greek"] .topbar .settings-button { color: #eef3e9; }
+:root[data-theme="greek"] .topbar .settings-button:hover,
+:root[data-theme="greek"] .topbar .settings-button:focus-visible { border-color: rgb(255 255 255 / .34); background: rgb(255 255 255 / .12); color: #fff; }
+:root[data-theme="greek"] .topbar .menu-button { color: #fff; }
+:root[data-theme="greek"] .topbar .status-dot { background: #f4d79a; box-shadow: 0 0 8px #f4d79a; }
+:root[data-theme="greek"] .topbar .status-dot.demo { background: #dfe7d7; box-shadow: none; }
 
 .app { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; display: grid; grid-template-columns: clamp(236px, 16vw, 260px) minmax(0, 1fr); background: var(--surface); transition: opacity .2s; }
 .app.booting { opacity: 0; }
