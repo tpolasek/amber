@@ -4,6 +4,12 @@
   --content-gutter: 28px;
 }
 
+/* Greek skin display faces, ported from the Annui reference site. */
+@font-face { font-family: "Bodoni Moda"; font-style: normal; font-weight: 400 700; font-display: swap; src: url("/greek/bodoni-moda.woff2") format("woff2"); }
+@font-face { font-family: "DM Sans"; font-style: normal; font-weight: 400 700; font-display: swap; src: url("/greek/dm-sans.woff2") format("woff2"); }
+@font-face { font-family: "DM Sans"; font-style: italic; font-weight: 400 700; font-display: swap; src: url("/greek/dm-sans-italic.woff2") format("woff2"); }
+:root { --greek-serif: "Bodoni Moda", "Bodoni MT", Didot, Georgia, serif; --greek-sans: "DM Sans", "Avenir Next", "Segoe UI", sans-serif; }
+
 * { box-sizing: border-box; }
 html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 body { background: var(--ink); color: var(--text); font-family: var(--mono); font-size: 13px; }
@@ -12,6 +18,32 @@ button { color: inherit; }
 [hidden] { display: none !important; }
 
 .noise, .scanlines { display: none; }
+
+/*
+ * Greek backdrop: the reference hero scene — Aegean sky, a temple on the
+ * horizon, and a marble statue — dimmed behind the terminal. Only mounted
+ * under the greek theme; every other palette hides the layer entirely.
+ */
+.greek-scene { display: none; }
+:root[data-theme="greek"] .greek-scene { display: block; position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+.greek-scene .greek-sky { position: absolute; inset: 0; background: radial-gradient(1200px 520px at 20% 16%, #1c6f7a 0%, transparent 60%), linear-gradient(180deg, #0a4a54 0%, #07343c 55%, #052a30 100%); }
+/* The WebP layers carry their own alpha; background (not <img>) keeps the
+   scene from being fetched at all until the greek theme makes it visible. */
+.greek-scene .greek-temple { position: absolute; left: -6%; bottom: -5%; width: 116%; height: 52%; background: url("/greek/architecture.webp") bottom center / contain no-repeat; opacity: .42; }
+.greek-scene .greek-statue { position: absolute; right: -4%; bottom: -9%; width: min(36vw, 480px); height: 92%; background: url("/greek/athena.webp") bottom right / contain no-repeat; opacity: .5; }
+/* Shade the scene so transcript text keeps its contrast. */
+.greek-scene::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgb(6 36 42 / .82) 0%, rgb(6 36 42 / .55) 46%, rgb(6 36 42 / .3) 100%), linear-gradient(180deg, rgb(6 36 42 / .6) 0%, rgb(6 36 42 / .34) 100%); }
+
+:root[data-theme="greek"] .app { position: relative; z-index: 1; background: rgb(5 44 51 / .5); }
+:root[data-theme="greek"] .sidebar,
+:root[data-theme="greek"] .sidebar-footer,
+:root[data-theme="greek"] .topbar { background: rgb(5 44 51 / .82); }
+:root[data-theme="greek"] .composer-shell { background: rgb(5 44 51 / .72); }
+/* Keep the backdrop readable behind modal scrims. */
+:root[data-theme="greek"] .tasks-overlay { background: rgb(4 26 31 / .62); }
+:root[data-theme="greek"] .brand strong { font-family: var(--greek-serif); font-size: 17px; font-weight: 600; letter-spacing: .26em; }
+:root[data-theme="greek"] .landing-dialog h1 { font-family: var(--greek-serif); font-weight: 500; letter-spacing: .2em; }
+:root[data-theme="greek"] .landing-dialog .hero-copy { font-family: var(--greek-sans); font-size: 14px; letter-spacing: .02em; }
 
 .app { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; display: grid; grid-template-columns: clamp(236px, 16vw, 260px) minmax(0, 1fr); background: var(--surface); transition: opacity .2s; }
 .app.booting { opacity: 0; }
@@ -389,7 +421,7 @@ button { color: inherit; }
 .settings-action-button:hover:not(:disabled), .settings-action-button:focus-visible { border-color: var(--amber); outline: 0; background: var(--amber-faint); color: var(--amber-hot); }
 .settings-action-button.primary { border-color: var(--amber-dim); background: var(--amber-faint); color: var(--amber-hot); }
 .settings-action-button:disabled { cursor: wait; opacity: .45; }
-.settings-theme-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
+.settings-theme-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 7px; }
 .settings-theme-button { display: grid; grid-template-columns: 25px minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; padding: 8px; border: 1px solid var(--accent-a18); background: var(--bg-input); color: var(--fg-label); cursor: pointer; font: 10px/1.2 var(--mono); text-align: left; }
 .settings-theme-button:hover, .settings-theme-button:focus-visible { border-color: var(--amber-dim); outline: 0; }
 .settings-theme-button.selected { border-color: var(--amber); color: var(--amber-hot); box-shadow: inset 2px 0 0 var(--amber); }
@@ -398,6 +430,7 @@ button { color: inherit; }
 .settings-theme-swatch.theme-light { background: linear-gradient(135deg, #fdf6e3 0 64%, #268bd2 64%); }
 .settings-theme-swatch.theme-dark { background: linear-gradient(135deg, #17130d 0 64%, #e6a23c 64%); }
 .settings-theme-swatch.theme-hacker { background: linear-gradient(135deg, #020b04 0 64%, #35ff6d 64%); }
+.settings-theme-swatch.theme-greek { background: linear-gradient(135deg, #052c33 0 64%, #e0b466 64%); }
 .settings-card-list { display: grid; gap: 9px; }
 .settings-card { display: grid; gap: 13px; padding: 13px; border: 1px solid var(--accent-a20); background: var(--bg-dialog); }
 .settings-card-heading > strong { min-width: 0; overflow: hidden; color: var(--amber-hot); font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }

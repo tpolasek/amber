@@ -21,7 +21,7 @@ export interface Session { id: string; title: string; createdAt: string; updated
 export interface AgentSessionSummary { id: string; description: string; status: NonNullable<Session["agentStatus"]> }
 export interface Summary { id: string; title: string; updatedAt: string; messageCount: number; preview: string; match?: string }
 export interface AvailableModel { key: string; provider: string; api: "anthropic" | "openai"; model: string; displayName: string; thinkingLevel: ThinkingLevel; compactTokens?: number }
-export interface Config { configured: boolean; authenticationRequired: boolean; configurationError?: string; provider: string; model: string; defaultModel: string; models: AvailableModel[]; mode: "live"; homeDirectory: string; workspaceRoot: string; authActionToken: string; theme: "dark" | "light" | "light+" | "hacker" }
+export interface Config { configured: boolean; authenticationRequired: boolean; configurationError?: string; provider: string; model: string; defaultModel: string; models: AvailableModel[]; mode: "live"; homeDirectory: string; workspaceRoot: string; authActionToken: string; theme: "dark" | "light" | "light+" | "hacker" | "greek" }
 export type AmberTheme = Config["theme"];
 export interface EditableModelSettings { thinking_level?: ThinkingLevel; compact_tokens?: number; max_output_tokens?: number }
 export interface EditableProviderSettings extends EditableModelSettings {

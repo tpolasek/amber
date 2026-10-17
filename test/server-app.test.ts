@@ -111,6 +111,20 @@ test("server-app serves API and static routes over HTTP", async (t) => {
     }
   });
 
+  await t.test("GET /greek/<asset> serves the Greek skin files", async () => {
+    for (const [asset, contentType] of [
+      ["architecture.webp", /image\/webp/],
+      ["athena.webp", /image\/webp/],
+      ["bodoni-moda.woff2", /font\/woff2/],
+    ] as const) {
+      const response = await fetch(`${base}/greek/${asset}`);
+      assert.equal(response.status, 200, `${asset} must be served`);
+      assert.match(response.headers.get("content-type") ?? "", contentType);
+    }
+    const traversal = await fetch(`${base}/greek/..%2fstyles.css`);
+    assert.equal(traversal.status, 404);
+  });
+
   await t.test("privileged endpoints reject requests without the action token", async () => {
     const response = await fetch(`${base}/api/auth/openai-codex/login`, {
       method: "POST",

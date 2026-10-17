@@ -184,6 +184,17 @@ const STYLESHEETS: Record<string, string> = {
   "/themes.css": join(publicDirectory, "themes.css"),
 };
 
+// Greek skin assets under public/greek/. The map is the whitelist, so an
+// unknown name can never escape the directory.
+const SKIN_ASSET_TYPES: Record<string, string> = {
+  "architecture.webp": "image/webp",
+  "athena.webp": "image/webp",
+  "bodoni-moda.woff2": "font/woff2",
+  "dm-sans.woff2": "font/woff2",
+  "dm-sans-italic.woff2": "font/woff2",
+};
+const skinAssetPrefix = "/greek/";
+
 const amberDirectory = join(homedir(), ".amber");
 const defaultDataDirectory = join(amberDirectory, "data", "sessions");
 const dataDirectory = resolve(process.env.DATA_DIR ?? defaultDataDirectory);
@@ -928,6 +939,19 @@ function handleStaticRoutes(_request: IncomingMessage, response: ServerResponse,
   const stylesheet = STYLESHEETS[url.pathname];
   if (stylesheet) {
     serveFile(response, stylesheet, "text/css; charset=utf-8", "no-cache");
+    return true;
+  }
+
+  const skinContentType = url.pathname.startsWith(skinAssetPrefix)
+    ? SKIN_ASSET_TYPES[url.pathname.slice(skinAssetPrefix.length)]
+    : undefined;
+  if (skinContentType) {
+    serveFile(
+      response,
+      join(publicDirectory, "greek", url.pathname.slice(skinAssetPrefix.length)),
+      skinContentType,
+      "public, max-age=31536000, immutable",
+    );
     return true;
   }
 

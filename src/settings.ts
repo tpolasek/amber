@@ -22,7 +22,8 @@ export interface AmberSettings {
   agents: AgentDefinition[];
 }
 
-export type AmberTheme = "dark" | "light" | "light+" | "hacker";
+export const AMBER_THEMES = ["light+", "light", "dark", "hacker", "greek"] as const;
+export type AmberTheme = (typeof AMBER_THEMES)[number];
 
 export interface ModelSettings {
   thinking_level?: ThinkingLevel;
@@ -416,8 +417,8 @@ async function writeSettingsFile(path: string, source: string): Promise<string> 
 
 function parseTheme(value: unknown, field: string): AmberTheme {
   if (value === undefined || value === "light+") return "light+";
-  if (value === "dark" || value === "light" || value === "hacker") return value;
-  throw new Error(`${field} must be dark, light, light+, or hacker`);
+  if (typeof value === "string" && (AMBER_THEMES as readonly string[]).includes(value)) return value as AmberTheme;
+  throw new Error(`${field} must be ${AMBER_THEMES.slice(0, -1).join(", ")}, or ${AMBER_THEMES.at(-1)}`);
 }
 
 function parseProviders(value: unknown, settingsPath: string): Record<string, ProviderSettings> {

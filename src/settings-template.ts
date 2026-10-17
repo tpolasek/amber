@@ -62,7 +62,7 @@ Rules:
 } as const;
 
 export const SETTINGS_TEMPLATE_SOURCE = `${stringify(SETTINGS_TEMPLATE).trimEnd()
-  .replace('theme = "light+"', 'theme = "light+" # dark (current Amber), light (Solarized Light), light+ (VS Code Light+), or hacker (terminal green)')
+  .replace('theme = "light+"', 'theme = "light+" # dark (current Amber), light (Solarized Light), light+ (VS Code Light+), hacker (terminal green), or greek (Aegean teal and gold)')
   .replace('default_provider = "default"', `default_provider = "default"
 # default_agent_provider = ""
 # default_agent_model = ""`)

@@ -262,6 +262,7 @@ export function renderThemeOptions(): void {
     { id: "light", label: "SOLARIZED LIGHT" },
     { id: "dark", label: "DARK" },
     { id: "hacker", label: "HACKER" },
+    { id: "greek", label: "GREEK" },
   ];
   for (const theme of themes) {
     const button = document.createElement("button");
