@@ -48,6 +48,7 @@ import {
   setupAndLoginWithCodex,
 } from "./client-settings.js";
 import { renderDiff } from "./client-diff.js";
+import { installIdleSoundUnlock, playIdleSound } from "./client-idle-sound.js";
 import {
   advanceOrSubmitQuestions,
   closeQuestionDialog,
@@ -237,6 +238,7 @@ async function initialize(): Promise<void> {
 }
 
 function wireEvents(): void {
+  installIdleSoundUnlock();
   document.addEventListener("keydown", (event) => {
     if (handleBtwDialogKeydown(event)) return;
     if (handleSettingsDialogKeydown(event)) return;
@@ -2168,7 +2170,9 @@ async function refreshCurrentSession(): Promise<boolean> {
 }
 
 function setStreaming(streaming: boolean): void {
+  const wasStreaming = state.streaming;
   state.streaming = streaming;
+  if (!streaming && wasStreaming) playIdleSound();
   if (!streaming) state.aborting = false;
   elements.queue.hidden = !streaming;
   updateQueueButton();
