@@ -26,13 +26,13 @@ button { color: inherit; }
  */
 .greek-scene { display: none; }
 :root[data-theme="greek"] .greek-scene { display: block; position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; background: #efe8dc url("/greek/marble.webp") center / cover no-repeat; }
-.greek-scene .greek-sky { position: absolute; inset: 0; background: radial-gradient(1200px 520px at 20% 16%, rgb(255 252 245 / .5) 0%, transparent 62%); }
+.greek-scene .greek-sky { position: absolute; inset: 0; background: rgb(255 252 245 / .12); }
 /* The WebP layers carry their own alpha. Multiply drops their white marble
    into the stone and leaves the gold relief, so the scene reads as carving. */
 .greek-scene .greek-temple { position: absolute; left: -14%; bottom: -4%; width: 108%; height: 48%; background: url("/greek/architecture.webp") bottom left / contain no-repeat; opacity: .6; mix-blend-mode: multiply; }
 .greek-scene .greek-statue { position: absolute; right: -5%; bottom: -7%; width: min(33vw, 430px); height: 90%; background: url("/greek/athena.webp") bottom right / contain no-repeat; opacity: .4; mix-blend-mode: multiply; }
-/* Lift the reading column without flattening the stone. */
-.greek-scene::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgb(250 247 241 / .72) 0%, rgb(250 247 241 / .45) 52%, rgb(250 247 241 / .1) 100%); }
+/* Flat wash so transcript ink stays legible over the stone. */
+.greek-scene::after { content: ""; position: absolute; inset: 0; background: rgb(250 247 241 / .42); }
 
 :root[data-theme="greek"] .app { position: relative; z-index: 1; background: rgb(247 243 236 / .35); }
 :root[data-theme="greek"] .sidebar,
@@ -54,86 +54,92 @@ button { color: inherit; }
 
 /*
  * The top panel is the reference's sage green, hosting the session identity,
- * model and controls. Inks are reset inside it: cream/white type on sage,
- * since the marble palette's dark teal would disappear against it.
+ * model and controls. Inks are gold leaf on sage; a soft shadow keeps the
+ * thin type readable where the contrast is naturally low.
  */
 :root[data-theme="greek"] .topbar {
   background: #687965;
   border-bottom-color: #54634f;
-  --accent-rgb: 255 255 255;
-  --amber: #f4f0e9;
-  --amber-hot: #fff;
-  --amber-dim: #dfe7d7;
-  --amber-faint: rgb(255 255 255 / .1);
-  --amber-line: rgb(255 255 255 / .24);
-  --muted: #eef3e9;
-  --fg-status: #eef3e9;
-  --fg-tool-header: #fff;
-  --success: #fff;
-  --divider-directory: rgb(255 255 255 / .34);
+  text-shadow: 0 1px 1px rgb(35 45 33 / .35);
+  --accent-rgb: 226 192 122;
+  --amber: #f5e0a8;
+  --amber-hot: #f9eecb;
+  --amber-dim: #d9b96f;
+  --amber-faint: rgb(249 238 203 / .12);
+  --amber-line: rgb(249 238 203 / .26);
+  --muted: #ecd08a;
+  --fg-status: #ecd08a;
+  --fg-tool-header: #f9eecb;
+  --success: #f9eecb;
+  --divider-directory: rgb(249 238 203 / .36);
 }
-:root[data-theme="greek"] .topbar .thinking-level-button { border-color: rgb(255 255 255 / .34); background: rgb(255 255 255 / .12); color: #fff; }
+:root[data-theme="greek"] .topbar .thinking-level-button { border-color: rgb(249 238 203 / .4); background: rgb(249 238 203 / .12); color: #f9eecb; }
 :root[data-theme="greek"] .topbar .thinking-level-button:hover:not(:disabled),
-:root[data-theme="greek"] .topbar .thinking-level-button:focus-visible { border-color: #fff; background: rgb(255 255 255 / .2); }
-:root[data-theme="greek"] .topbar .provider-status { color: #eef3e9; }
+:root[data-theme="greek"] .topbar .thinking-level-button:focus-visible { border-color: #f9eecb; background: rgb(249 238 203 / .2); }
+:root[data-theme="greek"] .topbar .provider-status { color: #ecd08a; }
 :root[data-theme="greek"] .topbar .provider-status:hover:not(:disabled),
-:root[data-theme="greek"] .topbar .provider-status:focus-visible { background: rgb(255 255 255 / .12); color: #fff; }
-:root[data-theme="greek"] .topbar .settings-button { color: #eef3e9; }
+:root[data-theme="greek"] .topbar .provider-status:focus-visible { background: rgb(249 238 203 / .12); color: #f9eecb; }
+:root[data-theme="greek"] .topbar .settings-button { color: #e0c47e; }
 :root[data-theme="greek"] .topbar .settings-button:hover,
-:root[data-theme="greek"] .topbar .settings-button:focus-visible { border-color: rgb(255 255 255 / .34); background: rgb(255 255 255 / .12); color: #fff; }
-:root[data-theme="greek"] .topbar .menu-button { color: #fff; }
+:root[data-theme="greek"] .topbar .settings-button:focus-visible { border-color: rgb(249 238 203 / .4); background: rgb(249 238 203 / .12); color: #f9eecb; }
+:root[data-theme="greek"] .topbar .menu-button { color: #f9eecb; }
 :root[data-theme="greek"] .topbar .status-dot { background: #f4d79a; box-shadow: 0 0 8px #f4d79a; }
-:root[data-theme="greek"] .topbar .status-dot.demo { background: #dfe7d7; box-shadow: none; }
+:root[data-theme="greek"] .topbar .status-dot.demo { background: #d9b96f; box-shadow: none; }
 
 /*
- * The side panel wears the lighter sage, treated like the top panel: white
- * type, white hairlines and white meter fills. The gold brand mark is the one
- * warm accent left on it.
+ * The side panel wears the lighter sage, with gold-leaf type to match the top
+ * panel. Unselected mode buttons and the two session actions share one darker
+ * sage tint so they read as the same class of control.
  */
 :root[data-theme="greek"] .sidebar {
   background: #979e88;
   border-right-color: #7b826f;
   box-shadow: inset -1px 0 0 rgb(255 255 255 / .18);
+  text-shadow: 0 1px 1px rgb(55 64 50 / .4);
   --accent-rgb: 75 85 69;
   --ink: #4b5545;
-  --text: #fff;
-  --muted: #f3f6ef;
-  --amber: #f4f0e9;
-  --amber-hot: #fff;
-  --amber-dim: #eef3e9;
-  --amber-faint: rgb(75 85 69 / .24);
-  --amber-line: rgb(255 255 255 / .34);
-  --fg-item: #fff;
-  --fg-subtle: #f3f6ef;
-  --fg-metadata: #f7f9f4;
-  --fg-mode: #fff;
-  --fg-secondary-action: #fff;
-  --success: #fff;
-  --success-muted: #f3f6ef;
-  --success-rgb: 255 255 255;
-  --success-glow: rgb(255 255 255 / .5);
+  --text: #fdf0cf;
+  --muted: #f6e3b4;
+  --amber: #fdf0cf;
+  --amber-hot: #fff6dc;
+  --amber-dim: #edd8a8;
+  --amber-faint: rgb(75 85 69 / .2);
+  --amber-line: rgb(253 240 207 / .4);
+  --fg-item: #fdf0cf;
+  --fg-subtle: #f6e3b4;
+  --fg-metadata: #f9e9c0;
+  --fg-mode: #f9e9c0;
+  --fg-secondary-action: #fdf0cf;
+  --success: #fdf0cf;
+  --success-muted: #f6e3b4;
+  --success-rgb: 253 240 207;
+  --success-glow: rgb(253 240 207 / .5);
   --danger: #6e2b1e;
   --danger-rgb: 110 43 30;
   --error-text: #5f2419;
   --error-muted: #5f2419;
-  --provider-demo: #eef3e9;
+  --provider-demo: #f6e3b4;
   --bg-meter: rgb(255 255 255 / .28);
-  --active-border: #fff;
-  --active-bg: #fff;
-  --active-ink: #4b5545;
+  --active-border: #fff6dc;
+  --active-bg: #f9eecb;
+  --active-ink: #3f4b39;
 }
-:root[data-theme="greek"] .sidebar .brand { border-bottom-color: rgb(255 255 255 / .3); }
-:root[data-theme="greek"] .sidebar .session-list { scrollbar-color: rgb(255 255 255 / .55) transparent; }
-:root[data-theme="greek"] .sidebar .mode-choice span { background: rgb(75 85 69 / .2); }
+:root[data-theme="greek"] .sidebar .brand { border-bottom-color: rgb(253 240 207 / .36); }
+:root[data-theme="greek"] .sidebar .session-list { scrollbar-color: rgb(253 240 207 / .6) transparent; }
+/* Unselected modes and the session actions share the darker sage tint. */
+:root[data-theme="greek"] .sidebar .mode-choice span,
+:root[data-theme="greek"] .sidebar .new-session { background: rgb(75 85 69 / .2); }
+:root[data-theme="greek"] .sidebar .new-session:hover { background: rgb(75 85 69 / .32); border-color: #fff6dc; }
+:root[data-theme="greek"] .sidebar .mode-choice:hover span { background: rgb(75 85 69 / .32); }
 :root[data-theme="greek"] .sidebar .mode-choice input:checked + span,
 :root[data-theme="greek"] .sidebar .mode-choice:has(input:disabled) input:checked + span,
-:root[data-theme="greek"] .sidebar .mode-choice:has(input:disabled):hover input:checked + span { background: #fff; border-color: #fff; color: #4b5545; }
-:root[data-theme="greek"] .sidebar-footer { background: transparent; border-top-color: rgb(255 255 255 / .3); }
+:root[data-theme="greek"] .sidebar .mode-choice:has(input:disabled):hover input:checked + span { background: #f7e6bc; border-color: #fff6dc; color: #3f4b39; text-shadow: none; }
+:root[data-theme="greek"] .sidebar-footer { background: transparent; border-top-color: rgb(253 240 207 / .36); }
 :root[data-theme="greek"] .sidebar .system-meter i { background: rgb(255 255 255 / .28); }
 :root[data-theme="greek"] .sidebar .context-meter.context-green b,
-:root[data-theme="greek"] .sidebar .cache-meter.cache-green b { background: #fff; box-shadow: 0 0 6px rgb(255 255 255 / .55); }
+:root[data-theme="greek"] .sidebar .cache-meter.cache-green b { background: #fdf0cf; box-shadow: 0 0 6px rgb(253 240 207 / .55); }
 :root[data-theme="greek"] .sidebar .context-meter.context-yellow b,
-:root[data-theme="greek"] .sidebar .cache-meter.cache-yellow b { background: #f4f0e9; box-shadow: 0 0 6px rgb(255 255 255 / .45); }
+:root[data-theme="greek"] .sidebar .cache-meter.cache-yellow b { background: #e8c887; box-shadow: 0 0 6px rgb(232 200 135 / .45); }
 :root[data-theme="greek"] .sidebar .context-meter.context-red b,
 :root[data-theme="greek"] .sidebar .cache-meter.cache-red b { background: #6e2b1e; box-shadow: 0 0 6px rgb(110 43 30 / .45); }
 
