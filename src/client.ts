@@ -137,7 +137,6 @@ import {
   toolStatusLabel,
   toolSubject,
 } from "./tool-display.js";
-import { ComposerScreensaver } from "./screensaver.js";
 import { findSessionText, type SessionTextMatch } from "./client-session-search.js";
 
 const commands = BUILT_IN_COMMANDS;
@@ -207,13 +206,6 @@ setPlanHandoffDispatcher(planHandoffs);
 setCommitSender((content) => sendMessage(content));
 setGoalClearer(() => runCommand("/goal clear", false));
 setSessionDialogHost({ loadSession, openLandingDialog });
-
-const composerScreensaver = new ComposerScreensaver(
-  elements.composer,
-  elements.prompt,
-  { isEnabled: () => Boolean(state.session) },
-);
-composerScreensaver.restartIdle();
 
 void initialize();
 window.setInterval(updateElapsedToolStatuses, 1_000);

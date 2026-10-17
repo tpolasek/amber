@@ -154,7 +154,6 @@ const publicDirectory = join(projectRoot, "public");
 export const buildVersion = await resolveBuildVersion();
 
 const clientScript = join(sourceDirectory, "client.js");
-const screensaverScript = join(sourceDirectory, "screensaver.js");
 const clientFormattersScript = join(sourceDirectory, "client-formatters.js");
 const builtInCommandsScript = join(sourceDirectory, "built-in-commands.js");
 const streamingThinkingScript = join(sourceDirectory, "streaming-thinking.js");
@@ -169,7 +168,6 @@ const markdownScript = join(projectRoot, "node_modules", "markdown-it", "dist", 
 /** Browser scripts served verbatim from the compiled output. */
 const STATIC_SCRIPTS: Record<string, { path: string; cacheControl?: string }> = {
   "/app.js": { path: clientScript },
-  "/screensaver.js": { path: screensaverScript },
   "/client-formatters.js": { path: clientFormattersScript },
   "/built-in-commands.js": { path: builtInCommandsScript },
   "/streaming-thinking.js": { path: streamingThinkingScript },
