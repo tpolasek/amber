@@ -1858,7 +1858,10 @@ function appendMessage(message: Message, before: HTMLElement | null = null): HTM
       <header><span class="message-time"></span><span class="message-usage"></span></header>
       <details class="message-thinking"><summary><span>Thinking</span><span class="thinking-status"></span></summary><div class="thinking-content"></div></details>
       <div class="message-images"></div>
-      <div class="message-content"></div>
+      <div class="message-text">
+        <div class="message-text-header"><strong></strong></div>
+        <div class="message-content"></div>
+      </div>
       <div class="message-tools"></div>
     </div>`;
   if (before) elements.transcript.insertBefore(article, before);
@@ -1877,13 +1880,22 @@ function updateMessage(element: HTMLElement | null, message: Message): void {
   requiredWithin(element, ".message-time").textContent = formatTime(message.createdAt);
   requiredWithin(element, ".message-usage").textContent = message.usage ? `${message.usage.input} in / ${message.usage.output} out` : "";
   const content = requiredWithin(element, ".message-content");
+  const text = requiredWithin(element, ".message-text");
+  element.classList.toggle("text-card", !message.kind || message.kind === "chat");
+  requiredWithin(element, ".message-text-header strong").textContent =
+    message.role === "user" ? "User Request" : "Assistant Response";
+  const hasThinking = Boolean(message.thinking);
+  const textEmpty = !message.content.trim();
+  element.classList.toggle("text-empty", textEmpty);
+  // The empty text area is the only place to blink a cursor before thinking or
+  // text arrives; once thinking streams, its own reveal owns the cursor.
+  text.hidden = textEmpty && (message.status !== "streaming" || hasThinking);
   const thinking = requiredWithin(element, ".message-thinking") as HTMLDetailsElement;
   const thinkingContent = requiredWithin(thinking, ".thinking-content");
   const thinkingLabel = requiredWithin(thinking, "summary span:first-child");
   const thinkingStatus = requiredWithin(thinking, ".thinking-status");
   renderToolCalls(requiredWithin(element, ".message-tools"), message.toolCalls ?? []);
   renderMessageImages(requiredWithin(element, ".message-images"), message.images ?? []);
-  const hasThinking = Boolean(message.thinking);
   thinking.hidden = !hasThinking;
   if (hasThinking) {
     const wasOpen = thinking.open;
