@@ -340,7 +340,7 @@ button { color: inherit; }
 .message-content th { color: var(--amber-hot); background: var(--amber-faint); font-weight: 500; }
 .message-content img { max-width: 100%; height: auto; border: 1px solid var(--amber-line); }
 .message.error .message-content { color: var(--error-muted); }
-.message-thinking { margin: 3px 0 7px; border: 1px solid var(--accent-a20); background: var(--accent-a025); color: var(--fg-thinking); }
+.message-thinking { margin: 3px 0 7px; border: 1px solid var(--accent-a26); background: var(--bg-tool); color: var(--fg-thinking); }
 .message-thinking[hidden] { display: none; }
 .message-thinking summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 8px; color: var(--fg-thinking-heading); cursor: pointer; font-size: 12px; letter-spacing: .08em; list-style: none; user-select: none; }
 .message-thinking summary::-webkit-details-marker { display: none; }
