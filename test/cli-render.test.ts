@@ -92,3 +92,12 @@ test("renders a list inside a blockquote", () => {
   const output = render("> - one\n> - two", 40);
   assert.deepEqual(output.split("\n"), ["> - one", "> - two"]);
 });
+
+test("keeps the list marker when a blockquote is the item's first block", () => {
+  assert.deepEqual(render("- > quoted", 40).split("\n"), ["- > quoted"]);
+});
+
+test("keeps the list marker on a fenced code block inside an item", () => {
+  const output = render("- ```\n  hi\n  ```", 40);
+  assert.ok(output.split("\n").some((line) => line.startsWith("- ")), output);
+});

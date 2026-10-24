@@ -93,7 +93,7 @@ function wrapRuns(runs: Run[], width: number): Line[] {
   return lines;
 }
 
-/** Inline tokens to styled lines (hardbreaks split lines, softbreaks join). */
+/** Inline tokens to styled lines (hardbreaks and softbreaks split lines). */
 function renderInline(children: Token[] | null | undefined): Line[] {
   const lines: Line[] = [[]];
   const styles: string[] = [];
@@ -139,7 +139,7 @@ function renderInline(children: Token[] | null | undefined): Line[] {
 class BlockRenderer {
   private readonly lines: Line[] = [];
   private blankBefore = false;
-  private readonly prefixes: Array<{ first: Run[]; rest: Run[] }> = [];
+  private readonly prefixes: Array<{ first: Run[]; rest: Run[]; used: boolean }> = [];
   private readonly listStack: Array<{ ordered: boolean; index: number }> = [];
 
   constructor(private readonly options: RenderOptions) {}
@@ -159,21 +159,28 @@ class BlockRenderer {
   private emit(wrapped: Line[]): void {
     if (this.blankBefore && this.lines.length > 0) this.lines.push([]);
     this.blankBefore = false;
-    const first = [...this.prefixes.slice(0, -1).flatMap((p) => p.rest), ...(this.prefixes.at(-1)?.first ?? [])];
-    const rest = this.restPrefix();
     if (wrapped.length === 0) wrapped = [[]];
     wrapped.forEach((line, index) => {
-      this.lines.push([...(index === 0 ? first : rest), ...line]);
+      const prefix = index === 0
+        ? this.prefixes.flatMap((p) => (p.used ? p.rest : p.first))
+        : this.restPrefix();
+      this.lines.push([...prefix, ...line]);
     });
+    for (const prefix of this.prefixes) prefix.used = true;
   }
 
   private emitCode(body: string): void {
     if (this.blankBefore && this.lines.length > 0) this.lines.push([]);
     this.blankBefore = false;
-    const prefix = [...this.restPrefix(), { text: "  ", codes: DIM }];
-    for (const codeLine of body.replace(/\n$/, "").split("\n")) {
+    const rest = [...this.restPrefix(), { text: "  ", codes: DIM }];
+    const codeLines = body.replace(/\n$/, "").split("\n");
+    codeLines.forEach((codeLine, index) => {
+      const prefix = index === 0
+        ? [...this.prefixes.flatMap((p) => (p.used ? p.rest : p.first)), { text: "  ", codes: DIM }]
+        : rest;
       this.lines.push([...prefix, { text: codeLine }]);
-    }
+    });
+    for (const prefix of this.prefixes) prefix.used = true;
   }
 
   private renderTable(tokens: Token[], start: number): number {
@@ -285,6 +292,7 @@ class BlockRenderer {
           this.prefixes.push({
             first: [{ text: `${marker} ` }],
             rest: [{ text: " ".repeat(marker.length + 1) }],
+            used: false,
           });
           break;
         }
@@ -292,7 +300,7 @@ class BlockRenderer {
           this.prefixes.pop();
           break;
         case "blockquote_open":
-          this.prefixes.push({ first: [{ text: "> ", codes: DIM }], rest: [{ text: "> ", codes: DIM }] });
+          this.prefixes.push({ first: [{ text: "> ", codes: DIM }], rest: [{ text: "> ", codes: DIM }], used: false });
           break;
         case "blockquote_close":
           this.prefixes.pop();
@@ -300,7 +308,7 @@ class BlockRenderer {
         case "table_open":
           i = this.renderTable(tokens, i);
           break;
-        default: break; // lists, quotes, tables arrive in Task 3
+        default: break; // html_block and anything exotic render as nothing
       }
     }
   }
