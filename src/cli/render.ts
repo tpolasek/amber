@@ -75,7 +75,7 @@ function wrapRuns(runs: Run[], width: number): Line[] {
           let takeWidth = 0;
           for (const character of word) {
             const characterWidth = displayWidth(character);
-            if (takeWidth + characterWidth > width) break;
+            if (takeWidth + characterWidth > width && take > 0) break;
             take += character.length;
             takeWidth += characterWidth;
           }

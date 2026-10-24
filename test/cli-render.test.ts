@@ -47,3 +47,7 @@ test("renders hr as a short dim rule", () => {
   const output = renderMarkdown("a\n\n---\n\nb", { width: 40, color: true });
   assert.equal(output, "a\n\n\x1b[2m--------\x1b[0m\n\nb");
 });
+
+test("hard-split makes progress when one wide character exceeds the width", () => {
+  assert.equal(renderMarkdown("界", { width: 1, color: false }), "界");
+});
