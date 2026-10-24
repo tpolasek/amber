@@ -2449,8 +2449,12 @@ function acceptDirectoryCompletion(directory: DirectoryCompletion): void {
 }
 
 function selectCommand(command: BuiltInCommand, execute: boolean): void {
-  const continuesTyping = command.name === "/add-dir" || command.name === "/btw" || command.name === "/compact"
-    || command.name === "/cwd" || command.name === "/git" || command.name === "/goal" || command.name === "/plugin";
+  const needsArgument = command.name === "/add-dir" || command.name === "/btw"
+    || command.name === "/git" || command.name === "/goal";
+  const acceptsArgument = needsArgument || command.name === "/compact"
+    || command.name === "/cwd" || command.name === "/plugin";
+  const typedExactly = elements.prompt.value.trim().toLowerCase() === command.name.toLowerCase();
+  const continuesTyping = acceptsArgument && (needsArgument || !(execute && typedExactly));
   elements.prompt.value = continuesTyping ? `${command.name} ` : command.name;
   if (continuesTyping) updateCommandMenu();
   else hideCommandMenu();
