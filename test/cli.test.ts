@@ -80,3 +80,12 @@ test("a non-error startup failure is still reported readably", () => {
   const message = startupErrorMessage("boom", "/home/user/.amber/settings.toml");
   assert.match(message, /AMBER cannot start: boom/);
 });
+
+test("cli subcommand captures the remaining arguments", () => {
+  assert.deepEqual(parseCliCommand(["cli", "--new", "x"]), { kind: "cli", arguments: ["--new", "x"] });
+  assert.deepEqual(parseCliCommand(["cli"]), { kind: "cli", arguments: [] });
+});
+
+test("server usage mentions the cli subcommand", () => {
+  assert.match(usageText(), /amber cli/);
+});

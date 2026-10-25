@@ -16,5 +16,9 @@ if (cliCommand.kind === "unknown") {
   logServerError(usageText());
   process.exit(2);
 }
-
-await startAmberServer();
+if (cliCommand.kind === "cli") {
+  const { runCli } = await import("./cli/main.js");
+  process.exitCode = await runCli(cliCommand.arguments);
+} else {
+  await startAmberServer();
+}

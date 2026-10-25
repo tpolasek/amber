@@ -2,12 +2,14 @@ export type CliCommand =
   | { kind: "start" }
   | { kind: "help" }
   | { kind: "version" }
+  | { kind: "cli"; arguments: string[] }
   | { kind: "unknown"; argument: string };
 
 const HELP_FLAGS = new Set(["--help", "-h"]);
 const VERSION_FLAGS = new Set(["--version", "-v"]);
 
 export function parseCliCommand(argv: readonly string[]): CliCommand {
+  if (argv[0] === "cli") return { kind: "cli", arguments: argv.slice(1) };
   if (argv.some((argument) => HELP_FLAGS.has(argument))) return { kind: "help" };
   if (argv.some((argument) => VERSION_FLAGS.has(argument))) return { kind: "version" };
   const unknown = argv.find((argument) => argument.length > 0);
@@ -26,6 +28,7 @@ export function usageText(): string {
     "Options:",
     "  -h, --help     Show this help and exit.",
     "  -v, --version  Show the build version and exit.",
+    "  cli            Run the terminal client: amber cli --help.",
     "",
     "Environment variables:",
     "  PORT           Port to listen on (default 3000).",
