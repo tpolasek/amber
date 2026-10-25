@@ -53,3 +53,16 @@ test("tables stream as ordinary blank-line-delimited blocks", () => {
   const table = "| a | b |\n|---|---|\n| 1 | 2 |";
   assert.deepEqual(splitter.push(`${table}\n\nnext`), [table]);
 });
+
+test("incremental and one-shot pushes close the same blocks", () => {
+  const oneShot = createBlockSplitter();
+  const expected = [...oneShot.push("```js\nconst x = 1;\n```\n\ntail"), oneShot.finish()].filter((block) => block !== "");
+  const incremental = createBlockSplitter();
+  const got = [
+    ...incremental.push("```js\nconst x"),
+    ...incremental.push(" = 1;\n```\n\nta"),
+    ...incremental.push("il"),
+    incremental.finish(),
+  ].filter((block) => block !== "");
+  assert.deepEqual(got, expected);
+});
