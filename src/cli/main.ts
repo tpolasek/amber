@@ -102,7 +102,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
 
 async function listSessions(api: AmberApi, term: Terminal): Promise<number> {
   for (const session of await api.listSessions()) {
-    term.line(`${session.id.slice(0, 8)}  ${session.updatedAt.slice(0, 10)}  ${session.title}`);
+    term.line(`${session.id.slice(0, 8)}  ${session.title}  ${session.updatedAt.slice(0, 10)}`);
   }
   term.end();
   return 0;
@@ -157,12 +157,6 @@ async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliA
         term.line(term.style(`✗ ${error instanceof Error ? error.message : String(error)}`, RED));
       });
   };
-  void subscribeSessionEvents(args.server, currentSessionId, dispatch, subscription.signal);
-
-  const history = await api.history(currentSessionId);
-  display.attach(history.messages, args.history);
-  term.flush();
-
   let lastSigint = 0;
   const exit = (code: number): never => {
     term.end();
@@ -170,21 +164,33 @@ async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliA
     rl.close();
     process.exit(code);
   };
-  rl.on("SIGINT", () => {
-    const now = Date.now();
-    if (now - lastSigint < 1_000) exit(0);
-    lastSigint = now;
-    if (display.active) {
-      void api.abort(currentSessionId).catch(() => undefined);
-      term.status(null);
-      term.flush();
-    } else {
-      exit(0);
-    }
-  });
-  process.once("SIGINT", () => exit(130));
-  rl.on("close", () => exit(0));
-  if (process.stdin.isTTY) process.stdin.on("data", () => term.suppressStatus());
+  try {
+    void subscribeSessionEvents(args.server, currentSessionId, dispatch, subscription.signal);
+
+    const history = await api.history(currentSessionId);
+    display.attach(history.messages, args.history);
+    term.flush();
+
+    rl.on("SIGINT", () => {
+      const now = Date.now();
+      if (now - lastSigint < 1_000) exit(0);
+      lastSigint = now;
+      if (display.active) {
+        void api.abort(currentSessionId).catch(() => undefined);
+        term.status(null);
+        term.flush();
+      } else {
+        exit(0);
+      }
+    });
+    process.once("SIGINT", () => exit(130));
+    rl.on("close", () => exit(0));
+    if (process.stdin.isTTY) process.stdin.on("data", () => term.suppressStatus());
+  } catch (error) {
+    subscription.abort();
+    rl.close();
+    throw error;
+  }
 
   rl.on("line", (input) => {
     if (display.gatePending) return; // consumed by a gate's rl.question
@@ -207,7 +213,7 @@ async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliA
     if (text === "/quit") exit(0);
     if (text === "/list") {
       for (const session of await api.listSessions()) {
-        term.line(`${session.id.slice(0, 8)}  ${session.updatedAt.slice(0, 10)}  ${session.title}`);
+        term.line(`${session.id.slice(0, 8)}  ${session.title}  ${session.updatedAt.slice(0, 10)}`);
       }
       return;
     }
