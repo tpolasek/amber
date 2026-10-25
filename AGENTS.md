@@ -8,6 +8,7 @@ Amber is a minimal, Claude Code–compatible coding agent that runs as a web CLI
 - `npm test` — builds, then runs `node --test dist/test/*.test.js`
 - `npm run typecheck` — `tsc --noEmit`
 - `npm run test:e2e` — interruption end-to-end test (spawns real servers)
+- `npm run test:e2e:cli` — terminal-client end-to-end test (spawns a real server plus a mock provider)
 - `npm run test:e2e:plugins` - plugin end-to-end test on a clean profile (spawns a real server, clones from github.com)
 - `npm start` / `./run.sh` — start the server on port 3000
 - `./install_service.sh` — install amber as a systemd user service (`systemctl --user restart amber` to restart; logs in `journalctl --user -t amber`)
@@ -23,6 +24,7 @@ Run the full test suite before finishing any change.
 - `src/session-queue.ts`, `src/session-aborts.ts`, `src/compaction.ts`, `src/session-pagination.ts` — run lifecycle pieces.
 - `src/user-instructions.ts` — AGENTS.md loaders (global and project), snapshotted once per session into `session.instructions` and carried in the system prompt.
 - `src/client*.ts` — the browser client (no framework, hand-rolled DOM).
+- `src/cli/` — the terminal client (`amber cli`): ANSI markdown rendering, block streaming, batched writer, SSE event display.
 - `test/*.test.ts` — `node:test` suites mirroring `src/` filenames.
 - `.amber/skills/` — skills available when developing amber itself (`/reload`, `/commit`, `/tag`).
 

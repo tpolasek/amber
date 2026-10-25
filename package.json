@@ -15,6 +15,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/test/*.test.js",
     "test:e2e": "npm run build && node test/interrupt.e2e.mjs",
+    "test:e2e:cli": "npm run build && node test/cli.e2e.mjs",
     "test:e2e:plugins": "npm run build && node test/plugins.e2e.mjs"
   },
   "engines": {
