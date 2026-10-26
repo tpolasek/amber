@@ -75,6 +75,14 @@ test("done also prints the context and cache meters from the session snapshot", 
   );
 });
 
+test("done without a message (standalone /compact) clears the active state without crashing", async () => {
+  const { display, activeChanges } = harness();
+  await display.applyEvent("compaction_start", {});
+  await display.applyEvent("done", { session: { id: "s1", title: "", createdAt: "", updatedAt: "", messages: [] } });
+  assert.equal(display.active, false);
+  assert.deepEqual(activeChanges(), [true, false]);
+});
+
 test("--thinking streams thinking lines before the answer", async () => {
   const { display, text } = harness(undefined, { streamThinking: true });
   await display.applyEvent("start", { assistantMessage: assistant("a1", ""), userMessage: userMessage("u1", "prompt") });

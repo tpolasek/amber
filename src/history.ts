@@ -45,17 +45,38 @@ export function buildProviderHistory(
   }
   const conversation = visibleMessages.filter((message, index) =>
     message.kind !== "skill-catalog" || index === lastCatalogIndex);
+  // Concurrent runs on one session (or a crash between them) can store a tool
+  // result apart from the assistant message that owns its call. Providers
+  // reject a tool answer that does not directly follow its call, so reattach
+  // each result to its owner; a result whose owner is not visible would be
+  // unanswerable on the wire and is dropped.
+  const resultsByCall = new Map<string, Message[]>();
+  for (const message of conversation) {
+    if (message.kind !== "tool-result" || !message.toolUseId) continue;
+    const existing = resultsByCall.get(message.toolUseId);
+    if (existing) existing.push(message);
+    else resultsByCall.set(message.toolUseId, [message]);
+  }
+  const ordered: Message[] = [];
+  for (const message of conversation) {
+    if (message.kind === "tool-result" && message.toolUseId) continue;
+    ordered.push(message);
+    for (const call of message.role === "assistant" ? message.toolCalls ?? [] : []) {
+      const results = resultsByCall.get(call.id);
+      if (results?.length) ordered.push(...results.splice(0));
+    }
+  }
   // A tool call without a stored result means the process died mid-execution.
   // Providers reject an unanswered tool_use — failing every later request in
   // the session — so synthesize an interruption result for it.
   const answeredToolCalls = new Set(
-    conversation.flatMap((message) => (message.kind === "tool-result" && message.toolUseId ? [message.toolUseId] : [])),
+    ordered.flatMap((message) => (message.kind === "tool-result" && message.toolUseId ? [message.toolUseId] : [])),
   );
   const history: ProviderMessage[] = [];
   // Synthesized answers, held until the next user turn where providers expect
   // a tool answer to land.
   const interruptedResults: ProviderContentBlock[] = [];
-  for (const message of conversation) {
+  for (const message of ordered) {
     const providerMessage: ProviderMessage = {
       role: message.role,
       content: message.kind === "tool-result" && message.toolUseId

@@ -503,6 +503,60 @@ test("provider history synthesizes only the unanswered calls of a partially inte
   ]);
 });
 
+test("provider history reattaches tool results separated from their assistant message", () => {
+  const now = new Date().toISOString();
+  const messages: Message[] = [
+    { id: "user", role: "user", content: "Run two things", createdAt: now, status: "complete" },
+    {
+      id: "assistant",
+      role: "assistant",
+      content: "",
+      createdAt: now,
+      status: "complete",
+      toolCalls: [
+        { id: "tool-1", name: "Bash", input: { command: "echo one" }, status: "complete", output: "" },
+        { id: "tool-2", name: "Bash", input: { command: "echo two" }, status: "complete", output: "" },
+      ],
+    },
+    { id: "stray", role: "user", content: "queued input landed between the calls and their results", createdAt: now, status: "complete" },
+    { id: "result-1", role: "user", content: "one", createdAt: now, status: "complete", kind: "tool-result", toolUseId: "tool-1" },
+    { id: "result-2", role: "user", content: "two", createdAt: now, status: "complete", kind: "tool-result", toolUseId: "tool-2" },
+  ];
+
+  assert.deepEqual(buildProviderHistory(messages), [
+    { role: "user", content: "Run two things" },
+    {
+      role: "assistant",
+      content: [
+        { type: "tool_use", id: "tool-1", name: "Bash", input: { command: "echo one" } },
+        { type: "tool_use", id: "tool-2", name: "Bash", input: { command: "echo two" } },
+      ],
+    },
+    {
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "tool-1", content: "one", is_error: false },
+        { type: "tool_result", tool_use_id: "tool-2", content: "two", is_error: false },
+      ],
+    },
+    { role: "user", content: "queued input landed between the calls and their results" },
+  ]);
+});
+
+test("provider history drops tool results whose assistant message is not visible", () => {
+  const now = new Date().toISOString();
+  const messages: Message[] = [
+    { id: "user", role: "user", content: "Hello", createdAt: now, status: "complete" },
+    { id: "orphan", role: "user", content: "orphaned result", createdAt: now, status: "complete", kind: "tool-result", toolUseId: "gone-call" },
+    { id: "again", role: "user", content: "Again", createdAt: now, status: "complete" },
+  ];
+
+  assert.deepEqual(buildProviderHistory(messages), [
+    { role: "user", content: "Hello" },
+    { role: "user", content: "Again" },
+  ]);
+});
+
 test("provider history reinjects compacted skill instructions without duplicating active ones", () => {
   const now = new Date().toISOString();
   const base = { createdAt: now, status: "complete" as const };

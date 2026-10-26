@@ -1142,8 +1142,19 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
   }
   automaticNameRuns.get(sessionId)?.sessions.add(session);
   const shouldAutoName = !isWakeRun && shouldAutoNameSession(session);
+  // The entry check above sits in front of awaits (store.get, readJson), so
+  // concurrent sends can both pass it and interleave their runs on one
+  // session. Re-check and register before the first write; a registration
+  // that outlives a failed append is rolled back so the session stays usable.
+  if (activeSessions.has(sessionId)) { json(response, 409, { error: "A response is already streaming" }); return; }
+  activeSessions.register(sessionId, session.parentSessionId, controller, session);
   let assistantMessage = createAssistantMessage(now);
-  await store.appendMessages(session, userMessage ? [userMessage, assistantMessage] : [assistantMessage]);
+  try {
+    await store.appendMessages(session, userMessage ? [userMessage, assistantMessage] : [assistantMessage]);
+  } catch (error) {
+    activeSessions.unregister(sessionId, controller);
+    throw error;
+  }
 
   response.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
@@ -1152,7 +1163,6 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     "x-accel-buffering": "no",
   });
   const bashExecutor = new BashExecutor();
-  activeSessions.register(sessionId, session.parentSessionId, controller, session);
   interruptibleSessions.add(sessionId);
   const emit = (event: string, data: unknown) => emitSessionEvent(sessionId, response, event, data);
   {

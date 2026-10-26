@@ -84,7 +84,9 @@ export class SessionDisplay {
         }
         break;
       case "start":
-        this.beginStream(payload.assistantMessage.id);
+        // A standalone /compact broadcasts done without a message; streams
+        // other than a run's own may legitimately omit these payloads.
+        if (payload.assistantMessage) this.beginStream(payload.assistantMessage.id);
         // The terminal already echoed this input; only mark it seen so a
         // later snapshot does not reprint it.
         if (payload.userMessage) {
@@ -93,7 +95,7 @@ export class SessionDisplay {
         }
         break;
       case "continuation":
-        this.beginStream(payload.assistantMessage.id);
+        if (payload.assistantMessage) this.beginStream(payload.assistantMessage.id);
         break;
       case "delta": {
         this.finishThinking();
@@ -121,15 +123,18 @@ export class SessionDisplay {
         this.printUser(payload.message as Message);
         break;
       case "assistant_complete":
+      case "done": {
         this.finishThinking();
-        this.finishStream(payload.message as Message);
+        const message = payload.message as Message | undefined;
+        if (message) this.finishStream(message);
+        if (event === "done") {
+          // Standalone /compact closes observers with a message-less done; the
+          // display must still leave the inactive state or the prompt hangs.
+          if (message) this.printUsage(message, payload.session as Session | undefined);
+          this.setActive(false);
+        }
         break;
-      case "done":
-        this.finishThinking();
-        this.finishStream(payload.message as Message);
-        this.printUsage(payload.message as Message, payload.session as Session | undefined);
-        this.setActive(false);
-        break;
+      }
       case "error":
         this.finishThinking();
         this.splitter = null;
