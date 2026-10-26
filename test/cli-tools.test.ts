@@ -34,6 +34,39 @@ test("edit line shows the file path", () => {
     "✓ Edit ~/repo/src/cli/main.ts");
 });
 
+test("file tools report content size in kilotokens instead of elapsed seconds", () => {
+  const edit = toolLine(call({
+    name: "Edit",
+    input: { file_path: "/tmp/x.ts", old_string: "a".repeat(2_000), new_string: "b".repeat(2_000) },
+    durationMs: 3,
+  }));
+  // 4,009 characters of payload ≈ 1,003 tokens.
+  assert.equal(edit, "✓ Edit /tmp/x.ts · 1kt");
+
+  const write = toolLine(call({
+    name: "Write",
+    input: { file_path: "/tmp/y.ts", content: "c".repeat(12_000) },
+    durationMs: 4,
+  }));
+  assert.equal(write, "✓ Write /tmp/y.ts · 3kt");
+
+  const read = toolLine(call({
+    name: "Read",
+    input: { file_path: "/tmp/z.ts" },
+    readRange: { startLine: 1, endLine: 40, totalLines: 40 },
+    output: "d".repeat(20_000),
+    durationMs: 2,
+  }));
+  assert.equal(read, "✓ Read /tmp/z.ts L1-40 · 5kt");
+});
+
+test("only file tools swap the duration for kilotokens", () => {
+  assert.equal(
+    toolLine(call({ name: "Grep", input: { pattern: "x" }, output: "hit", durationMs: 1_500 })),
+    "✓ Grep x · 1.5s",
+  );
+});
+
 test("read line shows the line range", () => {
   assert.equal(
     toolLine(call({

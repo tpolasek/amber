@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import type { ToolCall } from "../types.js";
+import { formatTokenCountInThousands } from "../client-formatters.js";
 
 function collapse(text: string): string {
   return text.replace(/\s+/g, " ").trim();
@@ -36,6 +37,18 @@ function argumentOf(call: ToolCall): string {
   }
 }
 
+/** File tools finish in milliseconds; the payload size says more than 0.0s does. */
+const CONTENT_TOOLS = new Set(["Edit", "Read", "Write"]);
+
+function contentKilotokens(call: ToolCall): string {
+  let characters = call.output.length;
+  for (const value of Object.values(call.input)) {
+    if (typeof value === "string") characters += value.length;
+  }
+  const tokens = Math.ceil(characters / 4);
+  return `${formatTokenCountInThousands(tokens)}kt`;
+}
+
 export function toolLine(call: ToolCall): string {
   const glyph = call.status === "complete" ? "✓" : "✗";
   const head = [glyph, call.name, argumentOf(call)].filter((part) => part !== "").join(" ");
@@ -46,7 +59,7 @@ export function toolLine(call: ToolCall): string {
     tail.push(`exit ${call.exitCode}`);
   }
   if (call.durationMs !== undefined && call.status !== "running" && call.status !== "queued") {
-    tail.push(`${(call.durationMs / 1_000).toFixed(1)}s`);
+    tail.push(CONTENT_TOOLS.has(call.name) ? contentKilotokens(call) : `${(call.durationMs / 1_000).toFixed(1)}s`);
   }
   return tail.length === 0 ? head : `${head} · ${tail.join(" · ")}`;
 }
