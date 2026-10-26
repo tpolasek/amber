@@ -58,6 +58,7 @@ function createMockProvider() {
       };
       if (!payload.tools) text("compacted");
       else if (rounds === 1) {
+        frame({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "PLANNING E2E THOUGHT\n" } });
         text("CLI E2E INTRO\n\n| a | b |\n|---|---|\n| 1 | 2 |\n");
         toolUse("q1", "AskUserQuestion", {
           questions: [{ question: "Pick one", header: "Pick", options: [{ label: "One", description: "First option" }, { label: "Two", description: "Second option" }], multiSelect: false }],
@@ -168,7 +169,7 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
 
 const cli = spawn(
   process.execPath,
-  [join(repositoryRoot, "dist", "src", "server.js"), "cli", "--server", `http://127.0.0.1:${basePort + 3}`, "--history", "2", "--new", "cli e2e"],
+  [join(repositoryRoot, "dist", "src", "server.js"), "cli", "--server", `http://127.0.0.1:${basePort + 3}`, "--history", "2", "--thinking", "--new", "cli e2e"],
   { cwd: runDirectory, env: serverEnv, stdio: ["pipe", "pipe", "pipe"] },
 );
 const chunks = [];
@@ -230,6 +231,7 @@ try {
   type("/quit");
   check("cli exits cleanly", (await exitCode) === 0);
   check("streams markdown text", output().includes("CLI E2E INTRO"));
+  check("streams thinking under a header with --thinking", output().includes("· thinking") && output().includes("PLANNING E2E THOUGHT"));
   check("renders the table", output().includes("| a | b |"));
   check("prints one line for the bash tool", output().includes("✓ Bash env | grep E2E_SECRET"));
   check("never prints tool output", !output().includes("classified-value"));

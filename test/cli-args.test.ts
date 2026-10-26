@@ -12,7 +12,7 @@ const sessions = [
 test("defaults to the local server and two turns of history", () => {
   assert.deepEqual(parseCliArgs([], env), {
     kind: "args",
-    args: { server: "http://127.0.0.1:3000", history: 2, list: false },
+    args: { server: "http://127.0.0.1:3000", history: 2, list: false, thinking: false },
   });
 });
 
@@ -24,9 +24,16 @@ test("AMBER_SERVER overrides the default base url", () => {
 test("parses --server, --history, --list, positional session, and --new with a name", () => {
   const parsed = parseCliArgs(["--server", "http://x:1", "--history", "5", "--list", "ab12"], env);
   assert.ok(parsed.kind === "args");
-  assert.deepEqual(parsed.args, { server: "http://x:1", history: 5, list: true, session: "ab12" });
+  assert.deepEqual(parsed.args, {
+    server: "http://x:1", history: 5, list: true, thinking: false, session: "ab12",
+  });
   const created = parseCliArgs(["--new", "my session"], env);
   assert.ok(created.kind === "args" && created.args.newName === "my session");
+});
+
+test("--thinking streams thinking text", () => {
+  const parsed = parseCliArgs(["--thinking"], env);
+  assert.ok(parsed.kind === "args" && parsed.args.thinking === true);
 });
 
 test("--new without a name still parses", () => {

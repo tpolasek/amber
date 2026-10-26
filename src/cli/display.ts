@@ -8,6 +8,11 @@ import { meterLine } from "./usage.js";
 
 export type PlanDecision = { approved: true } | { approved: false } | { newSession: true };
 
+export interface DisplayOptions {
+  /** Print thinking text as it streams instead of only counting it in the status line. */
+  streamThinking?: boolean;
+}
+
 export interface DisplayHooks {
   ask(prompt: string): Promise<string>;
   answerQuestions(sessionId: string, toolUseId: string, answers: Record<string, string> | { cancelled: true }): Promise<void>;
@@ -44,12 +49,15 @@ export class SessionDisplay {
   private streamingMessageId: string | null = null;
   private streamingChars = 0;
   private thinkingChars = 0;
+  private thinkingBuffer = "";
+  private thinkingHeaderPrinted = false;
   private lastCompletedTool: ToolCall | null = null;
 
   constructor(
     private readonly term: Terminal,
     private readonly sessionId: string,
     private readonly hooks: DisplayHooks,
+    private readonly options: DisplayOptions = {},
   ) {}
 
   attach(messages: Message[], limit: number): void {
@@ -88,6 +96,7 @@ export class SessionDisplay {
         this.beginStream(payload.assistantMessage.id);
         break;
       case "delta": {
+        this.finishThinking();
         const text = String(payload.text ?? "");
         this.ensureSplitter();
         for (const block of this.splitter!.push(text)) this.printStreamBlock(block);
@@ -95,27 +104,34 @@ export class SessionDisplay {
         this.paintStatus();
         break;
       }
-      case "thinking_delta":
-        this.thinkingChars += String(payload.thinking ?? "").length;
+      case "thinking_delta": {
+        const text = String(payload.thinking ?? "");
+        this.thinkingChars += text.length;
+        if (this.options.streamThinking) this.printThinking(text);
         this.paintStatus();
         break;
+      }
       case "tool_update":
         this.applyToolUpdate(payload.toolCall as ToolCall);
         break;
       case "tool_output":
         break; // live tool output is never printed
       case "user_message":
+        this.finishThinking();
         this.printUser(payload.message as Message);
         break;
       case "assistant_complete":
+        this.finishThinking();
         this.finishStream(payload.message as Message);
         break;
       case "done":
+        this.finishThinking();
         this.finishStream(payload.message as Message);
         this.printUsage(payload.message as Message, payload.session as Session | undefined);
         this.setActive(false);
         break;
       case "error":
+        this.finishThinking();
         this.splitter = null;
         this.term.line(this.term.style(`✗ error: ${truncate(String(payload.error ?? ""), 160)}`, RED));
         this.term.flush();
@@ -165,6 +181,8 @@ export class SessionDisplay {
     this.splitter = null;
     this.streamingChars = 0;
     this.thinkingChars = 0;
+    this.thinkingBuffer = "";
+    this.thinkingHeaderPrinted = false;
     if (!this.printedBlocks.has(messageId)) this.printedBlocks.set(messageId, 0);
     this.setActive(true);
   }
@@ -194,6 +212,31 @@ export class SessionDisplay {
     if (!this.printedOrder.includes(message.id)) this.printedOrder.push(message.id);
   }
 
+  /** Prints complete thinking lines as they arrive; the partial tail waits for more. */
+  private printThinking(text: string): void {
+    this.thinkingBuffer += text;
+    const lines = this.thinkingBuffer.split("\n");
+    this.thinkingBuffer = lines.pop() ?? "";
+    for (const line of lines) this.printThinkingLine(line);
+  }
+
+  private printThinkingLine(line: string): void {
+    if (!this.thinkingHeaderPrinted) {
+      this.term.line("");
+      this.term.line(this.term.style("· thinking", DIM));
+      this.thinkingHeaderPrinted = true;
+    }
+    this.term.line(line === "" ? "" : this.term.style(line, DIM));
+  }
+
+  private finishThinking(): void {
+    if (!this.thinkingHeaderPrinted) return;
+    const remainder = this.thinkingBuffer;
+    this.thinkingBuffer = "";
+    this.thinkingHeaderPrinted = false;
+    if (remainder !== "") this.term.line(this.term.style(remainder, DIM));
+  }
+
   private printUsage(message: Message, session?: Session): void {
     const parts: string[] = [];
     if (message.usage) {
@@ -213,6 +256,7 @@ export class SessionDisplay {
       return;
     }
     if (this.printedToolIds.has(call.id)) return;
+    this.finishThinking();
     this.printedToolIds.add(call.id);
     this.lastCompletedTool = call;
     const codes = call.status === "complete" ? DIM : RED;

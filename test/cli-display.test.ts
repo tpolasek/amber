@@ -1,11 +1,11 @@
 // test/cli-display.test.ts
 import test from "node:test";
 import assert from "node:assert/strict";
-import { SessionDisplay, type DisplayHooks, type PlanDecision } from "../src/cli/display.js";
+import { SessionDisplay, type DisplayHooks, type DisplayOptions, type PlanDecision } from "../src/cli/display.js";
 import { Terminal } from "../src/cli/term.js";
 import type { Message } from "../src/types.js";
 
-function harness(ask: (prompt: string) => Promise<string> = async () => "") {
+function harness(ask: (prompt: string) => Promise<string> = async () => "", options: DisplayOptions = {}) {
   const chunks: string[] = [];
   const out = { write: (chunk: string) => chunks.push(chunk), isTTY: false, columns: 60 };
   const term = new Terminal(out as never, 3_600_000, 1); // every append flushes
@@ -18,7 +18,7 @@ function harness(ask: (prompt: string) => Promise<string> = async () => "") {
     onActiveChange: (active) => activeChanges.push(active),
   };
   return {
-    display: new SessionDisplay(term, "s1", hooks),
+    display: new SessionDisplay(term, "s1", hooks, options),
     text: () => chunks.join(""),
     posted: () => posted,
     activeChanges: () => activeChanges,
@@ -73,6 +73,29 @@ test("done also prints the context and cache meters from the session snapshot", 
     text(),
     "\nanswer\n\n· 31→0.8 tok · CNTX 31.8k toks · CSH9 95% · CACH 75%\n",
   );
+});
+
+test("--thinking streams thinking lines before the answer", async () => {
+  const { display, text } = harness(undefined, { streamThinking: true });
+  await display.applyEvent("start", { assistantMessage: assistant("a1", ""), userMessage: userMessage("u1", "prompt") });
+  await display.applyEvent("thinking_delta", { thinking: "consider " });
+  await display.applyEvent("thinking_delta", { thinking: "this\nand that\n" });
+  await display.applyEvent("delta", { text: "answer" });
+  await display.applyEvent("done", {
+    message: { ...assistant("a1", "answer"), usage: { input: 10, output: 2 } },
+  });
+  assert.equal(text(), "\n· thinking\nconsider this\nand that\n\nanswer\n\n· 0→0 tok\n");
+});
+
+test("thinking is only counted unless --thinking is set", async () => {
+  const { display, text } = harness();
+  await display.applyEvent("start", { assistantMessage: assistant("a1", ""), userMessage: userMessage("u1", "prompt") });
+  await display.applyEvent("thinking_delta", { thinking: "hidden\n" });
+  await display.applyEvent("delta", { text: "answer" });
+  await display.applyEvent("done", {
+    message: { ...assistant("a1", "answer"), usage: { input: 10, output: 2 } },
+  });
+  assert.equal(text(), "\nanswer\n\n· 0→0 tok\n");
 });
 
 test("tool updates print one completion line and never output", async () => {
