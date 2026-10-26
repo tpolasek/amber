@@ -63,6 +63,17 @@ export class AmberApi {
     await this.request(`/api/sessions/${sessionId}/thinking-level`, { method: "POST", body: JSON.stringify({ thinkingLevel }) });
   }
 
+  /** Normal clears whichever of chat/plan is active; the server rejects both while a run is in flight. */
+  async setMode(sessionId: string, mode: "chat" | "normal" | "plan"): Promise<void> {
+    if (mode !== "normal") {
+      await this.request(`/api/sessions/${sessionId}/${mode}-mode`, { method: "POST", body: JSON.stringify({ active: true }) });
+      return;
+    }
+    const session = await this.getSession(sessionId);
+    const path = session.chatMode ? "chat-mode" : "plan-mode";
+    await this.request(`/api/sessions/${sessionId}/${path}`, { method: "POST", body: JSON.stringify({ active: false }) });
+  }
+
   async createSession(path: string, name?: string): Promise<Session> {
     const body = await this.request("/api/sessions", {
       method: "POST",

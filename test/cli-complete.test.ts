@@ -13,7 +13,7 @@ const sources: CompletionSources = {
 };
 
 test("commands complete from the local list, built-ins, and skills", () => {
-  assert.deepEqual(completionsFor("/mo", sources), ["/model"]);
+  assert.deepEqual(completionsFor("/mo", sources), ["/mode", "/model"]);
   // /usage is both a built-in and a skill: one hit.
   assert.deepEqual(completionsFor("/usa", sources), ["/usage"]);
   // /com names both the commit skill and the /compact built-in.
@@ -39,7 +39,7 @@ test("models complete by key or bare model id", () => {
   assert.deepEqual(completionsFor("/model nope", sources), []);
 });
 
-test("effort levels and session prefixes complete", () => {
+test("effort levels, modes, and session prefixes complete", () => {
   assert.deepEqual(completionsFor("/effort hi", sources), ["/effort high"]);
   assert.deepEqual(completionsFor("/effort ", sources), [
     "/effort high",
@@ -49,6 +49,9 @@ test("effort levels and session prefixes complete", () => {
     "/effort none",
     "/effort xhigh",
   ]);
+  assert.deepEqual(completionsFor("/mode ", sources), ["/mode chat", "/mode normal", "/mode plan"]);
+  assert.deepEqual(completionsFor("/mode p", sources), ["/mode plan"]);
+  assert.deepEqual(completionsFor("/mode nope", sources), []);
   assert.deepEqual(completionsFor("/switch abc", sources), ["/switch abc12345"]);
 });
 
@@ -86,7 +89,7 @@ function cacheHarness() {
 
 test("the cache loads sources once and refreshes them after the TTL", async () => {
   const { cache, calls, advance } = cacheHarness();
-  assert.deepEqual(await cache.completions("/mod"), ["/model"]);
+  assert.deepEqual(await cache.completions("/mod"), ["/mode", "/model"]);
   assert.deepEqual(calls.skills, ["s1"]);
   await cache.completions("/com");
   assert.equal(calls.sessions, 1);

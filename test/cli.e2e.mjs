@@ -224,6 +224,20 @@ try {
   type("/effort high");
   await waitFor(output, "· effort high", 15_000);
 
+  // /mode: show the current mode, reject bad ones, and cycle chat -> plan -> normal.
+  type("/mode");
+  await waitForCount(output, "· mode normal", 1, 15_000);
+  type("/mode banana");
+  await waitFor(output, "✗ mode must be one of: chat, normal, plan", 15_000);
+  type("/mode chat");
+  await waitForCount(output, "· mode chat", 1, 15_000);
+  type("/mode");
+  await waitForCount(output, "· mode chat", 2, 15_000);
+  type("/mode plan");
+  await waitFor(output, "· mode plan", 15_000);
+  type("/mode normal");
+  await waitForCount(output, "· mode normal", 2, 15_000);
+
   // Unknown slash commands and skills both travel as messages; the server
   // refuses the former and loads the latter through the model's Skill tool.
   type("/nosuch");
@@ -250,6 +264,8 @@ try {
   check("lists models with the current marker", output().includes("mock/mock-model  mock-model  thinking none  (current)"));
   check("selects a model by id or key", output().includes("· model mock/mock-model"));
   check("shows and sets the effort level", output().includes("· effort none (model default)") && output().includes("· effort high"));
+  check("shows and switches session modes", output().includes("· mode chat") && output().includes("· mode plan")
+    && output().split("· mode normal").length - 1 >= 2);
   check("refuses unknown slash commands via the message path", output().includes("✗ The /nosuch command doesn't exist"));
   check("invokes skills as messages through the Skill tool", output().includes("✓ Skill e2e") && output().includes("SKILL DONE"));
   check("prints the context and cache meters after a run", output().includes("CNTX 0k toks · CSH9 -- · CACH --"));

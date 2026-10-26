@@ -5,7 +5,7 @@ import { builtInCommand } from "../built-in-commands.js";
 import { Terminal } from "./term.js";
 import { AmberApi, type ModelCatalog, type ModelCatalogEntry } from "./api.js";
 import { usageLines } from "./usage.js";
-import { CompletionCache } from "./complete.js";
+import { CompletionCache, SESSION_MODES } from "./complete.js";
 import { subscribeSessionEvents, type CliSessionEvent } from "./stream.js";
 import { SessionDisplay } from "./display.js";
 import { DIM, RED } from "./render.js";
@@ -37,7 +37,7 @@ export function cliUsageText(): string {
     "  --full           Print edit diffs and new file contents (red/green).",
     "  -h, --help       Show this help and exit.",
     "",
-    "Local commands: /output [chars] /history [n] /list /model [name] /effort [level] /usage /new [name] /switch <prefix> /quit.",
+    "Local commands: /output [chars] /history [n] /list /model [name] /effort [level] /mode [mode] /usage /new [name] /switch <prefix> /quit.",
     "Tab completes commands, skills, models, effort levels, and session ids.",
     "Built-in slash commands run server-side; skills such as /commit go to the",
     "model, which loads them. Ctrl-C aborts a running response; pressed twice it",
@@ -333,6 +333,21 @@ async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliA
       }
       await api.setThinkingLevel(currentSessionId, level as ThinkingLevel);
       term.line(term.style(`· effort ${level}`, DIM));
+      return;
+    }
+    if (text === "/mode" || text.startsWith("/mode ")) {
+      const query = text.split(/\s+/)[1] ?? "";
+      if (query === "") {
+        const session = await api.getSession(currentSessionId);
+        const mode = session.chatMode ? "chat" : session.planMode?.active ? "plan" : "normal";
+        term.line(term.style(`· mode ${mode}`, DIM));
+        return;
+      }
+      if (!(SESSION_MODES as readonly string[]).includes(query)) {
+        throw new Error(`mode must be one of: ${SESSION_MODES.join(", ")}`);
+      }
+      await api.setMode(currentSessionId, query as "chat" | "normal" | "plan");
+      term.line(term.style(`· mode ${query}`, DIM));
       return;
     }
     if (text === "/usage") {

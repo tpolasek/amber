@@ -14,6 +14,7 @@ export const LOCAL_COMMANDS: readonly string[] = [
   "/effort",
   "/history",
   "/list",
+  "/mode",
   "/model",
   "/new",
   "/output",
@@ -21,6 +22,8 @@ export const LOCAL_COMMANDS: readonly string[] = [
   "/switch",
   "/usage",
 ];
+
+export const SESSION_MODES: readonly ["chat", "normal", "plan"] = ["chat", "normal", "plan"];
 
 /** Full-line completions for `line`, matching readline's completer contract. */
 export function completionsFor(line: string, sources: CompletionSources): string[] {
@@ -38,6 +41,8 @@ export function completionsFor(line: string, sources: CompletionSources): string
         .map((model) => model.key))].sort().map((key) => `${command} ${key}`);
     case "/effort":
       return argumentCompletions(command, THINKING_LEVELS, argument);
+    case "/mode":
+      return argumentCompletions(command, SESSION_MODES, argument);
     case "/switch":
       return argumentCompletions(command, sources.sessions, argument);
     default:
