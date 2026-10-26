@@ -15,6 +15,7 @@ export interface CliArgs {
   history: number;
   list: boolean;
   thinking: boolean;
+  full: boolean;
   session?: string;
   newName?: string;
 }
@@ -33,6 +34,7 @@ export function cliUsageText(): string {
     "  --list           List sessions and exit.",
     "  --history <n>    Turns printed on attach (default 2).",
     "  --thinking       Stream thinking text instead of only counting it.",
+    "  --full           Print edit diffs and new file contents (red/green).",
     "  -h, --help       Show this help and exit.",
     "",
     "Local commands: /output [chars] /history [n] /list /model [name] /effort [level] /usage /new [name] /switch <prefix> /quit.",
@@ -49,6 +51,7 @@ export function parseCliArgs(argv: readonly string[], env: NodeJS.ProcessEnv = p
     history: 2,
     list: false,
     thinking: false,
+    full: false,
   };
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i += 1) {
@@ -68,6 +71,8 @@ export function parseCliArgs(argv: readonly string[], env: NodeJS.ProcessEnv = p
       args.list = true;
     } else if (argument === "--thinking") {
       args.thinking = true;
+    } else if (argument === "--full") {
+      args.full = true;
     } else if (argument === "--new") {
       const value = argv[i + 1];
       if (value !== undefined && !value.startsWith("--")) args.newName = value;
@@ -187,7 +192,7 @@ async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliA
           rl.prompt();
         }
       },
-    }, { streamThinking: args.thinking });
+    }, { streamThinking: args.thinking, full: args.full });
   }
 
   function switchSession(id: string): void {

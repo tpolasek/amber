@@ -2,9 +2,9 @@
 //
 // Spawns a real Amber server against a scripted Anthropic-compatible mock,
 // then drives `amber cli` through a full run: streamed markdown (incl. a
-// table), a hidden bash tool result, an AskUserQuestion gate answered from
-// stdin, a server slash command, a skill invoked as /slash message, and
-// /quit.
+// table), a hidden bash tool result, an edit whose diff prints under --full,
+// an AskUserQuestion gate answered from stdin, a server slash command, a
+// skill invoked as /slash message, and /quit.
 //
 // Usage: npm run test:e2e:cli
 import { createServer } from "node:http";
@@ -65,12 +65,15 @@ function createMockProvider() {
         });
       } else if (rounds === 2) {
         toolUse("b1", "Bash", { command: "env | grep E2E_SECRET" });
+        toolUse("r1", "Read", { file_path: "hello.txt" });
+      } else if (rounds === 3) {
+        toolUse("e1", "Edit", { file_path: "hello.txt", old_string: "two", new_string: "TWO" });
       } else if (rounds === 4) {
-        toolUse("sk1", "Skill", { skill: "e2e" });
-      } else if (rounds >= 5) {
-        text("SKILL DONE");
-      } else {
         text("ALL DONE");
+      } else if (rounds === 5) {
+        toolUse("sk1", "Skill", { skill: "e2e" });
+      } else {
+        text("SKILL DONE");
       }
       frame({
         type: "message_delta",
@@ -116,6 +119,7 @@ await mock.listen(basePort + 1);
 
 const runDirectory = await mkdtemp(join(tmpdir(), "amber-cli-e2e-"));
 const home = join(runDirectory, "home");
+await writeFile(join(runDirectory, "hello.txt"), "one\ntwo\nthree\n");
 await mkdir(join(home, ".amber"), { recursive: true });
 await writeFile(join(home, ".amber", "settings.toml"), [
   'theme = "dark"',
@@ -169,7 +173,7 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
 
 const cli = spawn(
   process.execPath,
-  [join(repositoryRoot, "dist", "src", "server.js"), "cli", "--server", `http://127.0.0.1:${basePort + 3}`, "--history", "2", "--thinking", "--new", "cli e2e"],
+  [join(repositoryRoot, "dist", "src", "server.js"), "cli", "--server", `http://127.0.0.1:${basePort + 3}`, "--history", "2", "--thinking", "--full", "--new", "cli e2e"],
   { cwd: runDirectory, env: serverEnv, stdio: ["pipe", "pipe", "pipe"] },
 );
 const chunks = [];
@@ -188,6 +192,9 @@ try {
   await waitFor(output, "answer:", 15_000);
   type("1");
   await waitFor(output, "✓ Bash env | grep E2E_SECRET", 15_000);
+  await waitFor(output, "✓ Read hello.txt", 15_000);
+  await waitFor(output, "✓ Edit hello.txt", 15_000);
+  await waitFor(output, "\n  +TWO\n", 15_000);
   await waitFor(output, "ALL DONE", 15_000);
   type("/name cli-e2e-title");
   await waitFor(output, "· done", 15_000);
@@ -234,6 +241,8 @@ try {
   check("streams thinking under a header with --thinking", output().includes("· thinking") && output().includes("PLANNING E2E THOUGHT"));
   check("renders the table", output().includes("| a | b |"));
   check("prints one line for the bash tool", output().includes("✓ Bash env | grep E2E_SECRET"));
+  check("prints the edit diff with --full", output().includes("✓ Edit hello.txt")
+    && output().includes("\n  @@ -1,3 +1,3 @@\n") && output().includes("\n  -two\n") && output().includes("\n  +TWO\n"));
   check("never prints tool output", !output().includes("classified-value"));
   check("prints the question gate", output().includes("Pick: Pick one") && output().includes("1) One"));
   check("switches sessions and re-attaches history", output().includes(`· session ${sessions[0].id.slice(0, 8)}`));

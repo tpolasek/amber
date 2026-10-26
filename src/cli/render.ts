@@ -8,6 +8,7 @@ export const DIM = "2";
 export const ITALIC = "3";
 export const CYAN = "36";
 export const RED = "31";
+export const GREEN = "32";
 
 type Run = { text: string; codes?: string };
 type Line = Run[];

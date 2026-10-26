@@ -120,6 +120,40 @@ test("tool updates print one completion line and never output", async () => {
   assert.equal(display.latestToolOutput(), "HIDDEN OUTPUT");
 });
 
+test("--full prints the edit diff under the tool line", async () => {
+  const { display, text } = harness(undefined, { full: true });
+  await display.applyEvent("tool_update", {
+    messageId: "a1",
+    toolCall: {
+      id: "t1",
+      name: "Edit",
+      input: { file_path: "src/x.ts", old_string: "a", new_string: "b" },
+      status: "complete",
+      output: "--- a/src/x.ts\n+++ b/src/x.ts\n@@ -1 +1 @@\n-a\n+b\n",
+      durationMs: 12,
+    },
+  });
+  assert.ok(text().startsWith("✓ Edit src/x.ts"));
+  assert.ok(text().includes("\n  @@ -1 +1 @@\n  -a\n  +b\n"));
+});
+
+test("edit diffs stay hidden without --full", async () => {
+  const { display, text } = harness();
+  await display.applyEvent("tool_update", {
+    messageId: "a1",
+    toolCall: {
+      id: "t1",
+      name: "Edit",
+      input: { file_path: "src/x.ts", old_string: "a", new_string: "b" },
+      status: "complete",
+      output: "--- a/src/x.ts\n+++ b/src/x.ts\n@@ -1 +1 @@\n-a\n+b\n",
+      durationMs: 12,
+    },
+  });
+  assert.ok(text().startsWith("✓ Edit src/x.ts"));
+  assert.ok(!text().includes("+b"));
+});
+
 test("snapshot events print only unseen content", async () => {
   const { display, text } = harness();
   await display.applyEvent("snapshot", {

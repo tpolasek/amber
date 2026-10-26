@@ -4,6 +4,7 @@ import { Terminal } from "./term.js";
 import { renderMarkdown, DIM, RED } from "./render.js";
 import { createBlockSplitter, type BlockSplitter } from "./blocks.js";
 import { toolLine, toolStatus } from "./tools.js";
+import { diffLines, isDiffCall } from "./diff.js";
 import { meterLine } from "./usage.js";
 
 export type PlanDecision = { approved: true } | { approved: false } | { newSession: true };
@@ -11,6 +12,8 @@ export type PlanDecision = { approved: true } | { approved: false } | { newSessi
 export interface DisplayOptions {
   /** Print thinking text as it streams instead of only counting it in the status line. */
   streamThinking?: boolean;
+  /** Print the unified diff each Edit/Write already returns, colored red/green. */
+  full?: boolean;
 }
 
 export interface DisplayHooks {
@@ -266,6 +269,11 @@ export class SessionDisplay {
     this.lastCompletedTool = call;
     const codes = call.status === "complete" ? DIM : RED;
     this.term.line(this.term.style(toolLine(call), codes));
+    if (this.options.full && isDiffCall(call)) {
+      for (const line of diffLines(call.output, this.term.columns)) {
+        this.term.line(line.codes === "" ? line.text : this.term.style(line.text, line.codes));
+      }
+    }
   }
 
   private paintStatus(runningTool?: ToolCall): void {
