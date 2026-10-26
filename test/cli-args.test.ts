@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseCliArgs, cliUsageText, matchSessionId } from "../src/cli/main.js";
+import { parseCliArgs, cliUsageText, matchSessionId, matchModel } from "../src/cli/main.js";
 
 const env = { AMBER_SERVER: undefined } as NodeJS.ProcessEnv;
 
@@ -46,4 +46,19 @@ test("a session id prefix resolves to its unique match", () => {
   assert.equal(matchSessionId(sessions, "def"), "def7654321");
   assert.throws(() => matchSessionId(sessions, "zzz"), /no session matches 'zzz'/);
   assert.throws(() => matchSessionId(sessions, ""), /ambiguous/);
+});
+
+const models = [
+  { key: "openai/gpt-5.3", model: "gpt-5.3", displayName: "GPT-5.3", thinkingLevel: "medium" },
+  { key: "openai/gpt-5.3-mini", model: "gpt-5.3-mini", displayName: "GPT-5.3 Mini", thinkingLevel: "low" },
+  { key: "mock/mock-model", model: "mock-model", displayName: "mock-model", thinkingLevel: "none" },
+] as const;
+
+test("a model query resolves by exact key or id before unique prefix", () => {
+  assert.equal(matchModel([...models], "openai/gpt-5.3").key, "openai/gpt-5.3");
+  assert.equal(matchModel([...models], "gpt-5.3").key, "openai/gpt-5.3");
+  assert.equal(matchModel([...models], "mock").key, "mock/mock-model");
+  assert.throws(() => matchModel([...models], "gpt-4"), /no model matches/);
+  assert.throws(() => matchModel([...models], "gpt"), /'gpt' is ambiguous/);
+  assert.throws(() => matchModel([...models], "zzz"), /no model matches 'zzz'/);
 });

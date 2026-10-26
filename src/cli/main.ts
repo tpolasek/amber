@@ -1,7 +1,9 @@
 import { createInterface } from "node:readline/promises";
-import type { Session, SessionSummary } from "../types.js";
+import type { Session, SessionSummary, ThinkingLevel } from "../types.js";
+import { THINKING_LEVELS } from "../thinking-level.js";
+import { builtInCommand } from "../built-in-commands.js";
 import { Terminal } from "./term.js";
-import { AmberApi } from "./api.js";
+import { AmberApi, type ModelCatalog, type ModelCatalogEntry } from "./api.js";
 import { subscribeSessionEvents, type CliSessionEvent } from "./stream.js";
 import { SessionDisplay } from "./display.js";
 import { DIM, RED } from "./render.js";
@@ -29,9 +31,10 @@ export function cliUsageText(): string {
     "  --history <n>    Turns printed on attach (default 2).",
     "  -h, --help       Show this help and exit.",
     "",
-    "Local commands: /output [chars] /history [n] /list /new [name] /switch <prefix> /quit.",
-    "Other slash commands go to the server. Ctrl-C aborts a running response;",
-    "pressed twice it exits.",
+    "Local commands: /output [chars] /history [n] /list /model [name] /effort [level] /new [name] /switch <prefix> /quit.",
+    "Built-in slash commands run server-side; skills such as /commit go to the",
+    "model, which loads them. Ctrl-C aborts a running response; pressed twice it",
+    "exits.",
   ].join("\n");
 }
 
@@ -127,6 +130,22 @@ export function matchSessionId(sessions: SessionSummary[], prefix: string): stri
   if (matches.length === 0) throw new Error(`no session matches '${prefix}'`);
   if (matches.length > 1) throw new Error(`session prefix '${prefix}' is ambiguous`);
   return matches[0]!.id;
+}
+
+/** An exact key or model id wins; otherwise a unique prefix of either. */
+export function matchModel(models: ModelCatalogEntry[], query: string): ModelCatalogEntry {
+  const exact = models.filter((model) => model.key === query || model.model === query);
+  const matches = exact.length === 1 ? exact
+    : models.filter((model) => model.key.startsWith(query) || model.model.startsWith(query));
+  if (matches.length === 0) throw new Error(`no model matches '${query}'`);
+  if (matches.length > 1) throw new Error(`model '${query}' is ambiguous`);
+  return matches[0]!;
+}
+
+function effectiveModelKey(session: Session, catalog: ModelCatalog): string {
+  return session.model && catalog.models.some((model) => model.key === session.model)
+    ? session.model
+    : catalog.defaultModel;
 }
 
 async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliArgs): Promise<number> {
@@ -255,7 +274,41 @@ async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliA
       display.attach(page.messages, args.history);
       return;
     }
-    if (text.startsWith("/")) {
+    if (text === "/model" || text.startsWith("/model ")) {
+      const query = text.split(/\s+/).slice(1).join(" ");
+      const catalog = await api.modelCatalog();
+      if (query === "") {
+        const current = effectiveModelKey(await api.getSession(currentSessionId), catalog);
+        for (const model of catalog.models) {
+          const marker = model.key === current ? "  (current)" : "";
+          term.line(`${model.key}  ${model.displayName}  thinking ${model.thinkingLevel}${marker}`);
+        }
+        return;
+      }
+      const model = matchModel(catalog.models, query);
+      await api.setModel(currentSessionId, model.key);
+      term.line(term.style(`· model ${model.key}`, DIM));
+      return;
+    }
+    if (text === "/effort" || text.startsWith("/effort ")) {
+      const level = text.split(/\s+/)[1] ?? "";
+      if (level === "") {
+        const catalog = await api.modelCatalog();
+        const session = await api.getSession(currentSessionId);
+        const effort = session.thinkingLevel
+          ?? catalog.models.find((model) => model.key === effectiveModelKey(session, catalog))?.thinkingLevel
+          ?? "none";
+        term.line(term.style(`· effort ${effort}${session.thinkingLevel === undefined ? " (model default)" : ""}`, DIM));
+        return;
+      }
+      if (!THINKING_LEVELS.includes(level as ThinkingLevel)) {
+        throw new Error(`effort must be one of: ${THINKING_LEVELS.join(", ")}`);
+      }
+      await api.setThinkingLevel(currentSessionId, level as ThinkingLevel);
+      term.line(term.style(`· effort ${level}`, DIM));
+      return;
+    }
+    if (text.startsWith("/") && builtInCommand(text)) {
       if (display.active) await queue(api, term, currentSessionId, text, "command");
       else {
         await api.command(currentSessionId, text);
@@ -263,6 +316,7 @@ async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliA
       }
       return;
     }
+    // Skills such as /commit travel as a message; the model loads them via the Skill tool.
     if (display.active) await queue(api, term, currentSessionId, text, "message");
     else await api.sendMessage(currentSessionId, text);
   }

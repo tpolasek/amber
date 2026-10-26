@@ -3,7 +3,8 @@
 // Spawns a real Amber server against a scripted Anthropic-compatible mock,
 // then drives `amber cli` through a full run: streamed markdown (incl. a
 // table), a hidden bash tool result, an AskUserQuestion gate answered from
-// stdin, a server slash command, and /quit.
+// stdin, a server slash command, a skill invoked as /slash message, and
+// /quit.
 //
 // Usage: npm run test:e2e:cli
 import { createServer } from "node:http";
@@ -63,6 +64,10 @@ function createMockProvider() {
         });
       } else if (rounds === 2) {
         toolUse("b1", "Bash", { command: "env | grep E2E_SECRET" });
+      } else if (rounds === 4) {
+        toolUse("sk1", "Skill", { skill: "e2e" });
+      } else if (rounds >= 5) {
+        text("SKILL DONE");
       } else {
         text("ALL DONE");
       }
@@ -121,6 +126,15 @@ await writeFile(join(home, ".amber", "settings.toml"), [
   `auth_url = "http://127.0.0.1:${basePort + 1}"`,
   'default_model = "mock-model"',
   'thinking_level = "none"',
+  "",
+].join("\n"));
+await mkdir(join(home, ".amber", "skills", "e2e"), { recursive: true });
+await writeFile(join(home, ".amber", "skills", "e2e", "SKILL.md"), [
+  "---",
+  "description: E2E test skill",
+  "---",
+  "",
+  "Reply with exactly: SKILL DONE",
   "",
 ].join("\n"));
 
@@ -187,6 +201,28 @@ try {
   type(`/switch ${sessions[0].id.slice(0, 6)}`);
   await waitForCount(output, "· session ", 3, 15_000);
   await waitForCount(output, "ALL DONE", 2, 15_000);
+
+  // /model and /effort: inspect and change the session's model and effort.
+  type("/model");
+  await waitFor(output, "(current)", 15_000);
+  type("/model nope");
+  await waitFor(output, "✗ no model matches 'nope'", 15_000);
+  type("/model mock-model");
+  await waitFor(output, "· model mock/mock-model", 15_000);
+  type("/effort");
+  await waitFor(output, "· effort none (model default)", 15_000);
+  type("/effort banana");
+  await waitFor(output, "✗ effort must be one of:", 15_000);
+  type("/effort high");
+  await waitFor(output, "· effort high", 15_000);
+
+  // Unknown slash commands and skills both travel as messages; the server
+  // refuses the former and loads the latter through the model's Skill tool.
+  type("/nosuch");
+  await waitFor(output, "✗ The /nosuch command doesn't exist", 15_000);
+  type("/e2e");
+  await waitFor(output, "✓ Skill e2e", 15_000);
+  await waitFor(output, "SKILL DONE", 15_000);
   type("/quit");
   check("cli exits cleanly", (await exitCode) === 0);
   check("streams markdown text", output().includes("CLI E2E INTRO"));
@@ -196,6 +232,11 @@ try {
   check("prints the question gate", output().includes("Pick: Pick one") && output().includes("1) One"));
   check("switches sessions and re-attaches history", output().includes(`· session ${sessions[0].id.slice(0, 8)}`));
   check("switch errors name the missing prefix", output().includes("✗ no session matches 'zzzz'"));
+  check("lists models with the current marker", output().includes("mock/mock-model  mock-model  thinking none  (current)"));
+  check("selects a model by id or key", output().includes("· model mock/mock-model"));
+  check("shows and sets the effort level", output().includes("· effort none (model default)") && output().includes("· effort high"));
+  check("refuses unknown slash commands via the message path", output().includes("✗ The /nosuch command doesn't exist"));
+  check("invokes skills as messages through the Skill tool", output().includes("✓ Skill e2e") && output().includes("SKILL DONE"));
   // The AskUserQuestion result is persisted as "Pick one"="One"; JSON.stringify escapes the quotes.
   check("answers post through to the run", mock.requests().some((payload) => JSON.stringify(payload.messages).includes('\\"Pick one\\"=\\"One\\"')));
 } catch (error) {

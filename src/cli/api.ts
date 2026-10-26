@@ -1,4 +1,4 @@
-import type { Message, Session, SessionSummary } from "../types.js";
+import type { Message, Session, SessionSummary, ThinkingLevel } from "../types.js";
 
 async function responseError(response: Response): Promise<string> {
   try {
@@ -6,6 +6,18 @@ async function responseError(response: Response): Promise<string> {
   } catch {
     return `Request failed (${response.status})`;
   }
+}
+
+export interface ModelCatalogEntry {
+  key: string;
+  model: string;
+  displayName: string;
+  thinkingLevel: ThinkingLevel;
+}
+
+export interface ModelCatalog {
+  defaultModel: string;
+  models: ModelCatalogEntry[];
 }
 
 export class AmberApi {
@@ -25,6 +37,25 @@ export class AmberApi {
   async listSessions(): Promise<SessionSummary[]> {
     const body = await this.request("/api/sessions") as { sessions?: SessionSummary[] };
     return body.sessions ?? [];
+  }
+
+  async getSession(sessionId: string): Promise<Session> {
+    const body = await this.request(`/api/sessions/${sessionId}`) as { session?: Session };
+    if (!body.session) throw new Error("Session not found");
+    return body.session;
+  }
+
+  async modelCatalog(): Promise<ModelCatalog> {
+    const body = await this.request("/api/config") as { models?: ModelCatalogEntry[]; defaultModel?: string };
+    return { defaultModel: body.defaultModel ?? "", models: body.models ?? [] };
+  }
+
+  async setModel(sessionId: string, model: string): Promise<void> {
+    await this.request(`/api/sessions/${sessionId}/model`, { method: "POST", body: JSON.stringify({ model }) });
+  }
+
+  async setThinkingLevel(sessionId: string, thinkingLevel: ThinkingLevel): Promise<void> {
+    await this.request(`/api/sessions/${sessionId}/thinking-level`, { method: "POST", body: JSON.stringify({ thinkingLevel }) });
   }
 
   async createSession(path: string, name?: string): Promise<Session> {
