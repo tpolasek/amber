@@ -50,6 +50,11 @@ export class AmberApi {
     return { defaultModel: body.defaultModel ?? "", models: body.models ?? [] };
   }
 
+  async skills(sessionId: string): Promise<string[]> {
+    const body = await this.request(`/api/sessions/${sessionId}/skills`) as { skills?: Array<{ name: string }> };
+    return (body.skills ?? []).map((skill) => skill.name);
+  }
+
   async setModel(sessionId: string, model: string): Promise<void> {
     await this.request(`/api/sessions/${sessionId}/model`, { method: "POST", body: JSON.stringify({ model }) });
   }

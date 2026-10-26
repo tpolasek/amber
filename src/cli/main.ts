@@ -5,6 +5,7 @@ import { builtInCommand } from "../built-in-commands.js";
 import { Terminal } from "./term.js";
 import { AmberApi, type ModelCatalog, type ModelCatalogEntry } from "./api.js";
 import { usageLines } from "./usage.js";
+import { CompletionCache } from "./complete.js";
 import { subscribeSessionEvents, type CliSessionEvent } from "./stream.js";
 import { SessionDisplay } from "./display.js";
 import { DIM, RED } from "./render.js";
@@ -33,6 +34,7 @@ export function cliUsageText(): string {
     "  -h, --help       Show this help and exit.",
     "",
     "Local commands: /output [chars] /history [n] /list /model [name] /effort [level] /usage /new [name] /switch <prefix> /quit.",
+    "Tab completes commands, skills, models, effort levels, and session ids.",
     "Built-in slash commands run server-side; skills such as /commit go to the",
     "model, which loads them. Ctrl-C aborts a running response; pressed twice it",
     "exits.",
@@ -150,8 +152,21 @@ function effectiveModelKey(session: Session, catalog: ModelCatalog): string {
 }
 
 async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliArgs): Promise<number> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "> " });
   let currentSessionId = sessionId;
+  const completion = new CompletionCache(api, () => currentSessionId);
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    prompt: "> ",
+    completer: async (line) => {
+      if (display.gatePending) return [[], line];
+      try {
+        return [await completion.completions(line), line];
+      } catch {
+        return [[], line];
+      }
+    },
+  });
   let subscription = new AbortController();
   let display = createDisplay(currentSessionId);
 
@@ -175,6 +190,7 @@ async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliA
     currentSessionId = id;
     subscription = new AbortController();
     display = createDisplay(id);
+    completion.invalidateSkills();
     rl.setPrompt("> "); // the fresh display starts inactive; a mid-run switch left the prompt blank
     void subscribeSessionEvents(args.server, id, dispatch, subscription.signal);
     term.line(term.style(`· session ${id.slice(0, 8)}`, DIM));
