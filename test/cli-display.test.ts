@@ -29,6 +29,20 @@ function userMessage(id: string, content: string): Message {
   return { id, role: "user", content, createdAt: "", status: "complete" };
 }
 
+/** The status line only paints on an interactive terminal. */
+function ttyHarness(options: DisplayOptions = {}) {
+  const chunks: string[] = [];
+  const out = { write: (chunk: string) => chunks.push(chunk), isTTY: true, columns: 60 };
+  const term = new Terminal(out as never, 3_600_000, 1);
+  const hooks: DisplayHooks = {
+    ask: async () => "",
+    answerQuestions: async () => undefined,
+    planDecision: async () => undefined,
+    onActiveChange: () => undefined,
+  };
+  return { display: new SessionDisplay(term, "s1", hooks, options), text: () => chunks.join("") };
+}
+
 function assistant(id: string, content: string): Message {
   return { id, role: "assistant", content, createdAt: "", status: "complete" };
 }
@@ -104,6 +118,22 @@ test("thinking is only counted unless --thinking is set", async () => {
     message: { ...assistant("a1", "answer"), usage: { input: 10, output: 2 } },
   });
   assert.equal(text(), "\nanswer\n\n· 0→0 tok\n");
+});
+
+test("--thinking drops the char counter from the status line", async () => {
+  const { display, text } = ttyHarness({ streamThinking: true });
+  await display.applyEvent("start", { assistantMessage: assistant("a1", "") });
+  await display.applyEvent("thinking_delta", { thinking: "deep thought\n" });
+  assert.ok(text().includes("deep thought"));
+  assert.ok(!text().includes("thinking 12"));
+});
+
+test("the char counter still shows without --thinking", async () => {
+  const { display, text } = ttyHarness();
+  await display.applyEvent("start", { assistantMessage: assistant("a1", "") });
+  await display.applyEvent("thinking_delta", { thinking: "hidden\n" });
+  assert.ok(text().includes("thinking 7"));
+  assert.ok(!text().includes("hidden"));
 });
 
 test("tool updates print one completion line and never output", async () => {

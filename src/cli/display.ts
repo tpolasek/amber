@@ -279,7 +279,8 @@ export class SessionDisplay {
   private paintStatus(runningTool?: ToolCall): void {
     if (!this.active) return;
     const parts: string[] = [];
-    if (this.thinkingChars > 0) parts.push(`thinking ${this.thinkingChars}`);
+    // With --thinking the text itself streams; the char counter is redundant.
+    if (!this.options.streamThinking && this.thinkingChars > 0) parts.push(`thinking ${this.thinkingChars}`);
     if (this.streamingChars > 0) parts.push(`streaming ${this.streamingChars}`);
     if (runningTool) parts.push(`${toolStatus(runningTool)} …`);
     this.term.status(parts.length > 0 ? parts.join(" · ") : "working…");
