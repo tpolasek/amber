@@ -35,7 +35,7 @@ test("reconnects after the stream drops and replays the snapshot", async () => {
       generation += 1;
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.write(`event: snapshot\ndata: {"generation":${generation}}\n\n`);
-      response.end();
+      if (generation === 1) response.end(); // drop the first connection only
     });
     drops.push(server);
     await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));

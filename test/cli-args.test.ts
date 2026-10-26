@@ -1,8 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseCliArgs, cliUsageText } from "../src/cli/main.js";
+import { parseCliArgs, cliUsageText, matchSessionId } from "../src/cli/main.js";
 
 const env = { AMBER_SERVER: undefined } as NodeJS.ProcessEnv;
+
+const sessions = [
+  { id: "abc1234567", title: "One", createdAt: "2026-01-01", updatedAt: "2026-01-01", messageCount: 0, preview: "" },
+  { id: "def7654321", title: "Two", createdAt: "2026-01-02", updatedAt: "2026-01-02", messageCount: 0, preview: "" },
+];
 
 test("defaults to the local server and two turns of history", () => {
   assert.deepEqual(parseCliArgs([], env), {
@@ -34,4 +39,11 @@ test("--help wins and unknown options throw", () => {
   assert.throws(() => parseCliArgs(["--wat"], env), /unknown option/);
   assert.throws(() => parseCliArgs(["--history", "x"], env), /--history/);
   assert.ok(cliUsageText().includes("amber cli"));
+});
+
+test("a session id prefix resolves to its unique match", () => {
+  assert.equal(matchSessionId(sessions, "abc1234567"), "abc1234567");
+  assert.equal(matchSessionId(sessions, "def"), "def7654321");
+  assert.throws(() => matchSessionId(sessions, "zzz"), /no session matches 'zzz'/);
+  assert.throws(() => matchSessionId(sessions, ""), /ambiguous/);
 });

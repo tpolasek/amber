@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline/promises";
-import type { Session } from "../types.js";
+import type { Session, SessionSummary } from "../types.js";
 import { Terminal } from "./term.js";
 import { AmberApi } from "./api.js";
 import { subscribeSessionEvents, type CliSessionEvent } from "./stream.js";
@@ -29,7 +29,7 @@ export function cliUsageText(): string {
     "  --history <n>    Turns printed on attach (default 2).",
     "  -h, --help       Show this help and exit.",
     "",
-    "Local commands: /output [chars] /history [n] /list /new [name] /quit.",
+    "Local commands: /output [chars] /history [n] /list /new [name] /switch <prefix> /quit.",
     "Other slash commands go to the server. Ctrl-C aborts a running response;",
     "pressed twice it exits.",
   ].join("\n");
@@ -114,17 +114,19 @@ async function resolveSessionId(api: AmberApi, args: CliArgs): Promise<string> {
     return session.id;
   }
   const sessions = await api.listSessions();
-  if (args.session !== undefined) {
-    const matches = sessions.filter((session) => session.id.startsWith(args.session!));
-    if (matches.length === 0) throw new Error(`no session matches '${args.session}'`);
-    if (matches.length > 1) throw new Error(`session prefix '${args.session}' is ambiguous`);
-    return matches[0]!.id;
-  }
+  if (args.session !== undefined) return matchSessionId(sessions, args.session);
   if (sessions.length === 0) {
     const session = await api.createSession(process.cwd());
     return session.id;
   }
   return sessions[0]!.id;
+}
+
+export function matchSessionId(sessions: SessionSummary[], prefix: string): string {
+  const matches = sessions.filter((session) => session.id.startsWith(prefix));
+  if (matches.length === 0) throw new Error(`no session matches '${prefix}'`);
+  if (matches.length > 1) throw new Error(`session prefix '${prefix}' is ambiguous`);
+  return matches[0]!.id;
 }
 
 async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliArgs): Promise<number> {
@@ -146,6 +148,16 @@ async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliA
         }
       },
     });
+  }
+
+  function switchSession(id: string): void {
+    subscription.abort();
+    currentSessionId = id;
+    subscription = new AbortController();
+    display = createDisplay(id);
+    rl.setPrompt("> "); // the fresh display starts inactive; a mid-run switch left the prompt blank
+    void subscribeSessionEvents(args.server, id, dispatch, subscription.signal);
+    term.line(term.style(`· session ${id.slice(0, 8)}`, DIM));
   }
 
   let eventChain: Promise<void> = Promise.resolve();
@@ -232,12 +244,15 @@ async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliA
     if (text === "/new" || text.startsWith("/new ")) {
       const name = text.split(/\s+/).slice(1).join(" ");
       const session: Session = await api.createSession(process.cwd(), name === "" ? undefined : name);
-      subscription.abort();
-      currentSessionId = session.id;
-      subscription = new AbortController();
-      display = createDisplay(currentSessionId);
-      void subscribeSessionEvents(args.server, currentSessionId, dispatch, subscription.signal);
-      term.line(term.style(`· session ${session.id.slice(0, 8)}`, DIM));
+      switchSession(session.id);
+      return;
+    }
+    if (text === "/switch" || text.startsWith("/switch ")) {
+      const prefix = text.split(/\s+/)[1] ?? "";
+      if (prefix === "") throw new Error("/switch requires a session id prefix (see /list)");
+      switchSession(matchSessionId(await api.listSessions(), prefix));
+      const page = await api.history(currentSessionId);
+      display.attach(page.messages, args.history);
       return;
     }
     if (text.startsWith("/")) {

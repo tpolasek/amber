@@ -93,6 +93,18 @@ function waitFor(output, needle, timeoutMs) {
   });
 }
 
+function waitForCount(output, needle, times, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    const poll = () => {
+      if (output().split(needle).length - 1 >= times) return resolve();
+      if (Date.now() > deadline) return reject(new Error(`timed out waiting for ${times}x ${JSON.stringify(needle)}`));
+      setTimeout(poll, 50);
+    };
+    poll();
+  });
+}
+
 const mock = createMockProvider();
 await mock.listen(basePort + 1);
 
@@ -142,7 +154,7 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
 
 const cli = spawn(
   process.execPath,
-  [join(repositoryRoot, "dist", "src", "server.js"), "cli", "--server", `http://127.0.0.1:${basePort + 3}`, "--history", "0", "--new", "cli e2e"],
+  [join(repositoryRoot, "dist", "src", "server.js"), "cli", "--server", `http://127.0.0.1:${basePort + 3}`, "--history", "2", "--new", "cli e2e"],
   { cwd: runDirectory, env: serverEnv, stdio: ["pipe", "pipe", "pipe"] },
 );
 const chunks = [];
@@ -164,6 +176,17 @@ try {
   await waitFor(output, "ALL DONE", 15_000);
   type("/name cli-e2e-title");
   await waitFor(output, "· done", 15_000);
+
+  // /switch: attach to a fresh session, then return to the first by id prefix.
+  type("/new second");
+  await waitForCount(output, "· session ", 2, 15_000);
+  const sessions = (await (await fetch(`http://127.0.0.1:${basePort + 3}/api/sessions`)).json())
+    .sessions.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  type("/switch zzzz");
+  await waitFor(output, "✗ no session matches 'zzzz'", 15_000);
+  type(`/switch ${sessions[0].id.slice(0, 6)}`);
+  await waitForCount(output, "· session ", 3, 15_000);
+  await waitForCount(output, "ALL DONE", 2, 15_000);
   type("/quit");
   check("cli exits cleanly", (await exitCode) === 0);
   check("streams markdown text", output().includes("CLI E2E INTRO"));
@@ -171,6 +194,8 @@ try {
   check("prints one line for the bash tool", output().includes("✓ Bash env | grep E2E_SECRET"));
   check("never prints tool output", !output().includes("classified-value"));
   check("prints the question gate", output().includes("Pick: Pick one") && output().includes("1) One"));
+  check("switches sessions and re-attaches history", output().includes(`· session ${sessions[0].id.slice(0, 8)}`));
+  check("switch errors name the missing prefix", output().includes("✗ no session matches 'zzzz'"));
   // The AskUserQuestion result is persisted as "Pick one"="One"; JSON.stringify escapes the quotes.
   check("answers post through to the run", mock.requests().some((payload) => JSON.stringify(payload.messages).includes('\\"Pick one\\"=\\"One\\"')));
 } catch (error) {
