@@ -1,9 +1,10 @@
-import type { Message, ToolCall } from "../types.js";
+import type { Message, Session, ToolCall } from "../types.js";
 import { formatTokenCountInThousands } from "../client-formatters.js";
 import { Terminal } from "./term.js";
 import { renderMarkdown, DIM, RED } from "./render.js";
 import { createBlockSplitter, type BlockSplitter } from "./blocks.js";
 import { toolLine, toolStatus } from "./tools.js";
+import { meterLine } from "./usage.js";
 
 export type PlanDecision = { approved: true } | { approved: false } | { newSession: true };
 
@@ -111,7 +112,7 @@ export class SessionDisplay {
         break;
       case "done":
         this.finishStream(payload.message as Message);
-        this.printUsage(payload.message as Message);
+        this.printUsage(payload.message as Message, payload.session as Session | undefined);
         this.setActive(false);
         break;
       case "error":
@@ -193,12 +194,17 @@ export class SessionDisplay {
     if (!this.printedOrder.includes(message.id)) this.printedOrder.push(message.id);
   }
 
-  private printUsage(message: Message): void {
-    if (!message.usage) return;
+  private printUsage(message: Message, session?: Session): void {
+    const parts: string[] = [];
+    if (message.usage) {
+      parts.push(
+        `${formatTokenCountInThousands(message.usage.input)}→${formatTokenCountInThousands(message.usage.output)} tok`,
+      );
+    }
+    if (session) parts.push(meterLine(session, message));
+    if (parts.length === 0) return;
     this.term.line("");
-    this.term.line(
-      this.term.style(`· ${formatTokenCountInThousands(message.usage.input)}→${formatTokenCountInThousands(message.usage.output)} tok`, DIM),
-    );
+    this.term.line(this.term.style(`· ${parts.join(" · ")}`, DIM));
   }
 
   private applyToolUpdate(call: ToolCall): void {

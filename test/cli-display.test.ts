@@ -57,6 +57,24 @@ test("start, delta blocks, and done print streamed blocks once with a usage line
   assert.equal(text(), "\none\n\ntwo and more\n\n· 3.1→0.8 tok\n");
 });
 
+test("done also prints the context and cache meters from the session snapshot", async () => {
+  const { display, text } = harness();
+  await display.applyEvent("start", { assistantMessage: assistant("a1", ""), userMessage: userMessage("u1", "prompt") });
+  await display.applyEvent("delta", { text: "answer" });
+  await display.applyEvent("done", {
+    message: { ...assistant("a1", "answer"), usage: { input: 31_000, output: 800, cached: 28_000 } },
+    session: {
+      id: "s1", title: "", createdAt: "", updatedAt: "", messages: [],
+      recentCacheUsage: { input: 1_000, cached: 950, requests: 1 },
+      cacheUsage: { input: 2_000, cached: 1_500, requests: 2 },
+    },
+  });
+  assert.equal(
+    text(),
+    "\nanswer\n\n· 31→0.8 tok · CNTX 31.8k toks · CSH9 95% · CACH 75%\n",
+  );
+});
+
 test("tool updates print one completion line and never output", async () => {
   const { display, text } = harness();
   await display.applyEvent("tool_update", {

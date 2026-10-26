@@ -223,6 +223,10 @@ try {
   type("/e2e");
   await waitFor(output, "✓ Skill e2e", 15_000);
   await waitFor(output, "SKILL DONE", 15_000);
+  // Every finished run prints the CNTX/CSH9/CACH meters; /usage reprints them locally.
+  await waitForCount(output, "CNTX", 2, 15_000);
+  type("/usage");
+  await waitForCount(output, "CNTX", 3, 15_000);
   type("/quit");
   check("cli exits cleanly", (await exitCode) === 0);
   check("streams markdown text", output().includes("CLI E2E INTRO"));
@@ -237,6 +241,8 @@ try {
   check("shows and sets the effort level", output().includes("· effort none (model default)") && output().includes("· effort high"));
   check("refuses unknown slash commands via the message path", output().includes("✗ The /nosuch command doesn't exist"));
   check("invokes skills as messages through the Skill tool", output().includes("✓ Skill e2e") && output().includes("SKILL DONE"));
+  check("prints the context and cache meters after a run", output().includes("CNTX 0k toks · CSH9 -- · CACH --"));
+  check("/usage reports the meters in the cli", output().split("CNTX").length - 1 >= 3);
   // The AskUserQuestion result is persisted as "Pick one"="One"; JSON.stringify escapes the quotes.
   check("answers post through to the run", mock.requests().some((payload) => JSON.stringify(payload.messages).includes('\\"Pick one\\"=\\"One\\"')));
 } catch (error) {

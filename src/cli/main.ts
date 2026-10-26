@@ -4,6 +4,7 @@ import { THINKING_LEVELS } from "../thinking-level.js";
 import { builtInCommand } from "../built-in-commands.js";
 import { Terminal } from "./term.js";
 import { AmberApi, type ModelCatalog, type ModelCatalogEntry } from "./api.js";
+import { usageLines } from "./usage.js";
 import { subscribeSessionEvents, type CliSessionEvent } from "./stream.js";
 import { SessionDisplay } from "./display.js";
 import { DIM, RED } from "./render.js";
@@ -31,7 +32,7 @@ export function cliUsageText(): string {
     "  --history <n>    Turns printed on attach (default 2).",
     "  -h, --help       Show this help and exit.",
     "",
-    "Local commands: /output [chars] /history [n] /list /model [name] /effort [level] /new [name] /switch <prefix> /quit.",
+    "Local commands: /output [chars] /history [n] /list /model [name] /effort [level] /usage /new [name] /switch <prefix> /quit.",
     "Built-in slash commands run server-side; skills such as /commit go to the",
     "model, which loads them. Ctrl-C aborts a running response; pressed twice it",
     "exits.",
@@ -306,6 +307,12 @@ async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliA
       }
       await api.setThinkingLevel(currentSessionId, level as ThinkingLevel);
       term.line(term.style(`· effort ${level}`, DIM));
+      return;
+    }
+    if (text === "/usage") {
+      for (const line of usageLines(await api.getSession(currentSessionId))) {
+        term.line(term.style(`· ${line}`, DIM));
+      }
       return;
     }
     if (text.startsWith("/") && builtInCommand(text)) {
