@@ -179,7 +179,8 @@ function effectiveModelKey(session: Session, catalog: ModelCatalog): string {
 
 async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliArgs): Promise<number> {
   let currentSessionId = sessionId;
-  // readline measures the prompt ignoring escape codes, so it may be styled.
+  // readline measures the prompt ignoring escape codes, so it may be styled;
+  // typed text stays unstyled so echoing costs no extra bytes.
   const promptText = term.style("> ", term.theme.prompt);
   const completion = new CompletionCache(api, () => currentSessionId);
   const rl = createInterface({
