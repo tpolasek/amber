@@ -118,3 +118,16 @@ test("joinRuns merges adjacent runs sharing codes into one escape pair", () => {
   );
   assert.equal(joinRuns([{ text: "a", codes: "2" }], false), "a");
 });
+
+test("fenced code fills each line as a shaded block in color mode", () => {
+  const output = renderMarkdown("```js\nconst x = 1;\n```", { width: 40, color: true, theme: DARK });
+  assert.deepEqual(output.split("\n"), [`\x1b[${DARK.codeBlock}m${"  const x = 1;".padEnd(40)}\x1b[0m`]);
+});
+
+test("code block fills reach the 80-column minimum, never past the width", () => {
+  const narrow = renderMarkdown("```\nshort\n```", { width: 100, color: true, theme: LIGHT }).split("\n")[0]!;
+  assert.equal(displayWidth(narrow.replace(/\x1b\[[0-9;]*m/g, "")), 80);
+  assert.ok(narrow.startsWith(`\x1b[${LIGHT.codeBlock}m`));
+  const clipped = renderMarkdown(`\`\`\`\n${"x".repeat(90)}\n\`\`\``, { width: 60, color: true, theme: DARK }).split("\n")[0]!;
+  assert.equal(displayWidth(clipped.replace(/\x1b\[[0-9;]*m/g, "")), 92); // text plus indent, unpadded
+});

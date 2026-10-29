@@ -10,6 +10,10 @@ export const ITALIC = "3";
 
 export type Run = { text: string; codes?: string };
 
+/** Code-block fills keep a solid block of at least this many columns. */
+const CODE_FILL_MIN = 80;
+const FILL_MARGIN = 3;
+
 /** Styled runs to text: adjacent runs sharing codes share one escape pair. */
 export function joinRuns(runs: Run[], color: boolean): string {
   if (!color) return runs.map((run) => run.text).join("");
@@ -206,13 +210,17 @@ class BlockRenderer {
   private emitCode(body: string): void {
     if (this.blankBefore && this.lines.length > 0) this.lines.push([]);
     this.blankBefore = false;
-    const rest = [...this.restPrefix(), { text: "  ", codes: DIM }];
+    const indent: Run = { text: "  ", codes: this.theme.codeBlock };
+    const rest = [...this.restPrefix(), indent];
     const codeLines = body.replace(/\n$/, "").split("\n");
     codeLines.forEach((codeLine, index) => {
       const prefix = index === 0
-        ? [...this.prefixes.flatMap((p) => (p.used ? p.rest : p.first)), { text: "  ", codes: DIM }]
+        ? [...this.prefixes.flatMap((p) => (p.used ? p.rest : p.first)), indent]
         : rest;
-      this.lines.push([...prefix, { text: codeLine }]);
+      const cells = displayWidth(prefix.map((run) => run.text).join("")) + displayWidth(codeLine);
+      const fill = Math.min(this.options.width, Math.max(cells + FILL_MARGIN, CODE_FILL_MIN)) - cells;
+      const pad = this.options.color ? " ".repeat(Math.max(0, fill)) : "";
+      this.lines.push([...prefix, { text: `${codeLine}${pad}`, codes: this.theme.codeBlock }]);
     });
     for (const prefix of this.prefixes) prefix.used = true;
   }

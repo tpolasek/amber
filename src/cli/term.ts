@@ -65,6 +65,13 @@ export class Terminal {
     this.statusText = null;
   }
 
+  /** Clears the current line, e.g. to retract a freshly painted prompt. */
+  eraseLine(): void {
+    if (!this.interactive) return;
+    this.flush();
+    this.out.write("\r\x1b[K");
+  }
+
   flush(): void {
     if (this.timer !== null) {
       clearTimeout(this.timer);

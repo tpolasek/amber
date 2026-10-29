@@ -198,6 +198,22 @@ async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliA
   let subscription = new AbortController();
   let display = createDisplay(currentSessionId);
 
+  // A send resolves before the SSE "start" flips the display active, so the
+  // finally below can repaint "> " right before the run takes the screen.
+  // Tracking the painted prompt lets activation retract it.
+  let promptOnScreen = false;
+  function paintPrompt(): void {
+    if (promptOnScreen) return;
+    promptOnScreen = true;
+    term.flush();
+    rl.prompt();
+  }
+  function erasePrompt(): void {
+    if (!promptOnScreen) return;
+    promptOnScreen = false;
+    term.eraseLine();
+  }
+
   function createDisplay(id: string): SessionDisplay {
     return new SessionDisplay(term, id, {
       ask: async (prompt) => await rl.question(prompt),
@@ -205,10 +221,8 @@ async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliA
       planDecision: async (sid, toolUseId, decision) => { await api.planDecision(sid, toolUseId, decision); },
       onActiveChange: (active) => {
         rl.setPrompt(active ? "" : promptText);
-        if (!active) {
-          term.flush();
-          rl.prompt();
-        }
+        if (active) erasePrompt();
+        else paintPrompt();
       },
     }, { streamThinking: args.thinking, full: args.full });
   }
@@ -269,10 +283,11 @@ async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliA
   }
 
   rl.on("line", (input) => {
+    promptOnScreen = false; // the enter consumed the line the prompt sat on
     if (display.gatePending) return; // consumed by a gate's rl.question
     const text = input.trim();
     if (text === "") {
-      if (!display.active) rl.prompt();
+      if (!display.active) paintPrompt();
       return;
     }
     void handleInput(text)
@@ -280,8 +295,7 @@ async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliA
         term.line(term.style(`✗ ${error instanceof Error ? error.message : String(error)}`, term.theme.error));
       })
       .finally(() => {
-        term.flush();
-        if (!display.active) rl.prompt();
+        if (!display.active) paintPrompt();
       });
   });
 
@@ -391,7 +405,7 @@ async function repl(api: AmberApi, term: Terminal, sessionId: string, args: CliA
     else await api.sendMessage(currentSessionId, text);
   }
 
-  rl.prompt();
+  paintPrompt();
   return await new Promise<number>(() => undefined); // exits via exit()
 }
 

@@ -40,3 +40,11 @@ test("the pill keeps its bold font switch on both themes", () => {
     assert.ok(theme.statusActive.startsWith("1;"), "the pill font should stay bold");
   }
 });
+
+test("code blocks carry the shaded combo thinking once used", () => {
+  for (const theme of [DARK, LIGHT]) {
+    assert.ok(theme.codeBlock.includes("48;5;"), "code blocks should fill the background");
+    assert.ok(theme.codeBlock.split(";")[0] === "38" || theme.codeBlock.startsWith("38;"), "fg first");
+  }
+  assert.notEqual(LIGHT.codeBlock, DARK.codeBlock);
+});

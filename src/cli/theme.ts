@@ -10,9 +10,11 @@ export interface Theme {
   prompt: string;
   /** `· info` lines: session notices, queue confirmations. */
   meta: string;
-  /** Thinking text: a distinct foreground hue, no background fill. */
+  /** Thinking text: a grey a step lighter than ordinary output, no fill. */
   thinking: string;
   thinkingHeader: string;
+  /** Fenced code blocks: filled background with a distinct foreground. */
+  codeBlock: string;
   /** Tool completion glyphs. */
   toolOk: string;
   toolErr: string;
@@ -40,8 +42,9 @@ export interface Theme {
 export const DARK: Theme = {
   prompt: "1;38;5;208",
   meta: "2",
-  thinking: "38;5;141",
-  thinkingHeader: "1;38;5;141",
+  thinking: "38;5;242",
+  thinkingHeader: "1;38;5;242",
+  codeBlock: "38;5;249;48;5;236",
   toolOk: "32",
   toolErr: "1;31",
   toolName: "1;94",
@@ -61,8 +64,9 @@ export const DARK: Theme = {
 export const LIGHT: Theme = {
   prompt: "1;38;5;166",
   meta: "2",
-  thinking: "38;5;133",
-  thinkingHeader: "1;38;5;133",
+  thinking: "38;5;247",
+  thinkingHeader: "1;38;5;247",
+  codeBlock: "38;5;238;48;5;253",
   toolOk: "32",
   toolErr: "1;31",
   toolName: "1;34",

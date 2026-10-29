@@ -107,3 +107,19 @@ test("the terminal defaults to the dark theme and accepts an override", () => {
   assert.equal(terminal(fakeOut()).theme, DARK);
   assert.equal(new Terminal(fakeOut(), undefined, undefined, LIGHT).theme, LIGHT);
 });
+
+test("eraseLine flushes pending content then clears the line on a TTY", () => {
+  const out = fakeOut();
+  const term = terminal(out);
+  term.line("x");
+  term.eraseLine();
+  assert.deepEqual(out.chunks, ["x\n", "\r\x1b[K"]);
+});
+
+test("eraseLine is a no-op without a TTY", () => {
+  const out = fakeOut(false);
+  const term = new Terminal(out);
+  term.line("x");
+  term.eraseLine();
+  assert.deepEqual(out.chunks, []);
+});
