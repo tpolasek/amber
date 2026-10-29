@@ -10,7 +10,7 @@ export interface Theme {
   prompt: string;
   /** `· info` lines: session notices, queue confirmations. */
   meta: string;
-  /** Thinking block body: shaded background with a distinct foreground. */
+  /** Thinking text: a distinct foreground hue, no background fill. */
   thinking: string;
   thinkingHeader: string;
   /** Tool completion glyphs. */
@@ -30,7 +30,7 @@ export interface Theme {
   code: string;
   /** Ids and markers: session prefixes, the current-model marker. */
   accent: string;
-  /** Busy pill for the status line: filled background plus a font switch. */
+  /** Busy pill for the status line: accent font on the meter strip's fill. */
   statusActive: string;
   /** Usage meter values and separators; meterFill is the subtle footer fill. */
   meterValue: string;
@@ -40,8 +40,8 @@ export interface Theme {
 export const DARK: Theme = {
   prompt: "1;38;5;208",
   meta: "2",
-  thinking: "37;48;5;236",
-  thinkingHeader: "1;37;48;5;236",
+  thinking: "38;5;141",
+  thinkingHeader: "1;38;5;141",
   toolOk: "32",
   toolErr: "1;31",
   toolName: "1;94",
@@ -53,7 +53,7 @@ export const DARK: Theme = {
   diffCtx: "2",
   code: "36",
   accent: "38;5;214",
-  statusActive: "1;30;42",
+  statusActive: "1;38;5;214;48;5;234",
   meterValue: "37",
   meterFill: "48;5;234",
 };
@@ -61,8 +61,8 @@ export const DARK: Theme = {
 export const LIGHT: Theme = {
   prompt: "1;38;5;166",
   meta: "2",
-  thinking: "30;48;5;253",
-  thinkingHeader: "1;30;48;5;253",
+  thinking: "38;5;133",
+  thinkingHeader: "1;38;5;133",
   toolOk: "32",
   toolErr: "1;31",
   toolName: "1;34",
@@ -74,7 +74,7 @@ export const LIGHT: Theme = {
   diffCtx: "2",
   code: "34",
   accent: "38;5;130",
-  statusActive: "1;30;48;5;41",
+  statusActive: "1;38;5;130;48;5;252",
   meterValue: "30",
   meterFill: "48;5;252",
 };

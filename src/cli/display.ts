@@ -1,6 +1,6 @@
 import type { Message, Session, ToolCall } from "../types.js";
 import { Terminal } from "./term.js";
-import { renderMarkdown, clipWidth, displayWidth, joinRuns, type Run } from "./render.js";
+import { renderMarkdown, displayWidth, joinRuns, type Run } from "./render.js";
 import { createBlockSplitter, type BlockSplitter } from "./blocks.js";
 import { toolLine, toolStatusRuns } from "./tools.js";
 import { diffLines, isDiffCall } from "./diff.js";
@@ -31,7 +31,7 @@ interface GateQuestion {
 
 const SKIPPED_KINDS = new Set(["tool-result", "skill", "skill-catalog", "agent-notification"]);
 
-/** Trailing fill for shaded lines: the text plus a margin, capped at the width. */
+/** Trailing fill for the meter strip: the text plus a margin, capped at the width. */
 const FILL_MARGIN = 3;
 
 function fillWidth(contentWidth: number, columns: number): number {
@@ -244,20 +244,10 @@ export class SessionDisplay {
   private printThinkingLine(line: string): void {
     if (!this.thinkingHeaderPrinted) {
       this.term.line("");
-      this.term.line(this.shade("· thinking", this.term.theme.thinkingHeader));
+      this.term.line(this.term.style("· thinking", this.term.theme.thinkingHeader));
       this.thinkingHeaderPrinted = true;
     }
-    this.term.line(this.shade(line));
-  }
-
-  /** One styled line whose background fill hugs the text plus a small
-   * margin, reaching the full width only when the text does; a single
-   * escape pair per line keeps the overhead tiny. */
-  private shade(text: string, codes: string = this.term.theme.thinking): string {
-    if (!this.term.color) return text;
-    const clipped = clipWidth(text, this.term.columns - 1);
-    const cells = displayWidth(clipped);
-    return this.term.style(clipped + " ".repeat(fillWidth(cells, this.term.columns) - cells), codes);
+    this.term.line(line === "" ? "" : this.term.style(line, this.term.theme.thinking));
   }
 
   private finishThinking(): void {
@@ -265,7 +255,7 @@ export class SessionDisplay {
     const remainder = this.thinkingBuffer;
     this.thinkingBuffer = "";
     this.thinkingHeaderPrinted = false;
-    if (remainder !== "") this.term.line(this.shade(remainder));
+    if (remainder !== "") this.term.line(this.term.style(remainder, this.term.theme.thinking));
   }
 
   private printUsage(message: Message, session?: Session): void {
@@ -274,8 +264,8 @@ export class SessionDisplay {
     const runs = meterRuns(session, theme, message, theme.meterFill);
     this.term.line("");
     if (this.term.color) {
-      const pad = fillWidth(displayWidth(joinRuns(runs, false)), this.term.columns)
-        - displayWidth(joinRuns(runs, false));
+      const cells = displayWidth(joinRuns(runs, false));
+      const pad = fillWidth(cells, this.term.columns) - cells;
       if (pad > 0) runs.push({ text: " ".repeat(pad), codes: `${theme.meterValue};${theme.meterFill}` });
     }
     this.term.line(this.term.runs(runs));

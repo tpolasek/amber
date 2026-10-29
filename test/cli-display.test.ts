@@ -279,7 +279,7 @@ test("error events print one line and clear the active flag", async () => {
   assert.equal(activeChanges().at(-1), false);
 });
 
-test("--thinking shades each line with a fill that hugs the text plus a margin", async () => {
+test("--thinking prints each line in the thinking color without padding", async () => {
   const { display, text } = ttyHarness({ streamThinking: true });
   await display.applyEvent("start", { assistantMessage: assistant("a1", "") });
   await display.applyEvent("thinking_delta", { thinking: "deep thought\n" });
@@ -289,8 +289,17 @@ test("--thinking shades each line with a fill that hugs the text plus a margin",
     assert.ok(line.startsWith(`\x1b[${line.includes("· thinking") ? DARK.thinkingHeader : DARK.thinking}m`), line);
     assert.ok(line.endsWith("\x1b[0m"));
     const visibleText = line.replace(/\x1b\[[0-9;]*m/g, "");
-    assert.equal(displayWidth(visibleText), Math.min(60, displayWidth(visibleText.trimEnd()) + 3));
+    assert.equal(displayWidth(visibleText), displayWidth(visibleText.trimEnd()));
   }
+});
+
+test("a blank thinking line prints bare, with no escape pair", async () => {
+  const { display, text } = ttyHarness({ streamThinking: true });
+  await display.applyEvent("start", { assistantMessage: assistant("a1", "") });
+  await display.applyEvent("thinking_delta", { thinking: "one\n\ntwo\n" });
+  const styled = text().split("\n").filter((line) => /^\x1b\[[0-9;]+m/.test(line));
+  assert.equal(styled.length, 3); // header, "one", "two" — not the blank line
+  assert.ok(text().split("\n").includes(""));
 });
 
 test("tool lines color the glyph, name, argument, and tail separately", async () => {

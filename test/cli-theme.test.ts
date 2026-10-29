@@ -8,11 +8,20 @@ test("themeFor maps names to palettes", () => {
   assert.equal(themeFor("light"), LIGHT);
 });
 
-test("thinking slots fill the background and differ per theme", () => {
-  for (const slot of ["thinking", "thinkingHeader"] as const) {
-    assert.ok(DARK[slot].includes("48;5;"), `${slot} should shade the background`);
-    assert.ok(LIGHT[slot].includes("48;5;"), `${slot} should shade the background`);
-    assert.notEqual(LIGHT[slot], DARK[slot]);
+test("thinking is a distinct foreground hue without a background fill", () => {
+  for (const theme of [DARK, LIGHT]) {
+    for (const slot of ["thinking", "thinkingHeader"] as const) {
+      assert.ok(!theme[slot].includes("48;"), `${slot} should carry no background`);
+      assert.ok(theme[slot].includes("38;5;"), `${slot} should be a 256-color hue`);
+    }
+  }
+  assert.notEqual(LIGHT.thinking, DARK.thinking);
+});
+
+test("the busy pill shares the meter strip's fill and accent font", () => {
+  for (const theme of [DARK, LIGHT]) {
+    assert.ok(theme.statusActive.includes(theme.meterFill), "pill should sit on the meter fill");
+    assert.ok(theme.statusActive.includes(theme.accent), "pill font should be the accent color");
   }
 });
 
@@ -26,11 +35,8 @@ test("slots needing a 256-color hue differ per theme; shared ANSI basics do not"
   }
 });
 
-test("the dark busy pill is solid black on ANSI green, not a grey ramp code", () => {
-  assert.equal(DARK.statusActive, "1;30;42");
-});
-
-test("the light busy pill fills the background with a color and switches font", () => {
-  assert.ok(LIGHT.statusActive.includes("48;5;"), "light pill should fill the background");
-  assert.ok(LIGHT.statusActive.startsWith("1;"), "the pill font should switch too");
+test("the pill keeps its bold font switch on both themes", () => {
+  for (const theme of [DARK, LIGHT]) {
+    assert.ok(theme.statusActive.startsWith("1;"), "the pill font should stay bold");
+  }
 });
