@@ -31,6 +31,15 @@ export function joinRuns(runs: Run[], color: boolean): string {
   if (active !== "") out += "\x1b[0m";
   return out;
 }
+
+/** Paints echoed input in the prompt color. Resets inside the chunk (the
+ *  prompt carries its own) are reopened so typed text keeps the color. */
+export function colorEcho(text: string, codes: string): string {
+  if (text === "") return text;
+  const open = `\x1b[${codes}m`;
+  return `${open}${text.replaceAll("\x1b[0m", `\x1b[0m${open}`)}\x1b[0m`;
+}
+
 type Line = Run[];
 type Token = ReturnType<InstanceType<typeof MarkdownIt>["parse"]>[number];
 

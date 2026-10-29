@@ -57,7 +57,7 @@ function visible(text: string): string {
 test("attach prints a dim user line and rendered assistant markdown", () => {
   const { display, text } = harness();
   display.attach([userMessage("u1", "hello there"), assistant("a1", "one\n\ntwo")], 2);
-  assert.equal(text(), "\n> hello there\n\none\n\ntwo\n");
+  assert.equal(text(), "\n> hello there\n\nAssistant\none\n\ntwo\n");
 });
 
 test("attach honors the limit", () => {
@@ -75,7 +75,7 @@ test("start, delta blocks, and done print streamed blocks once", async () => {
   await display.applyEvent("done", {
     message: { ...assistant("a1", "one\n\ntwo and more"), usage: { input: 3_100, output: 800 } },
   });
-  assert.equal(text(), "\none\n\ntwo and more\n");
+  assert.equal(text(), "\nAssistant\none\n\ntwo and more\n");
 });
 
 test("done also prints the context and cache meters from the session snapshot", async () => {
@@ -92,7 +92,7 @@ test("done also prints the context and cache meters from the session snapshot", 
   });
   assert.equal(
     text(),
-    "\nanswer\n\nCNTX 31.8k toks · CSH9 95% · CACH 75%\n",
+    "\nAssistant\nanswer\n\nCNTX 31.8k toks · CSH9 95% · CACH 75%\n",
   );
 });
 
@@ -130,7 +130,7 @@ test("--thinking streams thinking lines before the answer", async () => {
   await display.applyEvent("done", {
     message: { ...assistant("a1", "answer"), usage: { input: 10, output: 2 } },
   });
-  assert.equal(text(), "\n· thinking\nconsider this\nand that\n\nanswer\n");
+  assert.equal(text(), "\n· thinking\nconsider this\nand that\n\nAssistant\nanswer\n");
 });
 
 test("thinking is only counted unless --thinking is set", async () => {
@@ -141,7 +141,7 @@ test("thinking is only counted unless --thinking is set", async () => {
   await display.applyEvent("done", {
     message: { ...assistant("a1", "answer"), usage: { input: 10, output: 2 } },
   });
-  assert.equal(text(), "\nanswer\n");
+  assert.equal(text(), "\nAssistant\nanswer\n");
 });
 
 test("--thinking drops the char counter from the status line", async () => {
@@ -174,7 +174,7 @@ test("streaming status pills the state word and accents the counter", async () =
   const status = text().split("\r\x1b[K").pop()!;
   assert.equal(
     status,
-    `\x1b[${DARK.statusActive}m streaming \x1b[0m\x1b[${DARK.accent}m3\x1b[0m`,
+    `\x1b[${DARK.statusActive}m streaming \x1b[0m\x1b[${DARK.accent};${DARK.meterFill}m3\x1b[0m`,
   );
 });
 
@@ -314,4 +314,34 @@ test("tool lines color the glyph, name, argument, and tail separately", async ()
     `\x1b[${DARK.toolOk}m✓\x1b[0m\x1b[${DARK.toolName}m Bash\x1b[0m\x1b[${DARK.toolArg}m npm test\x1b[0m`
       + `\x1b[${DARK.toolTail}m · exit 0 · 2.1s\x1b[0m`,
   );
+});
+
+test("the assistant header tags the reply once on the meter strip's fill", async () => {
+  const { display, text } = ttyHarness();
+  await display.applyEvent("start", { assistantMessage: assistant("a1", "") });
+  await display.applyEvent("delta", { text: "hello\n\nworld" });
+  await display.applyEvent("done", { message: assistant("a1", "hello\n\nworld") });
+  // once while streaming; the snapshot/history path must not repeat it
+  await display.applyEvent("snapshot", {
+    session: { active: false, messages: [userMessage("u1", "q"), assistant("a1", "hello\n\nworld")] },
+  });
+  assert.equal(text().split("Assistant").length - 1, 1);
+  assert.ok(text().includes(`\x1b[${DARK.assistantHeader}mAssistant\x1b[0m`));
+});
+
+test("every status segment sits on the meter fill, not just the pill", async () => {
+  const { display, text } = ttyHarness();
+  await display.applyEvent("start", { assistantMessage: assistant("a1", "") });
+  await display.applyEvent("delta", { text: "abc" });
+  await display.applyEvent("tool_update", {
+    messageId: "a1",
+    toolCall: { id: "t1", name: "Bash", input: { command: "npm test" }, status: "running", output: "" },
+  });
+  const status = text().split("\r\x1b[K").pop()!;
+  const visible = status.replace(/\x1b\[[0-9;]*m/g, "");
+  assert.equal(visible, " streaming 3 · Bash npm test …");
+  // every run between one SGR pair and the next carries the fill
+  const segments = status.split("\x1b[0m").filter((part) => part !== "");
+  assert.equal(segments.length, 6); // pill, counter, separator, tool name, arg, ellipsis
+  for (const segment of segments) assert.ok(segment.includes(DARK.meterFill), segment);
 });

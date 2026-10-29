@@ -34,6 +34,8 @@ export interface Theme {
   accent: string;
   /** Busy pill for the status line: accent font on the meter strip's fill. */
   statusActive: string;
+  /** The `Assistant` tag above a reply: dark magenta on the meter fill. */
+  assistantHeader: string;
   /** Usage meter values and separators; meterFill is the subtle footer fill. */
   meterValue: string;
   meterFill: string;
@@ -57,6 +59,7 @@ export const DARK: Theme = {
   code: "36",
   accent: "38;5;214",
   statusActive: "1;38;5;214;48;5;234",
+  assistantHeader: "1;35;48;5;234",
   meterValue: "37",
   meterFill: "48;5;234",
 };
@@ -79,6 +82,7 @@ export const LIGHT: Theme = {
   code: "34",
   accent: "38;5;130",
   statusActive: "1;38;5;130;48;5;252",
+  assistantHeader: "1;35;48;5;252",
   meterValue: "30",
   meterFill: "48;5;252",
 };

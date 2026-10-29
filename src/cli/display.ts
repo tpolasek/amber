@@ -60,6 +60,8 @@ export class SessionDisplay {
   private thinkingChars = 0;
   private thinkingBuffer = "";
   private thinkingHeaderPrinted = false;
+  private assistantHeaderId: string | null = null;
+  private suppressNextGap = false;
   private lastCompletedTool: ToolCall | null = null;
 
   constructor(
@@ -110,6 +112,7 @@ export class SessionDisplay {
         this.finishThinking();
         const text = String(payload.text ?? "");
         this.ensureSplitter();
+        this.printAssistantHeader(this.streamingMessageId ?? "stream");
         for (const block of this.splitter!.push(text)) this.printStreamBlock(block);
         this.streamingChars += text.length;
         this.paintStatus();
@@ -165,13 +168,13 @@ export class SessionDisplay {
         break;
       case "compaction_start":
         this.setActive(true);
-        this.term.status(this.term.runs([this.busyPill("compacting…")]));
+        this.paintStatusLine([this.busyPill("compacting…")]);
         break;
       case "compaction_progress":
-        this.term.status(this.term.runs([
+        this.paintStatusLine([
           this.busyPill("compacting…"),
           { text: ` ${payload.generatedCharacters ?? 0} chars`, codes: this.term.theme.accent },
-        ]));
+        ]);
         break;
       case "compaction_complete":
         this.term.line(this.term.style("· compacted", this.term.theme.meta));
@@ -217,10 +220,21 @@ export class SessionDisplay {
       color: this.term.color,
       theme: this.term.theme,
     });
-    this.term.line("");
+    if (this.suppressNextGap) this.suppressNextGap = false; // the header already broke the line
+    else this.term.line("");
     if (rendered !== "") this.term.line(rendered);
     const id = this.streamingMessageId ?? "stream";
     this.printedBlocks.set(id, (this.printedBlocks.get(id) ?? 0) + 1);
+  }
+
+  /** A tag on the meter strip's fill marking the start of a reply; one per
+   *  message id so live streaming and history/snapshots never duplicate it. */
+  private printAssistantHeader(messageId: string): void {
+    if (this.assistantHeaderId === messageId) return;
+    this.assistantHeaderId = messageId;
+    this.term.line("");
+    this.term.line(this.term.style("Assistant", this.term.theme.assistantHeader));
+    this.suppressNextGap = true;
   }
 
   private finishStream(message: Message): void {
@@ -304,7 +318,19 @@ export class SessionDisplay {
       ? [this.busyPill("working…")]
       : segments.reduce<Run[]>((joined, segment) =>
         joined.length === 0 ? segment : [...joined, { text: " · ", codes: theme.meta }, ...segment], []);
-    this.term.status(this.term.runs(runs));
+    this.paintStatusLine(runs);
+  }
+
+  /** The status bar is one filled strip: the meter fill under every run, so
+   *  counters, separators, and the running tool all sit on the same bar. */
+  private paintStatusLine(runs: Run[]): void {
+    const fill = this.term.theme.meterFill;
+    const filled = runs.map((run) => {
+      const codes = run.codes ?? "";
+      if (codes.includes(fill)) return run;
+      return { ...run, codes: codes === "" ? fill : `${codes};${fill}` };
+    });
+    this.term.status(this.term.runs(filled));
   }
 
   /** Filled busy-state pill; padded to a block only when color is on. */
@@ -345,8 +371,10 @@ export class SessionDisplay {
     }
     const seen = this.printedBlocks.get(message.id) ?? 0;
     const blocks = closedBlocksOf(message.content);
+    if (seen === 0 && blocks.length > 0) this.printAssistantHeader(message.id);
     for (let index = seen; index < blocks.length; index += 1) {
-      this.term.line("");
+      if (this.suppressNextGap) this.suppressNextGap = false;
+      else this.term.line("");
       const rendered = renderMarkdown(blocks[index]!, {
         width: this.term.columns,
         color: this.term.color,

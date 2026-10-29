@@ -26,7 +26,7 @@ test("the busy pill shares the meter strip's fill and accent font", () => {
 });
 
 test("slots needing a 256-color hue differ per theme; shared ANSI basics do not", () => {
-  for (const slot of ["prompt", "thinking", "thinkingHeader", "toolName", "error", "diffDel", "code", "accent", "statusActive", "meterValue", "meterFill"] as const) {
+  for (const slot of ["prompt", "thinking", "thinkingHeader", "toolName", "error", "diffDel", "code", "accent", "statusActive", "assistantHeader", "meterValue", "meterFill"] as const) {
     assert.notEqual(LIGHT[slot], DARK[slot], `${slot} should be theme-specific`);
   }
   for (const slot of ["meta", "toolOk", "toolErr", "toolArg", "toolTail", "diffAdd", "diffCtx"] as const) {
@@ -47,4 +47,12 @@ test("code blocks carry the shaded combo thinking once used", () => {
     assert.ok(theme.codeBlock.split(";")[0] === "38" || theme.codeBlock.startsWith("38;"), "fg first");
   }
   assert.notEqual(LIGHT.codeBlock, DARK.codeBlock);
+});
+
+test("the assistant header is regular magenta, not the accent", () => {
+  for (const theme of [DARK, LIGHT]) {
+    assert.ok(theme.assistantHeader.includes(";35;"), "regular ANSI magenta");
+    assert.ok(theme.assistantHeader.includes(theme.meterFill), "keeps the strip fill");
+    assert.ok(!theme.assistantHeader.includes(theme.accent), "must not reuse the accent");
+  }
 });
