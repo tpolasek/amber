@@ -1,11 +1,11 @@
 import type { Message, Session, ToolCall } from "../types.js";
 import { formatTokenCountInThousands } from "../client-formatters.js";
 import { Terminal } from "./term.js";
-import { renderMarkdown, DIM, RED } from "./render.js";
+import { renderMarkdown, clipWidth, displayWidth, type Run } from "./render.js";
 import { createBlockSplitter, type BlockSplitter } from "./blocks.js";
-import { toolLine, toolStatus } from "./tools.js";
+import { toolLine, toolStatusRuns } from "./tools.js";
 import { diffLines, isDiffCall } from "./diff.js";
-import { meterLine } from "./usage.js";
+import { meterRuns } from "./usage.js";
 
 export type PlanDecision = { approved: true } | { approved: false } | { newSession: true };
 
@@ -141,15 +141,15 @@ export class SessionDisplay {
       case "error":
         this.finishThinking();
         this.splitter = null;
-        this.term.line(this.term.style(`✗ error: ${truncate(String(payload.error ?? ""), 160)}`, RED));
+        this.term.line(this.term.style(`✗ error: ${truncate(String(payload.error ?? ""), 160)}`, this.term.theme.error));
         this.term.flush();
         this.setActive(false);
         break;
       case "session_named":
-        this.term.line(this.term.style(`· named: ${truncate(String(payload.title ?? ""), 60)}`, DIM));
+        this.term.line(this.term.style(`· named: ${truncate(String(payload.title ?? ""), 60)}`, this.term.theme.meta));
         break;
       case "plan_mode_state":
-        this.term.line(this.term.style(`· plan mode ${payload.planMode?.active ? "on" : "off"}`, DIM));
+        this.term.line(this.term.style(`· plan mode ${payload.planMode?.active ? "on" : "off"}`, this.term.theme.meta));
         break;
       case "plan_mode_request":
         await this.handlePlanModeRequest(payload);
@@ -159,17 +159,20 @@ export class SessionDisplay {
         break;
       case "compaction_start":
         this.setActive(true);
-        this.term.status("compacting…");
+        this.term.status(this.term.runs([this.busyPill("compacting…")]));
         break;
       case "compaction_progress":
-        this.term.status(`compacting… ${payload.generatedCharacters ?? 0} chars`);
+        this.term.status(this.term.runs([
+          this.busyPill("compacting…"),
+          { text: ` ${payload.generatedCharacters ?? 0} chars`, codes: this.term.theme.accent },
+        ]));
         break;
       case "compaction_complete":
-        this.term.line(this.term.style("· compacted", DIM));
+        this.term.line(this.term.style("· compacted", this.term.theme.meta));
         this.setActive(false);
         break;
       case "compaction_error":
-        this.term.line(this.term.style(`✗ compaction failed: ${truncate(String(payload.error ?? ""), 120)}`, RED));
+        this.term.line(this.term.style(`✗ compaction failed: ${truncate(String(payload.error ?? ""), 120)}`, this.term.theme.error));
         this.setActive(false);
         break;
       default:
@@ -203,7 +206,11 @@ export class SessionDisplay {
   }
 
   private printStreamBlock(block: string): void {
-    const rendered = renderMarkdown(block, { width: this.term.columns, color: this.term.color });
+    const rendered = renderMarkdown(block, {
+      width: this.term.columns,
+      color: this.term.color,
+      theme: this.term.theme,
+    });
     this.term.line("");
     if (rendered !== "") this.term.line(rendered);
     const id = this.streamingMessageId ?? "stream";
@@ -231,10 +238,19 @@ export class SessionDisplay {
   private printThinkingLine(line: string): void {
     if (!this.thinkingHeaderPrinted) {
       this.term.line("");
-      this.term.line(this.term.style("· thinking", DIM));
+      this.term.line(this.shade("· thinking", this.term.theme.thinkingHeader));
       this.thinkingHeaderPrinted = true;
     }
-    this.term.line(line === "" ? "" : this.term.style(line, DIM));
+    this.term.line(this.shade(line));
+  }
+
+  /** One styled line padded to the terminal width so the background fills a
+   * solid block; a single escape pair per line keeps the overhead tiny. */
+  private shade(text: string, codes: string = this.term.theme.thinking): string {
+    if (!this.term.color) return text;
+    const width = this.term.columns;
+    const clipped = clipWidth(text, width - 1);
+    return this.term.style(`${clipped}${" ".repeat(width - displayWidth(clipped))}`, codes);
   }
 
   private finishThinking(): void {
@@ -242,20 +258,24 @@ export class SessionDisplay {
     const remainder = this.thinkingBuffer;
     this.thinkingBuffer = "";
     this.thinkingHeaderPrinted = false;
-    if (remainder !== "") this.term.line(this.term.style(remainder, DIM));
+    if (remainder !== "") this.term.line(this.shade(remainder));
   }
 
   private printUsage(message: Message, session?: Session): void {
-    const parts: string[] = [];
+    const parts: Run[] = [];
     if (message.usage) {
       parts.push(
-        `${formatTokenCountInThousands(message.usage.input)}→${formatTokenCountInThousands(message.usage.output)} tok`,
+        { text: `${formatTokenCountInThousands(message.usage.input)}→${formatTokenCountInThousands(message.usage.output)}` },
+        { text: " tok", codes: this.term.theme.accent },
       );
     }
-    if (session) parts.push(meterLine(session, message));
+    if (session) {
+      if (parts.length > 0) parts.push({ text: " · ", codes: this.term.theme.meta });
+      parts.push(...meterRuns(session, this.term.theme, message));
+    }
     if (parts.length === 0) return;
     this.term.line("");
-    this.term.line(this.term.style(`· ${parts.join(" · ")}`, DIM));
+    this.term.line(this.term.runs([{ text: "· ", codes: this.term.theme.meta }, ...parts]));
   }
 
   private applyToolUpdate(call: ToolCall): void {
@@ -267,10 +287,9 @@ export class SessionDisplay {
     this.finishThinking();
     this.printedToolIds.add(call.id);
     this.lastCompletedTool = call;
-    const codes = call.status === "complete" ? DIM : RED;
-    this.term.line(this.term.style(toolLine(call), codes));
+    this.term.line(this.term.runs(toolLine(call, this.term.theme)));
     if (this.options.full && isDiffCall(call)) {
-      for (const line of diffLines(call.output, this.term.columns)) {
+      for (const line of diffLines(call.output, this.term.columns, this.term.theme)) {
         this.term.line(line.codes === "" ? line.text : this.term.style(line.text, line.codes));
       }
     }
@@ -278,12 +297,31 @@ export class SessionDisplay {
 
   private paintStatus(runningTool?: ToolCall): void {
     if (!this.active) return;
-    const parts: string[] = [];
+    const theme = this.term.theme;
+    const segments: Run[][] = [];
     // With --thinking the text itself streams; the char counter is redundant.
-    if (!this.options.streamThinking && this.thinkingChars > 0) parts.push(`thinking ${this.thinkingChars}`);
-    if (this.streamingChars > 0) parts.push(`streaming ${this.streamingChars}`);
-    if (runningTool) parts.push(`${toolStatus(runningTool)} …`);
-    this.term.status(parts.length > 0 ? parts.join(" · ") : "working…");
+    if (!this.options.streamThinking && this.thinkingChars > 0) {
+      segments.push([this.busyPill("thinking"), { text: `${this.countGap()}${this.thinkingChars}`, codes: theme.accent }]);
+    }
+    if (this.streamingChars > 0) {
+      segments.push([this.busyPill("streaming"), { text: `${this.countGap()}${this.streamingChars}`, codes: theme.accent }]);
+    }
+    if (runningTool) segments.push([...toolStatusRuns(runningTool, theme), { text: " …", codes: theme.meta }]);
+    const runs: Run[] = segments.length === 0
+      ? [this.busyPill("working…")]
+      : segments.reduce<Run[]>((joined, segment) =>
+        joined.length === 0 ? segment : [...joined, { text: " · ", codes: theme.meta }, ...segment], []);
+    this.term.status(this.term.runs(runs));
+  }
+
+  /** Filled busy-state pill; padded to a block only when color is on. */
+  private busyPill(label: string): Run {
+    return { text: this.term.color ? ` ${label} ` : label, codes: this.term.theme.statusActive };
+  }
+
+  /** The counter sits inside the pill's trailing pad, so gap only without color. */
+  private countGap(): string {
+    return this.term.color ? "" : " ";
   }
 
   private printUser(message: Message): void {
@@ -291,7 +329,10 @@ export class SessionDisplay {
     this.printedUserIds.add(message.id);
     this.markPrinted(message.id);
     this.term.line("");
-    this.term.line(this.term.style(`> ${truncate(message.content, this.term.columns - 4)}`, DIM));
+    this.term.line(this.term.runs([
+      { text: "> ", codes: this.term.theme.prompt },
+      { text: truncate(message.content, this.term.columns - 4), codes: this.term.theme.meta },
+    ]));
   }
 
   /** History/snapshot path: prints blocks of `message` beyond what was printed. */
@@ -305,7 +346,7 @@ export class SessionDisplay {
         this.markPrinted(message.id);
         this.printedBlocks.set(message.id, blocksOf(message.content));
         this.term.line("");
-        this.term.line(this.term.style(`· ${truncate(firstLine(message.content), this.term.columns - 4)}`, DIM));
+        this.term.line(this.term.style(`· ${truncate(firstLine(message.content), this.term.columns - 4)}`, this.term.theme.meta));
       }
       return;
     }
@@ -313,7 +354,11 @@ export class SessionDisplay {
     const blocks = closedBlocksOf(message.content);
     for (let index = seen; index < blocks.length; index += 1) {
       this.term.line("");
-      const rendered = renderMarkdown(blocks[index]!, { width: this.term.columns, color: this.term.color });
+      const rendered = renderMarkdown(blocks[index]!, {
+        width: this.term.columns,
+        color: this.term.color,
+        theme: this.term.theme,
+      });
       if (rendered !== "") this.term.line(rendered);
     }
     if (!this.printedOrder.includes(message.id)) this.markPrinted(message.id);
@@ -331,12 +376,24 @@ export class SessionDisplay {
       const answers: Record<string, string> = {};
       for (const question of (payload.questions ?? []) as GateQuestion[]) {
         this.term.line("");
-        this.term.line(question.header ? `${question.header}: ${question.question}` : question.question);
+        this.term.line(question.header
+          ? this.term.runs([
+            { text: question.header, codes: this.term.theme.prompt },
+            { text: `: ${question.question}` },
+          ])
+          : question.question);
         question.options.forEach((option, index) => {
-          const description = option.description ? ` — ${truncate(option.description, 60)}` : "";
-          this.term.line(`  ${index + 1}) ${option.label}${description}`);
+          const description = option.description
+            ? [{ text: ` — ${truncate(option.description, 60)}`, codes: this.term.theme.meta }]
+            : [];
+          this.term.line(this.term.runs([
+            { text: "  " },
+            { text: `${index + 1}) `, codes: this.term.theme.accent },
+            { text: option.label },
+            ...description,
+          ]));
         });
-        if (question.multiSelect) this.term.line("  (comma-separated numbers)");
+        if (question.multiSelect) this.term.line(this.term.style("  (comma-separated numbers)", this.term.theme.meta));
         const input = await this.hooks.ask("answer: ");
         answers[question.question] = this.parseAnswer(input, question);
       }
@@ -373,7 +430,11 @@ export class SessionDisplay {
         decision = answer === "y" || answer === "yes" ? { approved: true } : { approved: false };
       } else {
         this.term.line("");
-        const plan = renderMarkdown(String(payload.plan ?? ""), { width: this.term.columns, color: this.term.color });
+        const plan = renderMarkdown(String(payload.plan ?? ""), {
+          width: this.term.columns,
+          color: this.term.color,
+          theme: this.term.theme,
+        });
         if (plan !== "") this.term.line(plan);
         const answer = (await this.hooks.ask("approve plan? [y]es / [n]o / [s]eparate session ")).trim().toLowerCase();
         decision = answer.startsWith("s") ? { newSession: true } : answer.startsWith("y") ? { approved: true } : { approved: false };

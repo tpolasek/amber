@@ -1,6 +1,8 @@
 import type { CacheUsage, Message, Session, TokenUsage } from "../types.js";
 import { cacheHitRatio, formatCacheHitPercentage } from "../cache-usage.js";
 import { formatTokenCountInThousands } from "../client-formatters.js";
+import type { Run } from "./render.js";
+import type { Theme } from "./theme.js";
 
 /** Active context: the compaction estimate when set, else the newest request's tokens. */
 export function contextTokens(session: Session, latest?: Message): number {
@@ -9,22 +11,39 @@ export function contextTokens(session: Session, latest?: Message): number {
   return usage ? usage.total ?? usage.input + usage.output : 0;
 }
 
-/** The footer's three meters: context, recent-9 and session cache hit rates. */
-export function meterLine(session: Session, latest?: Message): string {
-  return `CNTX ${formatTokenCountInThousands(contextTokens(session, latest))}k toks`
-    + ` · CSH9 ${percentage(session.recentCacheUsage)}`
-    + ` · CACH ${percentage(session.cacheUsage)}`;
+/** A `LABEL value` meter: accented label, plain value — values carry the numbers. */
+function meter(label: string, value: string, theme: Theme): Run[] {
+  return [{ text: label, codes: theme.accent }, { text: ` ${value}` }];
 }
 
-export function usageLines(session: Session): string[] {
-  const lines = [meterLine(session)];
+function separator(theme: Theme): Run {
+  return { text: " · ", codes: theme.meta };
+}
+
+/** The footer's three meters: context, recent-9 and session cache hit rates. */
+export function meterRuns(session: Session, theme: Theme, latest?: Message): Run[] {
+  return [
+    ...meter("CNTX", `${formatTokenCountInThousands(contextTokens(session, latest))}k toks`, theme),
+    separator(theme),
+    ...meter("CSH9", percentage(session.recentCacheUsage), theme),
+    separator(theme),
+    ...meter("CACH", percentage(session.cacheUsage), theme),
+  ];
+}
+
+export function usageRuns(session: Session, theme: Theme): Run[][] {
+  const lines: Run[][] = [meterRuns(session, theme)];
   const cache = session.cacheUsage;
   if (cache) {
-    lines.push(`cache ${cache.cached.toLocaleString()} of ${cache.input.toLocaleString()} input tokens`
-      + ` over ${cache.requests.toLocaleString()} request${cache.requests === 1 ? "" : "s"}`);
+    lines.push(meter(
+      "cache",
+      `${cache.cached.toLocaleString()} of ${cache.input.toLocaleString()} input tokens`
+        + ` over ${cache.requests.toLocaleString()} request${cache.requests === 1 ? "" : "s"}`,
+      theme,
+    ));
   }
   const latest = newestUsage(session.messages);
-  if (latest) lines.push(`latest ${tokens(latest.input)}→${tokens(latest.output)} tok`);
+  if (latest) lines.push(meter("latest", `${tokens(latest.input)}→${tokens(latest.output)} tok`, theme));
   return lines;
 }
 

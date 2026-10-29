@@ -1,16 +1,32 @@
 // src/cli/render.ts
 import MarkdownIt from "markdown-it";
+import { DARK, type Theme } from "./theme.js";
 
-export interface RenderOptions { width: number; color: boolean; }
+export interface RenderOptions { width: number; color: boolean; theme?: Theme }
 
 export const BOLD = "1";
 export const DIM = "2";
 export const ITALIC = "3";
-export const CYAN = "36";
-export const RED = "31";
-export const GREEN = "32";
 
-type Run = { text: string; codes?: string };
+export type Run = { text: string; codes?: string };
+
+/** Styled runs to text: adjacent runs sharing codes share one escape pair. */
+export function joinRuns(runs: Run[], color: boolean): string {
+  if (!color) return runs.map((run) => run.text).join("");
+  let out = "";
+  let active = "";
+  for (const run of runs) {
+    const codes = run.codes ?? "";
+    if (codes !== active) {
+      if (active !== "") out += "\x1b[0m";
+      if (codes !== "") out += `\x1b[${codes}m`;
+      active = codes;
+    }
+    out += run.text;
+  }
+  if (active !== "") out += "\x1b[0m";
+  return out;
+}
 type Line = Run[];
 type Token = ReturnType<InstanceType<typeof MarkdownIt>["parse"]>[number];
 
@@ -24,6 +40,20 @@ export function displayWidth(text: string): number {
     width += isWide(code) ? 2 : 1;
   }
   return width;
+}
+
+/** Clips text to a display width, marking the cut with an ellipsis. */
+export function clipWidth(text: string, max: number): string {
+  if (displayWidth(text) <= max) return text;
+  let out = "";
+  let width = 0;
+  for (const character of text) {
+    const characterWidth = displayWidth(character);
+    if (width + characterWidth > max - 1) return `${out}…`;
+    out += character;
+    width += characterWidth;
+  }
+  return out;
 }
 
 function isZeroWidth(code: number): boolean {
@@ -95,7 +125,7 @@ function wrapRuns(runs: Run[], width: number): Line[] {
 }
 
 /** Inline tokens to styled lines (hardbreaks and softbreaks split lines). */
-function renderInline(children: Token[] | null | undefined): Line[] {
+function renderInline(children: Token[] | null | undefined, theme: Theme): Line[] {
   const lines: Line[] = [[]];
   const styles: string[] = [];
   const link = { href: "", text: "" };
@@ -108,7 +138,7 @@ function renderInline(children: Token[] | null | undefined): Line[] {
   for (const token of children ?? []) {
     switch (token.type) {
       case "text": push(token.content, current()); break;
-      case "code_inline": push(token.content, joinCodes(current(), CYAN)); break;
+      case "code_inline": push(token.content, joinCodes(current(), theme.code)); break;
       case "softbreak": lines.push([]); break;
       case "hardbreak": lines.push([]); break;
       case "strong_open": styles.push(BOLD); break;
@@ -123,7 +153,7 @@ function renderInline(children: Token[] | null | undefined): Line[] {
       case "link_close": {
         const href = link.href;
         link.href = "";
-        if (href !== "" && href !== link.text) push(` (${href})`, DIM);
+        if (href !== "" && href !== link.text) push(` (${href})`, theme.meta);
         break;
       }
       case "image": {
@@ -142,8 +172,11 @@ class BlockRenderer {
   private blankBefore = false;
   private readonly prefixes: Array<{ first: Run[]; rest: Run[]; used: boolean }> = [];
   private readonly listStack: Array<{ ordered: boolean; index: number }> = [];
+  private readonly theme: Theme;
 
-  constructor(private readonly options: RenderOptions) {}
+  constructor(private readonly options: RenderOptions) {
+    this.theme = options.theme ?? DARK;
+  }
 
   private blank(): void {
     if (this.prefixes.length === 0) this.blankBefore = true;
@@ -196,7 +229,7 @@ class BlockRenderer {
       else if (token.type === "tr_open") rows.push({ header, cells: [], align: [] });
       else if (token.type === "th_open" || token.type === "td_open") {
         const row = rows[rows.length - 1]!;
-        row.cells.push(renderInline(tokens[i + 1]?.children).flat());
+        row.cells.push(renderInline(tokens[i + 1]?.children, this.theme).flat());
         const style = String(token.attrGet?.("style") ?? "");
         row.align.push(style.includes("right") ? "right" : style.includes("center") ? "center" : "left");
       }
@@ -256,14 +289,14 @@ class BlockRenderer {
       switch (token.type) {
         case "heading_open": {
           this.blank();
-          const runs = renderInline(tokens[i + 1]?.children).flat().map((run) => ({ ...run, codes: BOLD }));
+          const runs = renderInline(tokens[i + 1]?.children, this.theme).flat().map((run) => ({ ...run, codes: BOLD }));
           this.emit([runs]);
           i += 2;
           break;
         }
         case "paragraph_open": {
           this.blank();
-          const wrapped = renderInline(tokens[i + 1]?.children).flatMap((line) => wrapRuns(line, this.widthFor()));
+          const wrapped = renderInline(tokens[i + 1]?.children, this.theme).flatMap((line) => wrapRuns(line, this.widthFor()));
           this.emit(wrapped);
           i += 2;
           break;
@@ -322,20 +355,7 @@ class BlockRenderer {
   }
 
   private toText(line: Line): string {
-    if (!this.options.color) return line.map((run) => run.text).join("");
-    let out = "";
-    let active = "";
-    for (const run of line) {
-      const codes = run.codes ?? "";
-      if (codes !== active) {
-        if (active !== "") out += "\x1b[0m";
-        if (codes !== "") out += `\x1b[${codes}m`;
-        active = codes;
-      }
-      out += run.text;
-    }
-    if (active !== "") out += "\x1b[0m";
-    return out;
+    return joinRuns(line, this.options.color);
   }
 }
 

@@ -1,19 +1,25 @@
 /** Append-only terminal writer. All output batches until flushed; the only
  * in-place rewrite is a single status line, so a slow link carries few, full
  * packets and never a repaint. */
+import { DARK, type Theme } from "./theme.js";
+import { joinRuns, type Run } from "./render.js";
+
 export class Terminal {
   private buffer = "";
   private timer: NodeJS.Timeout | null = null;
   private statusText: string | null = null;
   readonly color: boolean;
+  readonly theme: Theme;
 
   constructor(
     private readonly out: Pick<NodeJS.WriteStream, "write" | "isTTY" | "columns"> =
       process.stdout as NodeJS.WriteStream,
     private readonly flushIntervalMs = 250,
     private readonly maxBufferBytes = 4096,
+    theme: Theme = DARK,
   ) {
     this.color = this.out.isTTY === true && process.env.NO_COLOR === undefined;
+    this.theme = theme;
   }
 
   get interactive(): boolean { return this.out.isTTY === true; }
@@ -24,6 +30,11 @@ export class Terminal {
 
   style(text: string, codes: string): string {
     return this.color ? `\x1b[${codes}m${text}\x1b[0m` : text;
+  }
+
+  /** Styled runs on one line; adjacent runs with equal codes share an escape. */
+  runs(parts: Run[]): string {
+    return joinRuns(parts, this.color);
   }
 
   append(text: string): void {

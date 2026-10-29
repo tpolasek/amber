@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 import type { ToolCall } from "../types.js";
 import { formatTokenCountInThousands } from "../client-formatters.js";
+import type { Run } from "./render.js";
+import type { Theme } from "./theme.js";
 
 function collapse(text: string): string {
   return text.replace(/\s+/g, " ").trim();
@@ -49,23 +51,39 @@ function contentKilotokens(call: ToolCall): string {
   return `${formatTokenCountInThousands(tokens)}kt`;
 }
 
-export function toolLine(call: ToolCall): string {
-  const glyph = call.status === "complete" ? "✓" : "✗";
-  const head = [glyph, call.name, argumentOf(call)].filter((part) => part !== "").join(" ");
-  const tail: string[] = [];
-  if (call.status === "timed_out") tail.push("timed out");
-  else if (call.status === "error") tail.push(truncate(firstLine(call.output), 80));
-  else if (call.name === "Bash" && call.exitCode !== undefined && call.exitCode !== null) {
-    tail.push(`exit ${call.exitCode}`);
-  }
-  if (call.durationMs !== undefined && call.status !== "running" && call.status !== "queued") {
-    tail.push(CONTENT_TOOLS.has(call.name) ? contentKilotokens(call) : `${(call.durationMs / 1_000).toFixed(1)}s`);
-  }
-  return tail.length === 0 ? head : `${head} · ${tail.join(" · ")}`;
+export function toolLine(call: ToolCall, theme: Theme): Run[] {
+  const ok = call.status === "complete";
+  const runs: Run[] = [{ text: ok ? "✓" : "✗", codes: ok ? theme.toolOk : theme.toolErr }];
+  if (call.name !== "") runs.push({ text: ` ${call.name}`, codes: theme.toolName });
+  const argument = argumentOf(call);
+  if (argument !== "") runs.push({ text: ` ${argument}`, codes: theme.toolArg });
+  for (const tail of tailRuns(call, theme)) runs.push({ text: " · ", codes: theme.toolTail }, tail);
+  return runs;
 }
 
-export function toolStatus(call: ToolCall): string {
-  return [call.name, argumentOf(call)].filter((part) => part !== "").join(" ").slice(0, 60);
+function tailRuns(call: ToolCall, theme: Theme): Run[] {
+  const tails: Run[] = [];
+  if (call.status === "timed_out") tails.push({ text: "timed out", codes: theme.toolErr });
+  else if (call.status === "error") tails.push({ text: truncate(firstLine(call.output), 80), codes: theme.toolErr });
+  else if (call.name === "Bash" && call.exitCode !== undefined && call.exitCode !== null) {
+    const failed = call.exitCode !== 0;
+    tails.push({ text: `exit ${call.exitCode}`, codes: failed ? theme.toolErr : theme.toolTail });
+  }
+  if (call.durationMs !== undefined && call.status !== "running" && call.status !== "queued") {
+    const size = CONTENT_TOOLS.has(call.name) ? contentKilotokens(call) : `${(call.durationMs / 1_000).toFixed(1)}s`;
+    tails.push({ text: size, codes: theme.toolTail });
+  }
+  return tails;
+}
+
+/** The running-tool segment of the status line, colored like a printed tool line. */
+export function toolStatusRuns(call: ToolCall, theme: Theme): Run[] {
+  const runs: Run[] = [];
+  if (call.name !== "") runs.push({ text: call.name, codes: theme.toolName });
+  const budget = Math.max(0, 60 - call.name.length - 1);
+  const argument = argumentOf(call);
+  if (argument !== "" && budget > 0) runs.push({ text: ` ${truncate(argument, budget)}`, codes: theme.toolArg });
+  return runs;
 }
 
 function firstLine(output: string): string {

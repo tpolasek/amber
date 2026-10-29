@@ -1,7 +1,8 @@
 // test/cli-render.test.ts
 import test from "node:test";
 import assert from "node:assert/strict";
-import { renderMarkdown, displayWidth } from "../src/cli/render.js";
+import { renderMarkdown, displayWidth, joinRuns } from "../src/cli/render.js";
+import { DARK, LIGHT } from "../src/cli/theme.js";
 
 function render(markdown: string, width = 40, color = false): string {
   return renderMarkdown(markdown, { width, color });
@@ -18,8 +19,16 @@ test("renders paragraphs wrapped to width", () => {
 });
 
 test("renders headings, emphasis, and inline code", () => {
-  const output = renderMarkdown("# Title\n\nsome *ital* **bold** `code`", { width: 40, color: true });
-  assert.equal(output, "\x1b[1mTitle\x1b[0m\n\nsome \x1b[3mital\x1b[0m \x1b[1mbold\x1b[0m \x1b[36mcode\x1b[0m");
+  const output = renderMarkdown("# Title\n\nsome *ital* **bold** `code`", { width: 40, color: true, theme: DARK });
+  assert.equal(output, `\x1b[1mTitle\x1b[0m\n\nsome \x1b[3mital\x1b[0m \x1b[1mbold\x1b[0m \x1b[${DARK.code}mcode\x1b[0m`);
+});
+
+test("inline code picks up the theme", () => {
+  const dark = renderMarkdown("`x`", { width: 40, color: true, theme: DARK });
+  const light = renderMarkdown("`x`", { width: 40, color: true, theme: LIGHT });
+  assert.equal(dark, `\x1b[${DARK.code}mx\x1b[0m`);
+  assert.equal(light, `\x1b[${LIGHT.code}mx\x1b[0m`);
+  assert.notEqual(dark, light);
 });
 
 test("renders fenced code dimmed and indented without wrapping", () => {
@@ -100,4 +109,12 @@ test("keeps the list marker when a blockquote is the item's first block", () => 
 test("keeps the list marker on a fenced code block inside an item", () => {
   const output = render("- ```\n  hi\n  ```", 40);
   assert.ok(output.split("\n").some((line) => line.startsWith("- ")), output);
+});
+
+test("joinRuns merges adjacent runs sharing codes into one escape pair", () => {
+  assert.equal(
+    joinRuns([{ text: "a", codes: "2" }, { text: "b", codes: "2" }, { text: "c" }, { text: "d", codes: "1" }], true),
+    "\x1b[2mab\x1b[0mc\x1b[1md\x1b[0m",
+  );
+  assert.equal(joinRuns([{ text: "a", codes: "2" }], false), "a");
 });

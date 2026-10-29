@@ -2,6 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Terminal } from "../src/cli/term.js";
+import { DARK, LIGHT } from "../src/cli/theme.js";
 
 interface FakeOut {
   write: (chunk: string) => boolean;
@@ -89,4 +90,20 @@ test("columns falls back to 80", () => {
   const out = fakeOut();
   out.columns = 0;
   assert.equal(new Terminal(out).columns, 80);
+});
+
+test("runs merges styled runs and strips codes without color", () => {
+  const term = terminal(fakeOut());
+  assert.equal(
+    term.runs([{ text: "a", codes: "1" }, { text: "b", codes: "1" }, { text: "c" }]),
+    "\x1b[1mab\x1b[0mc",
+  );
+  process.env.NO_COLOR = "1";
+  assert.equal(new Terminal(fakeOut()).runs([{ text: "a", codes: "1" }]), "a");
+  delete process.env.NO_COLOR;
+});
+
+test("the terminal defaults to the dark theme and accepts an override", () => {
+  assert.equal(terminal(fakeOut()).theme, DARK);
+  assert.equal(new Terminal(fakeOut(), undefined, undefined, LIGHT).theme, LIGHT);
 });

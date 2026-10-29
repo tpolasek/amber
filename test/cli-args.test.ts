@@ -9,10 +9,10 @@ const sessions = [
   { id: "def7654321", title: "Two", createdAt: "2026-01-02", updatedAt: "2026-01-02", messageCount: 0, preview: "" },
 ];
 
-test("defaults to the local server and two turns of history", () => {
+test("defaults to the local server, two turns of history, and the dark theme", () => {
   assert.deepEqual(parseCliArgs([], env), {
     kind: "args",
-    args: { server: "http://127.0.0.1:3000", history: 2, list: false, thinking: false, full: false },
+    args: { server: "http://127.0.0.1:3000", history: 2, list: false, thinking: false, full: false, theme: "dark" },
   });
 });
 
@@ -25,7 +25,7 @@ test("parses --server, --history, --list, positional session, and --new with a n
   const parsed = parseCliArgs(["--server", "http://x:1", "--history", "5", "--list", "ab12"], env);
   assert.ok(parsed.kind === "args");
   assert.deepEqual(parsed.args, {
-    server: "http://x:1", history: 5, list: true, thinking: false, full: false, session: "ab12",
+    server: "http://x:1", history: 5, list: true, thinking: false, full: false, theme: "dark", session: "ab12",
   });
   const created = parseCliArgs(["--new", "my session"], env);
   assert.ok(created.kind === "args" && created.args.newName === "my session");
@@ -39,6 +39,14 @@ test("--thinking streams thinking text", () => {
 test("--full prints edit diffs", () => {
   const parsed = parseCliArgs(["--full"], env);
   assert.ok(parsed.kind === "args" && parsed.args.full === true);
+});
+
+test("--theme selects light or dark, rejecting anything else", () => {
+  const parsed = parseCliArgs(["--theme", "light"], env);
+  assert.ok(parsed.kind === "args" && parsed.args.theme === "light");
+  assert.throws(() => parseCliArgs(["--theme"], env), /--theme requires dark or light/);
+  assert.throws(() => parseCliArgs(["--theme", "solarized"], env), /--theme requires dark or light/);
+  assert.ok(cliUsageText().includes("--theme"));
 });
 
 test("--new without a name still parses", () => {

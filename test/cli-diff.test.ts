@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { diffLines, isDiffCall } from "../src/cli/diff.js";
-import { DIM, GREEN, RED } from "../src/cli/render.js";
+import { DARK, LIGHT } from "../src/cli/theme.js";
 import type { ToolCall } from "../src/types.js";
 
 function call(name: string, output: string, status: ToolCall["status"] = "complete"): ToolCall {
@@ -29,27 +29,33 @@ test("headers are dropped; hunks and context dim, removals red, additions green"
     "",
   ].join("\n");
   assert.deepEqual(diffLines(diff, 80), [
-    { text: "  @@ -1,3 +1,3 @@", codes: DIM },
-    { text: "   one", codes: DIM },
-    { text: "  -two", codes: RED },
-    { text: "  +TWO", codes: GREEN },
-    { text: "   three", codes: DIM },
+    { text: "  @@ -1,3 +1,3 @@", codes: DARK.diffCtx },
+    { text: "   one", codes: DARK.diffCtx },
+    { text: "  -two", codes: DARK.diffDel },
+    { text: "  +TWO", codes: DARK.diffAdd },
+    { text: "   three", codes: DARK.diffCtx },
   ]);
+});
+
+test("the light theme recolors diff lines for white terminals", () => {
+  const lines = diffLines("+a\n-b\n c", 80, LIGHT);
+  assert.deepEqual(lines.map((line) => line.codes), [LIGHT.diffAdd, LIGHT.diffDel, LIGHT.diffCtx]);
+  assert.notEqual(LIGHT.diffAdd, DARK.diffAdd);
 });
 
 test("a new-file diff is all additions", () => {
   const lines = diffLines("--- /dev/null\n+++ b/new.ts\n@@ -0,0 +1,1 @@\n+fresh\n", 80);
-  assert.deepEqual(lines.filter((line) => line.text.includes("fresh")), [{ text: "  +fresh", codes: GREEN }]);
+  assert.deepEqual(lines.filter((line) => line.text.includes("fresh")), [{ text: "  +fresh", codes: DARK.diffAdd }]);
 });
 
 test("long lines clip to the terminal width", () => {
   const [line] = diffLines(`+${"x".repeat(100)}`, 22);
-  assert.deepEqual(line, { text: `  +${"x".repeat(18)}…`, codes: GREEN });
+  assert.deepEqual(line, { text: `  +${"x".repeat(18)}…`, codes: DARK.diffAdd });
 });
 
 test("wide characters count double when clipping", () => {
   const [line] = diffLines(`+好${"x".repeat(40)}`, 10);
-  assert.deepEqual(line, { text: "  +好xxxxxx…", codes: GREEN });
+  assert.deepEqual(line, { text: "  +好xxxxxx…", codes: DARK.diffAdd });
 });
 
 test("diffs beyond 400 lines stop with a note", () => {
@@ -57,5 +63,5 @@ test("diffs beyond 400 lines stop with a note", () => {
   const lines = diffLines(diff, 80);
   assert.equal(lines.length, 401);
   assert.ok(lines[0]!.text.includes("line 0"));
-  assert.deepEqual(lines.at(-1), { text: "  … 100 more lines", codes: DIM });
+  assert.deepEqual(lines.at(-1), { text: "  … 100 more lines", codes: DARK.diffCtx });
 });

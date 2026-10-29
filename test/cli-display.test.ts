@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import { SessionDisplay, type DisplayHooks, type DisplayOptions, type PlanDecision } from "../src/cli/display.js";
 import { Terminal } from "../src/cli/term.js";
 import type { Message } from "../src/types.js";
+import { displayWidth } from "../src/cli/render.js";
+import { DARK } from "../src/cli/theme.js";
 
 function harness(ask: (prompt: string) => Promise<string> = async () => "", options: DisplayOptions = {}) {
   const chunks: string[] = [];
@@ -45,6 +47,11 @@ function ttyHarness(options: DisplayOptions = {}) {
 
 function assistant(id: string, content: string): Message {
   return { id, role: "assistant", content, createdAt: "", status: "complete" };
+}
+
+/** Strips SGR codes and line-clears so styled output can be matched as text. */
+function visible(text: string): string {
+  return text.replace(/\x1b\[[0-9;]*[mK]/g, "");
 }
 
 test("attach prints a dim user line and rendered assistant markdown", () => {
@@ -125,15 +132,33 @@ test("--thinking drops the char counter from the status line", async () => {
   await display.applyEvent("start", { assistantMessage: assistant("a1", "") });
   await display.applyEvent("thinking_delta", { thinking: "deep thought\n" });
   assert.ok(text().includes("deep thought"));
-  assert.ok(!text().includes("thinking 12"));
+  assert.ok(!visible(text()).includes("thinking 12"));
 });
 
 test("the char counter still shows without --thinking", async () => {
   const { display, text } = ttyHarness();
   await display.applyEvent("start", { assistantMessage: assistant("a1", "") });
   await display.applyEvent("thinking_delta", { thinking: "hidden\n" });
-  assert.ok(text().includes("thinking 7"));
+  assert.ok(visible(text()).includes("thinking 7"));
   assert.ok(!text().includes("hidden"));
+});
+
+test("idle work shows as a filled busy pill", async () => {
+  const { display, text } = ttyHarness();
+  await display.applyEvent("start", { assistantMessage: assistant("a1", "") });
+  await display.applyEvent("delta", { text: "" }); // paints the status with nothing counted yet
+  assert.ok(text().includes(`\x1b[${DARK.statusActive}m working… \x1b[0m`));
+});
+
+test("streaming status pills the state word and accents the counter", async () => {
+  const { display, text } = ttyHarness();
+  await display.applyEvent("start", { assistantMessage: assistant("a1", "") });
+  await display.applyEvent("delta", { text: "abc" });
+  const status = text().split("\r\x1b[K").pop()!;
+  assert.equal(
+    status,
+    `\x1b[${DARK.statusActive}m streaming \x1b[0m\x1b[${DARK.accent}m3\x1b[0m`,
+  );
 });
 
 test("tool updates print one completion line and never output", async () => {
@@ -235,4 +260,31 @@ test("error events print one line and clear the active flag", async () => {
   await display.applyEvent("error", { error: "provider exploded" });
   assert.ok(text().includes("✗ error: provider exploded\n"));
   assert.equal(activeChanges().at(-1), false);
+});
+
+test("--thinking pads shaded lines to the terminal width", async () => {
+  const { display, text } = ttyHarness({ streamThinking: true });
+  await display.applyEvent("start", { assistantMessage: assistant("a1", "") });
+  await display.applyEvent("thinking_delta", { thinking: "deep thought\n" });
+  const lines = text().split("\n").filter((line) => /^\x1b\[[0-9;]+m/.test(line));
+  assert.equal(lines.length, 2); // header + one body line
+  for (const line of lines) {
+    assert.ok(line.startsWith(`\x1b[${line.includes("· thinking") ? DARK.thinkingHeader : DARK.thinking}m`), line);
+    assert.ok(line.endsWith("\x1b[0m"));
+    assert.equal(displayWidth(line.replace(/\x1b\[[0-9;]*m/g, "")), 60);
+  }
+});
+
+test("tool lines color the glyph, name, argument, and tail separately", async () => {
+  const { display, text } = ttyHarness();
+  await display.applyEvent("tool_update", {
+    messageId: "a1",
+    toolCall: { id: "t1", name: "Bash", input: { command: "npm test" }, status: "complete", output: "", exitCode: 0, durationMs: 2_140 },
+  });
+  const line = text().trimEnd();
+  assert.equal(
+    line,
+    `\x1b[${DARK.toolOk}m✓\x1b[0m\x1b[${DARK.toolName}m Bash\x1b[0m\x1b[${DARK.toolArg}m npm test\x1b[0m`
+      + `\x1b[${DARK.toolTail}m · exit 0 · 2.1s\x1b[0m`,
+  );
 });
