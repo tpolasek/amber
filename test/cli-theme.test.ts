@@ -17,7 +17,7 @@ test("thinking slots fill the background and differ per theme", () => {
 });
 
 test("high-contrast slots are tuned per theme", () => {
-  for (const slot of ["prompt", "toolOk", "toolErr", "toolName", "toolArg", "error", "diffAdd", "diffDel", "code", "accent", "statusActive"] as const) {
+  for (const slot of ["prompt", "toolOk", "toolErr", "toolName", "toolArg", "error", "diffAdd", "diffDel", "code", "accent", "statusActive", "meterValue", "meterFill"] as const) {
     assert.notEqual(LIGHT[slot], DARK[slot], `${slot} should be theme-specific`);
   }
 });

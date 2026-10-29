@@ -1,7 +1,6 @@
 import type { Message, Session, ToolCall } from "../types.js";
-import { formatTokenCountInThousands } from "../client-formatters.js";
 import { Terminal } from "./term.js";
-import { renderMarkdown, clipWidth, displayWidth, type Run } from "./render.js";
+import { renderMarkdown, clipWidth, displayWidth, joinRuns, type Run } from "./render.js";
 import { createBlockSplitter, type BlockSplitter } from "./blocks.js";
 import { toolLine, toolStatusRuns } from "./tools.js";
 import { diffLines, isDiffCall } from "./diff.js";
@@ -262,20 +261,20 @@ export class SessionDisplay {
   }
 
   private printUsage(message: Message, session?: Session): void {
-    const parts: Run[] = [];
-    if (message.usage) {
-      parts.push(
-        { text: `${formatTokenCountInThousands(message.usage.input)}→${formatTokenCountInThousands(message.usage.output)}` },
-        { text: " tok", codes: this.term.theme.accent },
-      );
-    }
-    if (session) {
-      if (parts.length > 0) parts.push({ text: " · ", codes: this.term.theme.meta });
-      parts.push(...meterRuns(session, this.term.theme, message));
-    }
-    if (parts.length === 0) return;
+    if (!session) return;
+    const theme = this.term.theme;
+    const runs = meterRuns(session, theme, message, theme.meterFill);
     this.term.line("");
-    this.term.line(this.term.runs([{ text: "· ", codes: this.term.theme.meta }, ...parts]));
+    if (!this.term.color) {
+      this.term.line(this.term.runs(runs));
+      return;
+    }
+    // Pad so the subtle fill spans the terminal like the thinking block.
+    const pad = Math.max(1, this.term.columns - displayWidth(joinRuns(runs, false)));
+    this.term.line(this.term.runs([
+      ...runs,
+      { text: " ".repeat(pad), codes: `${theme.meterValue};${theme.meterFill}` },
+    ]));
   }
 
   private applyToolUpdate(call: ToolCall): void {

@@ -11,23 +11,31 @@ export function contextTokens(session: Session, latest?: Message): number {
   return usage ? usage.total ?? usage.input + usage.output : 0;
 }
 
-/** A `LABEL value` meter: accented label, plain value — values carry the numbers. */
-function meter(label: string, value: string, theme: Theme): Run[] {
-  return [{ text: label, codes: theme.accent }, { text: ` ${value}` }];
-}
-
-function separator(theme: Theme): Run {
-  return { text: " · ", codes: theme.meta };
-}
-
-/** The footer's three meters: context, recent-9 and session cache hit rates. */
-export function meterRuns(session: Session, theme: Theme, latest?: Message): Run[] {
+/** A `LABEL value` meter: accented label, softly colored value. */
+function meter(label: string, value: string, theme: Theme, fill = ""): Run[] {
   return [
-    ...meter("CNTX", `${formatTokenCountInThousands(contextTokens(session, latest))}k toks`, theme),
-    separator(theme),
-    ...meter("CSH9", percentage(session.recentCacheUsage), theme),
-    separator(theme),
-    ...meter("CACH", percentage(session.cacheUsage), theme),
+    { text: label, codes: withFill(theme.accent, fill) },
+    { text: ` ${value}`, codes: withFill(theme.meterValue, fill) },
+  ];
+}
+
+function separator(theme: Theme, fill = ""): Run {
+  return { text: " · ", codes: withFill(theme.meterValue, fill) };
+}
+
+function withFill(codes: string, fill: string): string {
+  return fill === "" ? codes : `${codes};${fill}`;
+}
+
+/** The footer's three meters: context, recent-9 and session cache hit rates.
+ *  `fill` adds a background code under every run for the run footer. */
+export function meterRuns(session: Session, theme: Theme, latest?: Message, fill = ""): Run[] {
+  return [
+    ...meter("CNTX", `${formatTokenCountInThousands(contextTokens(session, latest))}k toks`, theme, fill),
+    separator(theme, fill),
+    ...meter("CSH9", percentage(session.recentCacheUsage), theme, fill),
+    separator(theme, fill),
+    ...meter("CACH", percentage(session.cacheUsage), theme, fill),
   ];
 }
 

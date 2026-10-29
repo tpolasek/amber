@@ -67,7 +67,7 @@ test("attach honors the limit", () => {
   assert.ok(text().includes("new"));
 });
 
-test("start, delta blocks, and done print streamed blocks once with a usage line", async () => {
+test("start, delta blocks, and done print streamed blocks once", async () => {
   const { display, text } = harness();
   await display.applyEvent("start", { assistantMessage: assistant("a1", ""), userMessage: userMessage("u1", "prompt") });
   await display.applyEvent("delta", { text: "one\n\ntwo" });
@@ -75,7 +75,7 @@ test("start, delta blocks, and done print streamed blocks once with a usage line
   await display.applyEvent("done", {
     message: { ...assistant("a1", "one\n\ntwo and more"), usage: { input: 3_100, output: 800 } },
   });
-  assert.equal(text(), "\none\n\ntwo and more\n\n· 3.1→0.8 tok\n");
+  assert.equal(text(), "\none\n\ntwo and more\n");
 });
 
 test("done also prints the context and cache meters from the session snapshot", async () => {
@@ -92,8 +92,24 @@ test("done also prints the context and cache meters from the session snapshot", 
   });
   assert.equal(
     text(),
-    "\nanswer\n\n· 31→0.8 tok · CNTX 31.8k toks · CSH9 95% · CACH 75%\n",
+    "\nanswer\n\nCNTX 31.8k toks · CSH9 95% · CACH 75%\n",
   );
+});
+
+test("the meter footer fills the width with a subtle shaded strip", async () => {
+  const { display, text } = ttyHarness();
+  await display.applyEvent("done", {
+    message: assistant("a1", "answer"),
+    session: {
+      id: "s1", title: "", createdAt: "", updatedAt: "", messages: [],
+      recentCacheUsage: { input: 1_000, cached: 950, requests: 1 },
+      cacheUsage: { input: 2_000, cached: 1_500, requests: 2 },
+    },
+  });
+  const line = text().trimEnd().split("\n").at(-1)!;
+  assert.ok(line.startsWith(`\x1b[${DARK.accent};${DARK.meterFill}mCNTX`), line);
+  assert.ok(line.endsWith("\x1b[0m"));
+  assert.equal(displayWidth(line.replace(/\x1b\[[0-9;]*m/g, "")), 60);
 });
 
 test("done without a message (standalone /compact) clears the active state without crashing", async () => {
@@ -113,7 +129,7 @@ test("--thinking streams thinking lines before the answer", async () => {
   await display.applyEvent("done", {
     message: { ...assistant("a1", "answer"), usage: { input: 10, output: 2 } },
   });
-  assert.equal(text(), "\n· thinking\nconsider this\nand that\n\nanswer\n\n· 0→0 tok\n");
+  assert.equal(text(), "\n· thinking\nconsider this\nand that\n\nanswer\n");
 });
 
 test("thinking is only counted unless --thinking is set", async () => {
@@ -124,7 +140,7 @@ test("thinking is only counted unless --thinking is set", async () => {
   await display.applyEvent("done", {
     message: { ...assistant("a1", "answer"), usage: { input: 10, output: 2 } },
   });
-  assert.equal(text(), "\nanswer\n\n· 0→0 tok\n");
+  assert.equal(text(), "\nanswer\n");
 });
 
 test("--thinking drops the char counter from the status line", async () => {

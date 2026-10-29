@@ -29,6 +29,9 @@ export interface Theme {
   accent: string;
   /** Busy pill for the status line: filled background plus a font switch. */
   statusActive: string;
+  /** Usage meter values and separators; meterFill is the subtle footer fill. */
+  meterValue: string;
+  meterFill: string;
 }
 
 export const DARK: Theme = {
@@ -48,6 +51,8 @@ export const DARK: Theme = {
   code: "38;5;80",
   accent: "38;5;214",
   statusActive: "1;30;42",
+  meterValue: "38;5;250",
+  meterFill: "48;5;234",
 };
 
 export const LIGHT: Theme = {
@@ -67,6 +72,8 @@ export const LIGHT: Theme = {
   code: "38;5;24",
   accent: "38;5;130",
   statusActive: "1;30;48;5;41",
+  meterValue: "38;5;238",
+  meterFill: "48;5;252",
 };
 
 export function themeFor(name: "dark" | "light"): Theme {

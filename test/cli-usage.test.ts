@@ -30,15 +30,24 @@ test("meterRuns formats context in thousands and cache hits as percentages", () 
   assert.equal(plain(meterRuns(session(), DARK)), "CNTX 0k toks · CSH9 -- · CACH --");
 });
 
-test("meter labels carry the accent color and separators stay dim", () => {
+test("meter labels accent and every value and separator carries the meter color", () => {
   const runs = meterRuns(session({
     contextTokens: 42_300,
     recentCacheUsage: { input: 1_000, cached: 870, requests: 9 },
     cacheUsage: { input: 10_000, cached: 7_100, requests: 20 },
   }), DARK);
   assert.deepEqual(runs.map((run) => run.codes ?? ""), [
-    DARK.accent, "", DARK.meta, DARK.accent, "", DARK.meta, DARK.accent, "",
+    DARK.accent, DARK.meterValue, DARK.meterValue, DARK.accent, DARK.meterValue,
+    DARK.meterValue, DARK.accent, DARK.meterValue,
   ]);
+});
+
+test("a fill request extends the background under every run", () => {
+  const runs = meterRuns(session({ contextTokens: 42_300 }), DARK, undefined, DARK.meterFill);
+  for (const run of runs) {
+    assert.ok(run.codes!.includes(DARK.meterFill), `${run.text} should carry the fill`);
+  }
+  assert.equal(plain(runs), "CNTX 42.3k toks · CSH9 -- · CACH --");
 });
 
 test("usageRuns report the cache totals and the latest request", () => {
