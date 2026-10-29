@@ -31,6 +31,13 @@ interface GateQuestion {
 
 const SKIPPED_KINDS = new Set(["tool-result", "skill", "skill-catalog", "agent-notification"]);
 
+/** Trailing fill for shaded lines: the text plus a margin, capped at the width. */
+const FILL_MARGIN = 3;
+
+function fillWidth(contentWidth: number, columns: number): number {
+  return Math.min(columns, contentWidth + FILL_MARGIN);
+}
+
 function truncate(text: string, max: number): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
@@ -243,13 +250,14 @@ export class SessionDisplay {
     this.term.line(this.shade(line));
   }
 
-  /** One styled line padded to the terminal width so the background fills a
-   * solid block; a single escape pair per line keeps the overhead tiny. */
+  /** One styled line whose background fill hugs the text plus a small
+   * margin, reaching the full width only when the text does; a single
+   * escape pair per line keeps the overhead tiny. */
   private shade(text: string, codes: string = this.term.theme.thinking): string {
     if (!this.term.color) return text;
-    const width = this.term.columns;
-    const clipped = clipWidth(text, width - 1);
-    return this.term.style(`${clipped}${" ".repeat(width - displayWidth(clipped))}`, codes);
+    const clipped = clipWidth(text, this.term.columns - 1);
+    const cells = displayWidth(clipped);
+    return this.term.style(clipped + " ".repeat(fillWidth(cells, this.term.columns) - cells), codes);
   }
 
   private finishThinking(): void {
@@ -265,16 +273,12 @@ export class SessionDisplay {
     const theme = this.term.theme;
     const runs = meterRuns(session, theme, message, theme.meterFill);
     this.term.line("");
-    if (!this.term.color) {
-      this.term.line(this.term.runs(runs));
-      return;
+    if (this.term.color) {
+      const pad = fillWidth(displayWidth(joinRuns(runs, false)), this.term.columns)
+        - displayWidth(joinRuns(runs, false));
+      if (pad > 0) runs.push({ text: " ".repeat(pad), codes: `${theme.meterValue};${theme.meterFill}` });
     }
-    // Pad so the subtle fill spans the terminal like the thinking block.
-    const pad = Math.max(1, this.term.columns - displayWidth(joinRuns(runs, false)));
-    this.term.line(this.term.runs([
-      ...runs,
-      { text: " ".repeat(pad), codes: `${theme.meterValue};${theme.meterFill}` },
-    ]));
+    this.term.line(this.term.runs(runs));
   }
 
   private applyToolUpdate(call: ToolCall): void {

@@ -37,10 +37,10 @@ test("headers are dropped; hunks and context dim, removals red, additions green"
   ]);
 });
 
-test("the light theme recolors diff lines for white terminals", () => {
+test("the light theme recolors diff deletions for white terminals", () => {
   const lines = diffLines("+a\n-b\n c", 80, LIGHT);
   assert.deepEqual(lines.map((line) => line.codes), [LIGHT.diffAdd, LIGHT.diffDel, LIGHT.diffCtx]);
-  assert.notEqual(LIGHT.diffAdd, DARK.diffAdd);
+  assert.notEqual(LIGHT.diffDel, DARK.diffDel);
 });
 
 test("a new-file diff is all additions", () => {

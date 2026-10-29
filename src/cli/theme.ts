@@ -1,11 +1,14 @@
 /** Semantic SGR palettes for the CLI chrome. Every slot is a `;`-joined
  * parameter string passed to Terminal.style/runs — one escape pair per run,
- * never per word, so color costs a handful of bytes per line. */
+ * never per word, so color costs a handful of bytes per line. Codes prefer
+ * the short ANSI names when the basic palette has a close match; 256-color
+ * is reserved for hues it cannot express (amber accents, fills that sit a
+ * step off the terminal's own background). */
 
 export interface Theme {
   /** The `> ` prompt and the `>` marker on echoed user input. */
   prompt: string;
-  /** `· info` lines: session notices, usage footer, queue confirmations. */
+  /** `· info` lines: session notices, queue confirmations. */
   meta: string;
   /** Thinking block body: shaded background with a distinct foreground. */
   thinking: string;
@@ -37,42 +40,42 @@ export interface Theme {
 export const DARK: Theme = {
   prompt: "1;38;5;208",
   meta: "2",
-  thinking: "38;5;249;48;5;236",
-  thinkingHeader: "1;38;5;250;48;5;236",
-  toolOk: "38;5;114",
-  toolErr: "1;38;5;210",
-  toolName: "1;38;5;75",
-  toolArg: "38;5;80",
+  thinking: "37;48;5;236",
+  thinkingHeader: "1;37;48;5;236",
+  toolOk: "32",
+  toolErr: "1;31",
+  toolName: "1;94",
+  toolArg: "36",
   toolTail: "2",
-  error: "1;38;5;196",
-  diffAdd: "38;5;114",
-  diffDel: "38;5;203",
+  error: "1;91",
+  diffAdd: "32",
+  diffDel: "91",
   diffCtx: "2",
-  code: "38;5;80",
+  code: "36",
   accent: "38;5;214",
   statusActive: "1;30;42",
-  meterValue: "38;5;250",
+  meterValue: "37",
   meterFill: "48;5;234",
 };
 
 export const LIGHT: Theme = {
   prompt: "1;38;5;166",
   meta: "2",
-  thinking: "38;5;238;48;5;253",
-  thinkingHeader: "1;38;5;236;48;5;253",
-  toolOk: "38;5;28",
-  toolErr: "1;38;5;160",
-  toolName: "1;38;5;27",
-  toolArg: "38;5;30",
+  thinking: "30;48;5;253",
+  thinkingHeader: "1;30;48;5;253",
+  toolOk: "32",
+  toolErr: "1;31",
+  toolName: "1;34",
+  toolArg: "36",
   toolTail: "2",
-  error: "1;38;5;160",
-  diffAdd: "38;5;28",
-  diffDel: "1;38;5;160",
+  error: "1;31",
+  diffAdd: "32",
+  diffDel: "1;31",
   diffCtx: "2",
-  code: "38;5;24",
+  code: "34",
   accent: "38;5;130",
   statusActive: "1;30;48;5;41",
-  meterValue: "38;5;238",
+  meterValue: "30",
   meterFill: "48;5;252",
 };
 

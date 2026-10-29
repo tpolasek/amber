@@ -96,7 +96,7 @@ test("done also prints the context and cache meters from the session snapshot", 
   );
 });
 
-test("the meter footer fills the width with a subtle shaded strip", async () => {
+test("the meter footer's subtle fill hugs the meters plus a margin", async () => {
   const { display, text } = ttyHarness();
   await display.applyEvent("done", {
     message: assistant("a1", "answer"),
@@ -109,7 +109,8 @@ test("the meter footer fills the width with a subtle shaded strip", async () => 
   const line = text().trimEnd().split("\n").at(-1)!;
   assert.ok(line.startsWith(`\x1b[${DARK.accent};${DARK.meterFill}mCNTX`), line);
   assert.ok(line.endsWith("\x1b[0m"));
-  assert.equal(displayWidth(line.replace(/\x1b\[[0-9;]*m/g, "")), 60);
+  const visibleText = line.replace(/\x1b\[[0-9;]*m/g, "");
+  assert.equal(displayWidth(visibleText), Math.min(60, displayWidth(visibleText.trimEnd()) + 3));
 });
 
 test("done without a message (standalone /compact) clears the active state without crashing", async () => {
@@ -278,7 +279,7 @@ test("error events print one line and clear the active flag", async () => {
   assert.equal(activeChanges().at(-1), false);
 });
 
-test("--thinking pads shaded lines to the terminal width", async () => {
+test("--thinking shades each line with a fill that hugs the text plus a margin", async () => {
   const { display, text } = ttyHarness({ streamThinking: true });
   await display.applyEvent("start", { assistantMessage: assistant("a1", "") });
   await display.applyEvent("thinking_delta", { thinking: "deep thought\n" });
@@ -287,7 +288,8 @@ test("--thinking pads shaded lines to the terminal width", async () => {
   for (const line of lines) {
     assert.ok(line.startsWith(`\x1b[${line.includes("· thinking") ? DARK.thinkingHeader : DARK.thinking}m`), line);
     assert.ok(line.endsWith("\x1b[0m"));
-    assert.equal(displayWidth(line.replace(/\x1b\[[0-9;]*m/g, "")), 60);
+    const visibleText = line.replace(/\x1b\[[0-9;]*m/g, "");
+    assert.equal(displayWidth(visibleText), Math.min(60, displayWidth(visibleText.trimEnd()) + 3));
   }
 });
 

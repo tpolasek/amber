@@ -16,9 +16,13 @@ test("thinking slots fill the background and differ per theme", () => {
   }
 });
 
-test("high-contrast slots are tuned per theme", () => {
-  for (const slot of ["prompt", "toolOk", "toolErr", "toolName", "toolArg", "error", "diffAdd", "diffDel", "code", "accent", "statusActive", "meterValue", "meterFill"] as const) {
+test("slots needing a 256-color hue differ per theme; shared ANSI basics do not", () => {
+  for (const slot of ["prompt", "thinking", "thinkingHeader", "toolName", "error", "diffDel", "code", "accent", "statusActive", "meterValue", "meterFill"] as const) {
     assert.notEqual(LIGHT[slot], DARK[slot], `${slot} should be theme-specific`);
+  }
+  for (const slot of ["meta", "toolOk", "toolErr", "toolArg", "toolTail", "diffAdd", "diffCtx"] as const) {
+    assert.equal(LIGHT[slot], DARK[slot], `${slot} should use the shared short ANSI code`);
+    assert.ok(!DARK[slot].includes("5;"), `${slot} should stay a basic ANSI code`);
   }
 });
 
