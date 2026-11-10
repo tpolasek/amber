@@ -53,6 +53,13 @@ function createMockProvider() {
       }
       const payload = JSON.parse(body);
       requests.push(payload);
+      if (payload.tools && JSON.stringify(payload.messages).includes("PROVIDER ERROR SCENARIO")) {
+        response.writeHead(429, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          error: { message: "[1308][Usage limit reached for 5 hour. Your limit will reset at 2026-11-10 11:59:20][202611101135414f020d2c6d9e417e]" },
+        }));
+        return;
+      }
       if (!payload.tools && compactionFailuresRemaining > 0) {
         compactionFailuresRemaining -= 1;
         response.writeHead(500, { "content-type": "application/json" });
@@ -1162,6 +1169,34 @@ async function runTruncatedResponseScenario(mock, amber) {
     snapshot.active === false, JSON.stringify(snapshot.active));
 }
 
+async function runProviderErrorScenario(mock, amber) {
+  console.log("\n== provider request failure");
+  mock.reset();
+  const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
+    name: "provider request failure",
+    path: tmpdir(),
+  });
+  const sessionId = body.session.id;
+  const response = await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}/messages`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content: "PROVIDER ERROR SCENARIO" }),
+  });
+  const events = [];
+  await readStream(response, (event, data) => events.push({ event, ...data }));
+  const expected = "Anthropic request failed (429): [1308][Usage limit reached for 5 hour. "
+    + "Your limit will reset at 2026-11-10 11:59:20][202611101135414f020d2c6d9e417e]";
+  const snapshot = await (await fetch(amberUrl(amber.port, `/api/sessions/${sessionId}`))).json();
+  const last = snapshot.session.messages.filter((message) => message.role === "assistant").at(-1);
+  check("a failed provider request records the provider error on its message",
+    last?.content === `Response interrupted: ${expected}.`, JSON.stringify(last?.content));
+  check("a failed provider request marks the message as an error",
+    last?.status === "error", last?.status);
+  check("the stream error event carries the provider error",
+    events.find((event) => event.event === "error")?.error === expected,
+    JSON.stringify(events.find((event) => event.event === "error")?.error));
+}
+
 async function runPaginationScenario(mock, runDirectory, basePort) {
   console.log("\n== session transcript pagination");
   mock.reset();
@@ -1816,6 +1851,7 @@ try {
   await runBackgroundBashWakeScenario(mock, amber);
   await runDualBackgroundWakeScenario(mock, amber);
   await runTruncatedResponseScenario(mock, amber);
+  await runProviderErrorScenario(mock, amber);
   await runPaginationScenario(mock, runDirectory, basePort);
   await runUnqueueScenario(mock, amber);
   await runAgentCompactionScenario(mock, amber);

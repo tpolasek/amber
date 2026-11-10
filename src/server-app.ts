@@ -1860,8 +1860,12 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
     if (assistantMessage.status === "streaming") {
       assistantMessage.status = "error";
       if (!assistantMessage.content) {
+        // The error event only reaches attached clients; persist the provider
+        // failure on the message so a reloaded session explains the stop.
         assistantMessage.content = interruptionText(
-          manuallyStopped ? MANUAL_AGENT_STOP_TEXT : interruptionStopReason(stopReason),
+          manuallyStopped
+            ? MANUAL_AGENT_STOP_TEXT
+            : interruptionStopReason(stopReason) ?? failureReason(error),
         );
       }
     }
@@ -3265,6 +3269,11 @@ function interruptionText(reason: string | undefined): string {
 
 function isManualAgentStop(error: unknown): boolean {
   return errorMessage(error).startsWith(`${RESPONSE_INTERRUPTED_TEXT}: ${MANUAL_AGENT_STOP_TEXT}`);
+}
+
+/** The provider failure behind an interrupted response, if it was not an abort. */
+function failureReason(error: unknown): string | undefined {
+  return error instanceof Error && error.name === "AbortError" ? undefined : errorMessage(error);
 }
 
 /**
