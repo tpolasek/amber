@@ -33,7 +33,7 @@ IMPORTANT: Avoid using this tool to run \`find\`, \`grep\`, \`cat\`, \`head\`, \
 # Instructions
 - Always quote file paths that contain spaces.
 - Prefer absolute paths or working_directory over changing directories inside the command.
-- Commands run in the foreground by default and time out after 120 seconds. Foreground calls wait for completion and return the command output directly in Bash's normal result format. Foreground timeouts accept ${FOREGROUND_BASH_TIMEOUTS_S.join(", ")} seconds; background timeouts accept ${BACKGROUND_BASH_TIMEOUTS_S.join(", ")} seconds.
+- Commands run in the foreground by default and time out after 120 seconds. Foreground calls wait for completion and return the command output directly in Bash's normal result format. Foreground timeouts snap to ${FOREGROUND_BASH_TIMEOUTS_S.join(", ")} seconds; background timeouts snap to ${BACKGROUND_BASH_TIMEOUTS_S.join(", ")} seconds. Any other value is rounded up to the nearest allowed timeout, capped at the largest.
 - Set run_in_background when the result is not needed immediately. A background Bash call returns a b-prefixed task ID instead of the command's final output. Pass that ID to TaskOutput to retrieve the output together with task status and exit-code metadata, or to TaskStop to terminate it. When the task finishes, its result is also delivered to you as a task notification. Do not append \`&\` when using run_in_background.
 - Foreground Bash and background TaskOutput preserve stdout and stderr in the order Amber receives them.
 - Output is capped at ${MAX_OUTPUT_CHARACTERS} characters. When it is truncated, the remaining output is written to a temp file whose path is reported at the end of the result so you can read it with the Read tool.
@@ -47,8 +47,8 @@ IMPORTANT: Avoid using this tool to run \`find\`, \`grep\`, \`cat\`, \`head\`, \
       working_directory: { type: "string", description: "Absolute path or a path relative to the session CWD. This changes only this Bash call." },
       timeout: {
         type: "integer",
-        enum: [...new Set([...FOREGROUND_BASH_TIMEOUTS_S, ...BACKGROUND_BASH_TIMEOUTS_S])].sort((a, b) => a - b),
-        description: `Timeout in seconds. Defaults to ${DEFAULT_BASH_TIMEOUT_S}. Foreground calls accept ${FOREGROUND_BASH_TIMEOUTS_S.join(", ")}; background calls accept ${BACKGROUND_BASH_TIMEOUTS_S.join(", ")}.`,
+        minimum: 1,
+        description: `Timeout in seconds. Defaults to ${DEFAULT_BASH_TIMEOUT_S}. Foreground timeouts snap to ${FOREGROUND_BASH_TIMEOUTS_S.join(", ")}; background timeouts snap to ${BACKGROUND_BASH_TIMEOUTS_S.join(", ")}. Other values are rounded up to the nearest allowed timeout, capped at the largest.`,
       },
       description: {
         type: "string",
@@ -220,17 +220,23 @@ export class BashExecutor {
   }
 }
 
+/** Rounds a requested timeout up to the nearest allowed value, capped at the largest. */
+export function snapBashTimeout(timeout: number, allowed: number[]): number {
+  for (const candidate of allowed) {
+    if (timeout <= candidate) return candidate;
+  }
+  return allowed[allowed.length - 1] ?? timeout;
+}
+
 export function parseBashInput(input: Record<string, unknown>): BashInput {
   const command = typeof input.command === "string" ? input.command.trim() : "";
   if (!command) throw new Error("Bash requires a non-empty command");
   if (command.length > 32_000) throw new Error("Bash command must be 32,000 characters or fewer");
 
-  const timeout = input.timeout ?? DEFAULT_BASH_TIMEOUT_S;
   const runInBackground = input.run_in_background === true;
   const allowed = runInBackground ? BACKGROUND_BASH_TIMEOUTS_S : FOREGROUND_BASH_TIMEOUTS_S;
-  if (!Number.isInteger(timeout) || !allowed.includes(timeout as number)) {
-    throw new Error(`Bash timeout must be one of ${allowed.join(", ")} seconds for ${runInBackground ? "background" : "foreground"} calls`);
-  }
+  const requested = Number.isFinite(input.timeout) ? (input.timeout as number) : DEFAULT_BASH_TIMEOUT_S;
+  const timeout = snapBashTimeout(requested, allowed);
   if (input.working_directory !== undefined && typeof input.working_directory !== "string") {
     throw new Error("Bash working_directory must be a string");
   }
@@ -243,7 +249,7 @@ export function parseBashInput(input: Record<string, unknown>): BashInput {
 
   return {
     command,
-    timeoutMs: (timeout as number) * 1_000,
+    timeoutMs: timeout * 1_000,
     runInBackground,
     ...(typeof input.working_directory === "string" && input.working_directory.trim()
       ? { workingDirectory: input.working_directory.trim() }
