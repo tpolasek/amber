@@ -6,6 +6,7 @@ export interface BuiltInCommand {
 
 export const BUILT_IN_COMMANDS: BuiltInCommand[] = [
   { name: "/add-dir", description: "Add a working directory for this session", runsDuringResponse: true },
+  { name: "/remove-dir", description: "Remove a working directory added with /add-dir", runsDuringResponse: true },
   { name: "/btw", description: "Ask a side question about this session; the answer stays out of the conversation", runsDuringResponse: true },
   { name: "/cwd", description: "Show or change the current working directory", runsDuringResponse: false },
   { name: "/usage", description: "Show context and total session token usage", runsDuringResponse: true },

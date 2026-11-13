@@ -144,7 +144,7 @@ const SESSION_ROUTE = /^\/s\/([a-z0-9.-]+)$/;
 let matchingCommands: BuiltInCommand[] = [];
 let selectedCommand = 0;
 let directoryCompletions: DirectoryCompletion[] = [];
-let directoryCompletionCommand: "/add-dir" | "/cwd" | null = null;
+let directoryCompletionCommand: "/add-dir" | "/remove-dir" | "/cwd" | null = null;
 let fileReferenceCompletion: PromptFileReference | null = null;
 let directoryCompletionRequest = 0;
 let historyPosition = -1;
@@ -1509,13 +1509,15 @@ async function runCommand(command: string, clearComposer = true): Promise<void> 
   if (!duringResponse) setBusy(true);
   let goalStartMessage: string | undefined;
   try {
-    const result = await api<{ command: "add-dir" | "cwd" | "usage" | "clear" | "compact" | "fork" | "goal" | "name" | "plugin" | "tasks"; session: Session; hasMore: boolean; directory?: string; cwdChanged?: boolean; previousSessionId?: string; tasks?: BackgroundTask[]; message?: string }>(
+    const result = await api<{ command: "add-dir" | "remove-dir" | "cwd" | "usage" | "clear" | "compact" | "fork" | "goal" | "name" | "plugin" | "tasks"; session: Session; hasMore: boolean; directory?: string; cwdChanged?: boolean; previousSessionId?: string; tasks?: BackgroundTask[]; message?: string }>(
       `/api/sessions/${session.id}/commands`,
       { method: "POST", body: JSON.stringify({ command }) },
     );
     state.session = applySessionPage(state.session, result.session, result.hasMore).session;
     if (result.command === "add-dir") {
       notify(`${result.cwdChanged ? "Directory added and CWD changed" : "Directory added"} · ${result.directory}`);
+    } else if (result.command === "remove-dir") {
+      notify(`${result.cwdChanged ? "Directory removed and CWD reset" : "Directory removed"} · ${result.directory}`);
     } else if (result.command === "cwd") {
       notify(`CWD · ${result.directory}`);
     } else if (result.command === "clear") {
@@ -2228,10 +2230,10 @@ function resizePrompt(): void {
 }
 
 function updateCommandMenu(): void {
-  const directoryMatch = elements.prompt.value.match(/^\/(cwd|add-dir)[ \t]+([^\n]*)$/i);
+  const directoryMatch = elements.prompt.value.match(/^\/(cwd|add-dir|remove-dir)[ \t]+([^\n]*)$/i);
   if (directoryMatch?.[1] && directoryMatch[2] !== undefined) {
     matchingCommands = [];
-    void updateDirectoryCompletions(`/${directoryMatch[1].toLowerCase()}` as "/add-dir" | "/cwd", directoryMatch[2]);
+    void updateDirectoryCompletions(`/${directoryMatch[1].toLowerCase()}` as "/add-dir" | "/remove-dir" | "/cwd", directoryMatch[2]);
     return;
   }
   const fileReference = promptFileReferenceAt(elements.prompt.value, elements.prompt.selectionStart);
@@ -2331,7 +2333,7 @@ async function refreshSessionSkills(sessionId: string): Promise<void> {
   if (/^\/[a-z:-]*$/.test(elements.prompt.value.trim().toLowerCase())) updateCommandMenu();
 }
 
-async function updateDirectoryCompletions(command: "/add-dir" | "/cwd", path: string): Promise<void> {
+async function updateDirectoryCompletions(command: "/add-dir" | "/remove-dir" | "/cwd", path: string): Promise<void> {
   const session = state.session;
   if (!session) return hideCommandMenu();
   const sourceValue = elements.prompt.value;
@@ -2449,7 +2451,7 @@ function acceptDirectoryCompletion(directory: DirectoryCompletion): void {
 }
 
 function selectCommand(command: BuiltInCommand, execute: boolean): void {
-  const needsArgument = command.name === "/add-dir" || command.name === "/btw"
+  const needsArgument = command.name === "/add-dir" || command.name === "/remove-dir" || command.name === "/btw"
     || command.name === "/git" || command.name === "/goal";
   const acceptsArgument = needsArgument || command.name === "/compact"
     || command.name === "/cwd" || command.name === "/plugin";

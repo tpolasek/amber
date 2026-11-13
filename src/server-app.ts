@@ -1329,8 +1329,9 @@ async function streamMessage(request: IncomingMessage, response: ServerResponse,
       let endTurnAfterToolResult = false;
       for (const call of orderedCalls) {
         throwIfSessionAborted(controller.signal);
-        // Non-blocking /add-dir commands mutate the live session while this run
-        // is active, so each newly-started tool sees the latest allowed roots.
+        // Non-blocking /add-dir and /remove-dir commands mutate the live session
+        // while this run is active, so each newly-started tool sees the latest
+        // allowed roots.
         allowedDirectories = sessionDirectories(session);
         let resultText = call.output;
         let resultBlocks: Array<{ type: "text"; text: string }> | undefined;
@@ -2454,8 +2455,8 @@ async function listDirectoryCompletions(response: ServerResponse, sessionId: str
   const session = await store.get(sessionId);
   if (!session) { json(response, 404, { error: "Session not found" }); return; }
   const command = url.searchParams.get("command");
-  if (command !== "cwd" && command !== "add-dir" && command !== "file") {
-    return json(response, 400, { error: "Path completion requires command=cwd, command=add-dir, or command=file" });
+  if (command !== "cwd" && command !== "add-dir" && command !== "remove-dir" && command !== "file") {
+    return json(response, 400, { error: "Path completion requires command=cwd, command=add-dir, command=remove-dir, or command=file" });
   }
   const fragment = url.searchParams.get("path") ?? "";
   if (fragment.includes("\0") || fragment.includes("\n") || fragment.length > 4_096) {
@@ -2469,6 +2470,14 @@ async function listDirectoryCompletions(response: ServerResponse, sessionId: str
   }
   if (command === "cwd" && fragment === "") {
     return json(response, 200, { directories: await completeDirectoryRoots(sessionDirectoryRoots(session)) });
+  }
+  if (command === "remove-dir") {
+    // Only added roots are removable, and roots deleted from disk still count.
+    const prefix = expandHomePath(fragment).toLocaleLowerCase();
+    const directories = [...new Set(session.directories ?? [])]
+      .filter((root) => root.toLocaleLowerCase().startsWith(prefix))
+      .map((root) => ({ value: root, absolutePath: root }));
+    return json(response, 200, { directories });
   }
   const directories = await completeDirectories(
     fragment,
@@ -2636,11 +2645,28 @@ async function executeCommand(request: IncomingMessage, response: ServerResponse
     }
   }
 
+  if (command === "/remove-dir") {
+    if (!argument) { json(response, 400, { error: "Usage: /remove-dir <directory>" }); return; }
+    const directory = await resolveRemovedDirectory(argument);
+    const directories = session.directories ?? [];
+    const index = directories.indexOf(directory);
+    if (index === -1) {
+      return json(response, 400, { error: `Directory is not an /add-dir root: ${directory}` });
+    }
+    directories.splice(index, 1);
+    if (directories.length === 0) delete session.directories;
+    // A cwd inside the removed root is no longer allowed; fall back to the project root.
+    const cwdChanged = session.cwd !== undefined && !directoryAllowed(session.cwd, sessionDirectoryRoots(session));
+    if (cwdChanged) session.cwd = workspaceRoot;
+    await store.saveMeta(session);
+    return json(response, 200, { command: "remove-dir", directory, cwdChanged, ...pagedSessionPayload(session) });
+  }
+
   if (command === "/cwd") {
     const currentDirectory = sessionWorkingDirectory(session);
     if (!argument) { json(response, 200, { command: "cwd", directory: currentDirectory, ...pagedSessionPayload(session) }); return; }
     try {
-      const expanded = argument === "~" ? homedir() : argument.startsWith("~/") ? join(homedir(), argument.slice(2)) : argument;
+      const expanded = expandHomePath(argument);
       const directory = await realpath(resolve(currentDirectory, expanded));
       if (!(await stat(directory)).isDirectory()) { json(response, 400, { error: `Not a directory: ${directory}` }); return; }
       if (!directoryAllowed(directory, sessionDirectoryRoots(session))) {
@@ -2913,11 +2939,24 @@ async function appendCommandTranscript(session: Session, command: string, body: 
   await store.appendMessages(session, [userMessage, assistantMessage]);
 }
 
+function expandHomePath(path: string): string {
+  return path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
+}
+
 async function resolveAddedDirectory(path: string): Promise<string> {
-  const expanded = path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
-  const directory = await realpath(resolve(workspaceRoot, expanded));
+  const directory = await realpath(resolve(workspaceRoot, expandHomePath(path)));
   if (!(await stat(directory)).isDirectory()) throw new Error(`Not a directory: ${directory}`);
   return directory;
+}
+
+/** Matches a /remove-dir argument against the session's added roots, which may no longer exist. */
+async function resolveRemovedDirectory(path: string): Promise<string> {
+  const resolved = resolve(workspaceRoot, expandHomePath(path));
+  try {
+    return await realpath(resolved);
+  } catch {
+    return resolved;
+  }
 }
 
 async function readJson(request: IncomingMessage, maxBytes = 1_000_000): Promise<Record<string, unknown>> {

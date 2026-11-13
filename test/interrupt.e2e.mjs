@@ -645,6 +645,65 @@ async function runQueuedCommandScenario(mock, amber) {
   check("dispatched command applied its command behavior", snapshot.session.title === "queued-title", snapshot.session.title);
 }
 
+/** /remove-dir drops an added root and resets a cwd that lived inside it. */
+async function runRemoveDirScenario(mock, amber) {
+  console.log("\n== remove-dir command");
+  mock.reset();
+  const firstRoot = await mkdtemp(join(tmpdir(), "amber-remove-dir-"));
+  const secondRoot = await mkdtemp(join(tmpdir(), "amber-remove-dir-"));
+  const deletedRoot = await mkdtemp(join(tmpdir(), "amber-remove-dir-"));
+  const config = await (await fetch(amberUrl(amber.port, "/api/config"))).json();
+  const { body } = await postJson(amberUrl(amber.port, "/api/sessions"), {
+    name: "remove-dir command",
+    path: firstRoot,
+  });
+  const sessionId = body.session.id;
+  const commandUrl = amberUrl(amber.port, `/api/sessions/${sessionId}/commands`);
+  const post = (command) => postJson(commandUrl, { command });
+
+  const added = await post(`/add-dir ${secondRoot}`);
+  const withDeleted = await post(`/add-dir ${deletedRoot}`);
+  const [rootA, rootB, rootC] = withDeleted.body.session?.directories ?? [];
+  check("three roots are registered",
+    added.status === 200 && withDeleted.status === 200 && rootA && rootB && rootC,
+    JSON.stringify(withDeleted.body.session?.directories));
+
+  await rm(deletedRoot, { recursive: true, force: true });
+  const removeDeleted = await post(`/remove-dir ${rootC}`);
+  check("a root deleted from disk can still be removed",
+    removeDeleted.status === 200 && removeDeleted.body.session?.directories?.length === 2,
+    JSON.stringify(removeDeleted));
+
+  const completions = await (await fetch(amberUrl(amber.port,
+    `/api/sessions/${sessionId}/directory-completions?command=remove-dir&path=${encodeURIComponent(rootB)}`))).json();
+  check("remove-dir completions offer only matching added roots",
+    completions.directories?.length === 1 && completions.directories[0]?.absolutePath === rootB,
+    JSON.stringify(completions));
+
+  const usage = await post("/remove-dir");
+  check("missing directory is a usage error", usage.status === 400, JSON.stringify(usage));
+  const projectRoot = await post(`/remove-dir ${config.workspaceRoot}`);
+  check("the project root cannot be removed", projectRoot.status === 400, JSON.stringify(projectRoot));
+
+  const removeOther = await post(`/remove-dir ${rootB}`);
+  check("removing a non-cwd root leaves the cwd alone",
+    removeOther.status === 200 && removeOther.body.cwdChanged === false
+      && removeOther.body.session?.cwd === rootA && removeOther.body.session?.directories?.length === 1,
+    JSON.stringify(removeOther));
+
+  const removeCwd = await post(`/remove-dir ${rootA}`);
+  check("removing the cwd root resets the cwd to the project root",
+    removeCwd.status === 200 && removeCwd.body.cwdChanged === true
+      && removeCwd.body.session?.cwd === config.workspaceRoot
+      && removeCwd.body.session?.directories === undefined,
+    JSON.stringify({ cwd: removeCwd.body.session?.cwd, directories: removeCwd.body.session?.directories }));
+
+  const outside = await post(`/cwd ${rootA}`);
+  check("a removed root is no longer an allowed cwd", outside.status === 400, JSON.stringify(outside));
+  const again = await post(`/remove-dir ${rootA}`);
+  check("removing an already-removed root fails", again.status === 400, JSON.stringify(again));
+}
+
 async function runAutomaticCompactionScenario(mock, amber) {
   console.log("\n== server-inserted automatic compaction");
   mock.reset();
@@ -1846,6 +1905,7 @@ try {
   await runStreamingHoldInterruptScenario(mock, amber);
 
   await runQueuedCommandScenario(mock, amber);
+  await runRemoveDirScenario(mock, amber);
   await runBackgroundAgentScenario(mock, amber);
   await runStoppedBackgroundAgentScenario(mock, amber);
   await runBackgroundBashWakeScenario(mock, amber);
